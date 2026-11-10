@@ -26,3 +26,9 @@ Build Justin's saved poker bank with exact ledger arithmetic, isolated accounts,
 - Migrations and local Postgres helpers, checked on a real empty database and rerun.
 - Accounts and full HTTP API, checked by real database journeys.
 - Concurrency, isolation, lifecycle and runner evidence, checked by the full mini suite.
+
+## Completion
+
+All verifiable units are complete. Mini typecheck passed and the full mini suite passed 54 tests in 4 files with real embedded Postgres. Node 22 build produced `dist/`. Local HTTP smoke checks verified the static shell, missing asset 404, and unauthenticated JSON API errors. Runner probes verified capacity rejection and artifact return after failure. See `REPORT.md` and ignored `test-results/` for receipts.
+
+Review separation covered the complete implementation and comment scan. No application comments, docstrings or suppressions required removal. The unavailable deslop leaf was replaced by direct diff review. No architecture decision changed. PR and deployment steps remain skipped under the user's explicit limits.
