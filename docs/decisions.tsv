@@ -1,0 +1,13 @@
+ts	phase	decision	why	evidence	result
+2026-11-10T23:36:10Z	frame	done means the live app on its own database passes every spec item in real browsers	the spec asks for a deployed app, not a scaffold	docs/APPROVED-SPEC.md	open
+2026-11-10T23:36:10Z	frame	one coder thread for the whole app	the app is one tightly coupled codebase, so parallel lanes would fight over the same files	docs/ARCHITECTURE.md	decided
+2026-11-10T23:36:10Z	design	static React app plus one small API function, not Next.js	full control over when an installed app updates, and Pancake shows a static app with a hand-written worker works on this host	docs/ARCHITECTURE.md	decided
+2026-11-10T23:36:10Z	design	append-only ledger with voids for corrections	every correction stays visible and traceable, and a double void is blocked by the database	docs/ARCHITECTURE.md	decided
+2026-11-10T23:36:10Z	design	results only from cash-outs minus buy-ins, shown only after a player cashes out	the spec forbids guessing winnings from buy-ins	docs/ARCHITECTURE.md	decided
+2026-11-10T23:36:10Z	design	payments tracked as separate entries next to chips	lets partial and late payments show as outstanding without changing results	docs/ARCHITECTURE.md	decided
+2026-11-10T23:36:10Z	design	recovery by one-time codes shown at sign-up, no email	the spec asks for username and password only, and codes work without any mail service	docs/ARCHITECTURE.md	decided
+2026-11-10T23:36:10Z	design	client-chosen operation ids stored with the response	a retried or replayed save returns the same result instead of a duplicate	docs/ARCHITECTURE.md	decided
+2026-11-10T23:36:10Z	design	polling every 2 seconds for live updates	pooled database connections cannot push notifications and serverless functions are short-lived	docs/ARCHITECTURE.md	decided
+2026-11-10T23:36:10Z	design	drafts and unsent saves in IndexedDB	Pancake's own notes show session storage drafts die when an installed iOS app is killed	docs/DESIGN-RESEARCH.md	decided
+2026-11-10T23:36:10Z	setup	database creation blocked; desktop control tool is not installed	the approved route needs it, so a machine blocker is on the card and work continues on a local test database	card blocker b1	blocked
+2026-11-10T23:36:10Z	setup	tests and benchmarks use a throwaway local Postgres package	the Mac mini has no Postgres, and tests should need no secrets	docs/ARCHITECTURE.md	decided
