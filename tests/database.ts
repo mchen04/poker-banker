@@ -20,6 +20,7 @@ export async function testDatabase() {
   const port = await availablePort();
   const database = new EmbeddedPostgres({
     databaseDir: directory, port, user: 'poker', password: 'test-only', persistent: false,
+    initdbFlags: ['--encoding=UTF8', '--locale=C'],
     postgresFlags: ['-h', '127.0.0.1', '-k', directory], onLog: () => {}, onError: () => {},
   });
   await database.initialise();

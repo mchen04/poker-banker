@@ -10,6 +10,7 @@ await mkdir(directory, { recursive: true });
 const port = Number(process.env.PG_LOCAL_PORT || 55432);
 const database = new EmbeddedPostgres({
   databaseDir: directory, port, user: 'poker', password: 'local-poker-only', persistent: true,
+  initdbFlags: ['--encoding=UTF8', '--locale=C'],
   postgresFlags: ['-h', '127.0.0.1', '-k', directory],
 });
 try { await access(`${directory}/PG_VERSION`); } catch { await database.initialise(); }

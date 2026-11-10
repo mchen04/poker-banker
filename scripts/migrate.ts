@@ -24,8 +24,7 @@ export async function migrate(pool: Database, directory = fileURLToPath(new URL(
       }
     }
   } finally {
-    await client.query('SELECT pg_advisory_unlock(734820091)');
-    client.release();
+    try { await client.query('SELECT pg_advisory_unlock(734820091)'); } finally { client.release(); }
   }
 }
 

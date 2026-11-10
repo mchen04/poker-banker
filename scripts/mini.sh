@@ -64,9 +64,15 @@ set -e
 
 copy_status=0
 for output_directory in test-results evidence; do
-  if ssh mini "test -d \"\$HOME/worktrees/poker-banker/$output_directory\""; then
+  set +e
+  ssh mini "test -d \"\$HOME/worktrees/poker-banker/$output_directory\""
+  probe_status=$?
+  set -e
+  if [[ $probe_status -eq 0 ]]; then
     mkdir -p "$repo_root/$output_directory"
     rsync -az "mini:worktrees/poker-banker/$output_directory/" "$repo_root/$output_directory/" || copy_status=$?
+  elif [[ $probe_status -ne 1 ]]; then
+    copy_status=$probe_status
   fi
 done
 
