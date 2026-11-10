@@ -170,3 +170,61 @@ One workspace, phone-first, readable vertical scrolling, no horizontal tables.
 1. Create the Neon project and set `DATABASE_URL` and `DATABASE_URL_UNPOOLED` in Vercel's encrypted project env. Sessions are random tokens checked against the database, so no signing secret exists.
 2. Run `pnpm db:migrate` against the unpooled URL. Migrations are forward-only, numbered SQL files, each in a transaction, recorded in `schema_migrations`, and safe to rerun.
 3. Deploy the build that needs the new schema. Each migration must also work with the previous release, so a migration lands before its code.
+
+## Justin's feedback additions
+
+Added after the spec gained the "Justin's feedback" section. Nothing has been deployed yet, so these changes amend migration `0001` directly instead of adding a compatibility migration.
+
+### Schema changes
+
+```
+game_sessions  + location text null, game text null        -- free text with suggestions from past sessions, used for report groupings
+               + big_blind_minor bigint null check > 0      -- in the session currency
+               + started_at timestamptz null, ended_at timestamptz null, check ended_at >= started_at
+ledger_entries + kind 'expense'                             -- tips and meals, outside chips and settlement
+               + method 'cash'|'venmo'|'zelle' null         -- required for payment_in and payment_out, null otherwise (check constraint)
+               + occurred_at timestamptz not null default now()
+session_events + kinds 'timer_started', 'timing_corrected', 'details_changed' with old and new values in detail
+```
+
+### Payment method
+
+- Paid now on a buy-in or rebuy shows a compact Cash, Venmo, Zelle selector. The default is the method last used in that session, else Cash. The server writes `buy_in` plus `payment_in` with the method.
+- Recording a later payment (unpaid to paid) is a `payment_in` or `payment_out` with a required method. An unpaid buy-in has no payment row, so it is never shown as received.
+- Changing a method is a correction: void the payment and write a replacement with the new method. The void endpoint accepts `replacement_method` alongside `replacement_amount_minor`. Activity shows both rows.
+- The method is a label of how money arrived. Nothing initiates a transfer.
+
+### Session timer
+
+- `started_at` is set by Start timer, or automatically by the first buy-in when unset. `ended_at` is set by Close when unset. Reopen does not clear `ended_at`; the banker restarts timing explicitly if play resumes.
+- `PATCH /api/sessions/:id/timing {op_id, started_at, ended_at|null}` corrects times and writes a `timing_corrected` event with old and new values. The session menu shows that history.
+- The client shows `(ended_at ?? server_now) - started_at`. The server returns `server_now` so device clocks do not matter, and the client advances it locally between polls.
+
+### Per-player playing time
+
+- A player's intervals come from live chip entries ordered by `occurred_at`: a `buy_in` while not playing opens an interval, a `cash_out` closes it. Rebuys while playing do not open a new one. Leaving and re-entering produces two intervals.
+- `occurred_at` defaults to now and may be set on create or through a correction, for entries recorded late. It must be inside the session's timer bounds when they exist.
+- A player's duration is the sum of their intervals. The table's duration is never used for a player.
+
+### Result display
+
+- A per-device toggle with Total, Per hour and Big blinds, stored in `localStorage`. It changes display only.
+- Per hour is `result_minor * 3_600_000 / duration_ms`, computed with integers and rounded half-even at display. Without a positive duration it shows "No time recorded".
+- Big blinds is `result_minor / big_blind_minor` to two decimals. Without a blind it shows "No big blind set".
+- Labels keep net result, gross cash-out and outstanding payments distinct.
+
+### Player reports
+
+`GET /api/players/:id/report?group=overall|location|game|weekday|month&location=&game=&weekday=&month=&from=&to=` returns, per group and per currency, over that banker's closed sessions where the player has entries:
+
+- Profit/loss: sum of results.
+- Per hour: total result divided by total valid playing time, over sessions with a valid duration (weighted, not an average of rates).
+- Per session: total result divided by session count.
+- Duration: total valid playing time.
+- Winning sessions: count with result above zero over all sessions, with percentage. Break-even counts in the denominator.
+- Tips and meals: sum of `expense` entries, shown with net after tips and meals. Rates use the result before tips and meals, and the report labels this.
+- Big blinds per hour: sum over sessions of `result / big_blind` divided by their hours, using only sessions with both a blind and a duration.
+- Variation: sample standard deviation of session-level hourly rates in money and in big blinds, labeled "Variation across session rates". Unavailable below two valid sessions.
+- Each metric reports how many sessions it used, so missing timing or blinds is visible.
+
+Only one player's results are summed, never the whole table. Weekday and month come from `played_on`. Groupings and filters are exact matches on stored values. Reports live on the player detail screen with a segmented control for the five groupings and a Filter sheet, inside the same workspace.
