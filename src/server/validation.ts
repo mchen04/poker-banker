@@ -13,7 +13,7 @@ export const currency = z.string().regex(/^[A-Z]{3}$/).refine(value => {
   try { currencyExponent(value); return true; } catch { return false; }
 }, 'Unsupported ISO currency');
 export const positiveMinor = z.string().regex(/^[1-9]\d{0,18}$/).refine(value => BigInt(value) <= MAX_MINOR);
-export const signedMinor = z.string().regex(/^(?:0|-?[1-9]\d{0,18})$/).refine(value => BigInt(value) >= -MAX_MINOR && BigInt(value) <= MAX_MINOR);
+export const signedMinor = z.string().max(1000).regex(/^(?:0|-?[1-9]\d*)$/);
 export const revision = z.union([z.string().regex(/^(?:0|[1-9]\d{0,18})$/), z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).transform(String)])
   .refine(value => BigInt(value) <= MAX_MINOR);
 export const sessionCreate = z.strictObject({ op_id: opId, name, played_on: date, currency });
