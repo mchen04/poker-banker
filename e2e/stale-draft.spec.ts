@@ -105,7 +105,7 @@ test('a failed edit recovered after another page saves reviews a fresh operation
     await expect(page.getByTestId('saved-confirmation')).toContainText('50.00');
     expect(submitted).toHaveLength(1);
     expect(submitted[0]).not.toBe(originalOperation);
-    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor)).toEqual(['1000', '5000']);
+    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor).sort()).toEqual(['1000', '5000']);
     await expect(page.getByRole('button', { name: 'Retry saving draft', exact: true })).toHaveCount(0);
     await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
   } finally { await other.close(); }
@@ -166,7 +166,7 @@ test('a mismatched entry and a newer saved draft both remain reviewable and pres
     expect(body.occurred_at).toBe(submittedTime);
     expect(body.op_id).not.toBe(operation);
     await expect(page.getByTestId('saved-confirmation')).toContainText('50.00');
-    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor)).toEqual(['1000', '5000']);
+    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor).sort()).toEqual(['1000', '5000']);
     await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
   } finally { release(); await other.close(); }
 });

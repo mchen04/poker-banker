@@ -1460,15 +1460,16 @@ it('keeps a chained legacy mismatch editable and reachable instead of leaving an
   outboxEvents();
   const storage = sharedStorage();
   const server = operationServer();
-  await fetch(request.path, { method: request.method, body: JSON.stringify({ ...request.body, amount_minor: '2000' }) });
+  const originalRequest = { ...request, body: { ...request.body, player_id: 'player', kind: 'buy_in', paid_now: false, occurred_at: null } };
+  await fetch(request.path, { method: request.method, body: JSON.stringify({ ...originalRequest.body, amount_minor: '2000' }) });
   const editing = await freshTab();
   await editing.writeDraft(key, edited);
-  await editing.prepareDraftSubmission(key, edited, { ...request, body: { ...request.body, amount_minor: '5000' } });
-  await putLegacyDraft({ request }, `${owner}/_operations/requests/${original.op_id}`, 'operation_request');
+  await editing.prepareDraftSubmission(key, edited, { ...originalRequest, body: { ...originalRequest.body, amount_minor: '5000' } });
+  await putLegacyDraft({ request: originalRequest }, `${owner}/_operations/requests/${original.op_id}`, 'operation_request');
   await expect(editing.replaySubmittedDraft(key)).rejects.toMatchObject({ code: 'idempotency_mismatch' });
   const earlier = await editing.listSubmittedDrafts(owner);
   expect(earlier).toHaveLength(1);
-  expect(earlier[0]!.request).toEqual(request);
+  expect(earlier[0]!.request).toEqual(originalRequest);
   expect((storage.draft(key) as typeof edited).amount).toBe('50');
   await expect(editing.replaySubmittedDraft(earlier[0]!.key, () => true, earlier[0]!.cursor)).rejects.toMatchObject({ code: 'idempotency_mismatch' });
   expect(await editing.listSubmittedDrafts(owner)).toEqual([]);
@@ -1508,4 +1509,72 @@ it('treats a reordered request body as the same operation instead of inventing a
   await drainApplied(editing);
   expect(server.writes()).toBe(1);
   expect(server.fetch).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])('does not resolve a recovered choice over a newer quota-retained edit (useRecovered=%s)', async useRecovered => {
+  const { editing, storage, server } = await mismatchWithNewerDraft();
+  const choice = (await editing.listRecoveredDrafts(owner))[0]!;
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await editing.readDraft(key, cursor);
+  storage.quota(true);
+  await expect(editing.writeDraft(key, { ...newer, amount: '75' }, cursor)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+  const before = storage.state();
+  await expect(editing.resolveRecoveredDraft(choice, useRecovered)).rejects.toBeInstanceOf(Error);
+  expect(storage.state()).toEqual(before);
+  expect(editing.draftSaveFailed(key)).toBe(true);
+  expect((await editing.readDraft<typeof newer>(key, cursor))?.amount).toBe('75');
+  storage.quota(false);
+  await expect(editing.resolveRecoveredDraft(choice, useRecovered)).rejects.toBeInstanceOf(editing.DraftConflictError);
+  expect((storage.draft(key) as typeof newer).amount).toBe('75');
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+  expect(editing.draftSaveFailed(key)).toBe(false);
+  const reviewed = (await editing.listRecoveredDrafts(owner))[0]!;
+  expect(reviewed).toMatchObject({ source_value: { amount: '75' }, value: { amount: '50' } });
+  await editing.resolveRecoveredDraft(reviewed, false);
+  expect((storage.draft(key) as typeof newer).amount).toBe('75');
+  expect(await editing.listRecoveredDrafts(owner)).toEqual([]);
+  expect(server.writes()).toBe(1);
+});
+
+it('adopts a newer saved value when recovery normalization loses its fingerprint race without reporting a storage failure', async () => {
+  outboxEvents();
+  const storage = sharedStorage();
+  operationServer();
+  const first = await freshTab();
+  await first.writeDraft(key, original);
+  await first.enqueue(enqueueInput);
+  await drainApplied(first);
+  await putLegacyDraft(edited);
+  const other = await freshTab();
+  const editing = await freshTab();
+  const db = await new Promise<IDBDatabase>(resolve => { const open = indexedDB.open('poker-banker', 2); open.onsuccess = () => resolve(open.result); });
+  const transaction = db.transaction.bind(db);
+  let changed: Promise<void> | undefined;
+  let armed = true;
+  vi.spyOn(db, 'transaction').mockImplementation(((names: string | string[], mode?: IDBTransactionMode) => {
+    const tx = transaction(names, mode);
+    const objectStore = tx.objectStore.bind(tx);
+    vi.spyOn(tx, 'objectStore').mockImplementation(name => {
+      const store = objectStore(name);
+      const get = store.get.bind(store);
+      vi.spyOn(store, 'get').mockImplementation(query => {
+        const result = get(query);
+        if (armed && mode !== 'readwrite' && query === `${owner}/_operations/requests/${original.op_id}`) {
+          let success: ((event: Event) => unknown) | null = null;
+          Object.defineProperty(result, 'onsuccess', { get: () => (event: Event) => { if (armed) { armed = false; changed = other.writeDraft(key, { ...newer, amount: '75' }); } return success?.(event); }, set: callback => { success = callback; }, configurable: true });
+        }
+        return result;
+      });
+      return store;
+    });
+    return tx;
+  }) as IDBDatabase['transaction']);
+  const restored = await editing.readDraft<typeof edited>(key, {});
+  await changed;
+  expect(restored?.amount).toBe('75');
+  expect(restored?.op_id).not.toBe(original.op_id);
+  expect((storage.draft(key) as typeof edited).amount).toBe('75');
+  expect(editing.draftConflictNotice(key)?.message).toMatch(/review/i);
+  expect(editing.draftSaveFailed()).toBe(false);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
 });
