@@ -5,11 +5,14 @@ export type Banker = { id: string; username: string };
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code: string) { super(message); }
 }
+export class AccountChangedError extends ApiError {
+  constructor(public bankerId: string) { super('Account changed. Reload account state to continue.', 409, 'account_changed'); }
+}
 export function isProvenNotApplied(problem: unknown): boolean {
   return problem instanceof ApiError && problem.status >= 400 && problem.status < 500
     && ![401, 403, 408, 415, 429].includes(problem.status)
     && typeof problem.code === 'string' && problem.code.trim().length > 0
-    && !['request_failed', 'idempotency_mismatch'].includes(problem.code);
+    && !['request_failed', 'idempotency_mismatch', 'account_changed'].includes(problem.code);
 }
 export type OutboxItem = {
   op_id: string;
@@ -38,12 +41,27 @@ const draftWrites = new Map<string, Promise<void>>();
 const enqueueWrites = new Set<Promise<OutboxItem>>();
 let channel: BroadcastChannel | undefined;
 const generations = new Map<string, number>();
+const blockedOwners = new Set<string>();
+const ownerRequests = new Map<string, Set<AbortController>>();
 const generation = (banker: string) => generations.get(banker) ?? 0;
 const syncRuns = new Map<string, symbol>();
 const draftReplays = new Map<string, symbol>();
 export function invalidateBankerWork(banker: string): void {
   generations.set(banker, generation(banker) + 1);
+  for (const controller of ownerRequests.get(banker) ?? []) controller.abort();
 }
+export function resumeBankerWork(banker: string): void {
+  if (blockedOwners.has(banker)) invalidateBankerWork(banker);
+  blockedOwners.delete(banker);
+}
+export function blockBankerWork(banker: string): void {
+  if (!blockedOwners.has(banker)) {
+    blockedOwners.add(banker);
+    invalidateBankerWork(banker);
+    window.dispatchEvent(Object.assign(new Event('pb-account-changed'), { detail: { bankerId: banker } }));
+  }
+}
+function accountChanged(banker: string): never { blockBankerWork(banker); throw new AccountChangedError(banker); }
 
 function changed() {
   window.dispatchEvent(new Event('pb-data'));
@@ -107,23 +125,46 @@ async function all<T>(name: string): Promise<T[]> {
   const transaction = db.transaction(name, 'readonly');
   return req(transaction.objectStore(name).getAll()) as Promise<T[]>;
 }
-async function http<T>(path: string, method: string, body: unknown, consume: (response: Response) => Promise<T>, banker?: string): Promise<T> {
+async function http<T>(path: string, method: string, body: unknown, consume: (response: Response) => Promise<T>, banker?: string, isCurrent = () => true): Promise<T> {
+  const ensureCurrent = () => { if (!isCurrent()) throw new AccountChangedError(banker!); };
+  ensureCurrent();
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15000);
+  if (banker) {
+    let requests = ownerRequests.get(banker);
+    if (!requests) { requests = new Set(); ownerRequests.set(banker, requests); }
+    requests.add(controller);
+  }
   try {
     const response = await fetch(path, {
       method, credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
       headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(banker ? { 'X-PB-Expected-Banker-ID': banker } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (banker && response.status < 500 && response.headers.get('X-PB-Banker-ID') !== banker) {
+    ensureCurrent();
+    const owner = response.headers.get('X-PB-Banker-ID');
+    if (banker && ((owner && owner !== banker) || (!owner && response.status < 500 && response.status !== 401))) {
       controller.abort();
-      throw new Error('Account could not be confirmed. Sign in to check your saved work.');
+      accountChanged(banker);
     }
-    const result = await consume(response);
+    let result: T;
+    try { result = await consume(response); }
+    catch (problem) {
+      ensureCurrent();
+      if (banker && problem instanceof ApiError && problem.status === 409 && problem.code === 'account_changed') accountChanged(banker);
+      throw problem;
+    }
+    ensureCurrent();
     if (method === 'GET' && result !== null && typeof result === 'object' && 'server_now' in result && typeof result.server_now === 'string') observeServerTime(result.server_now);
     return result;
-  } finally { window.clearTimeout(timeout); }
+  } finally {
+    window.clearTimeout(timeout);
+    if (banker) {
+      const requests = ownerRequests.get(banker);
+      requests?.delete(controller);
+      if (!requests?.size) ownerRequests.delete(banker);
+    }
+  }
 }
 async function parse<T>(response: Response): Promise<T> {
   const body: unknown = await response.json();
@@ -134,13 +175,40 @@ async function parse<T>(response: Response): Promise<T> {
   return body as T;
 }
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  if (!publicRequest(path, method)) throw new Error('This request requires an account-bound client');
   return http(path, method, body, parse<T>);
 }
-function ownerApi<T>(banker: string, request: DraftRequest): Promise<T> {
-  return http(request.path, request.method, request.body, parse<T>, banker);
+function publicRequest(path: string, method: string): boolean {
+  return (method === 'POST' && ['/api/auth/signup', '/api/auth/login', '/api/auth/recover'].includes(path))
+    || (method === 'GET' && /^\/api\/view\/[^/?]+(?:\?.*)?$/.test(path));
 }
+export function discoverAccount(): Promise<{ banker: Banker }> {
+  return http('/api/auth/me', 'GET', undefined, parse<{ banker: Banker }>);
+}
+export type BankerClient = {
+  bankerId: string;
+  isCurrent: () => boolean;
+  api: <T>(path: string, method?: string, body?: unknown) => Promise<T>;
+  pollSession: (path: string, revision?: string) => Promise<SessionState | undefined>;
+};
+export function bankerClient(banker: string, current = () => true): BankerClient {
+  if (typeof banker !== 'string' || !banker || banker.trim() !== banker) throw new Error('An account-bound client requires a banker');
+  const epoch = generation(banker);
+  const isCurrent = () => !blockedOwners.has(banker) && generation(banker) === epoch && current();
+  return Object.freeze({
+    bankerId: banker, isCurrent,
+    api: <T>(path: string, method = 'GET', body?: unknown) => publicRequest(path, method) ? api<T>(path, method, body) : http(path, method, body, parse<T>, banker, isCurrent),
+    pollSession: (path: string, revision?: string) => publicRequest(path, 'GET') ? pollSession(path, revision) : http(pollPath(path, revision), 'GET', undefined, consumePoll, banker, isCurrent),
+  });
+}
+function ownerApi<T>(banker: string, request: DraftRequest, isCurrent: () => boolean): Promise<T> {
+  return bankerClient(banker, isCurrent).api<T>(request.path, request.method, request.body);
+}
+const pollPath = (path: string, revision?: string) => revision ? `${path}?since=${encodeURIComponent(revision)}` : path;
+const consumePoll = (response: Response) => response.status === 304 ? Promise.resolve(undefined) : parse<SessionState>(response);
 export async function pollSession(path: string, revision?: string): Promise<SessionState | undefined> {
-  return http(revision ? `${path}?since=${encodeURIComponent(revision)}` : path, 'GET', undefined, async response => response.status === 304 ? undefined : parse<SessionState>(response));
+  if (!publicRequest(path, 'GET')) throw new Error('This request requires an account-bound client');
+  return http(pollPath(path, revision), 'GET', undefined, consumePoll);
 }
 export const draftKey = (bankerId: string, sessionId: string, form: string, playerId = '') => `${bankerId}/${sessionId}/${form}/${playerId}`;
 export async function readDraft<T>(key: string): Promise<T | undefined> {
@@ -263,11 +331,11 @@ export async function replaySubmittedDraft<T>(key: string, isCurrent = () => tru
     ensureCurrent();
     const request = value?.__submitted;
     if (!request || !request.path.startsWith('/api/') || !['POST', 'PATCH'].includes(request.method)) throw new Error('There is no submitted form to check');
-    const identity = await api<{ banker: Banker }>('/api/auth/me');
+    const identity = await bankerClient(banker, current).api<{ banker: Banker }>('/api/auth/me');
     ensureCurrent();
-    if (identity.banker.id !== banker) throw new Error('Account changed. Sign in to check this form.');
+    if (identity.banker.id !== banker) accountChanged(banker);
     let result: T;
-    try { result = await ownerApi<T>(banker, request); }
+    try { result = await ownerApi<T>(banker, request, current); }
     catch (problem) {
       ensureCurrent();
       if (isProvenNotApplied(problem)) {
@@ -305,12 +373,15 @@ export function newerSnapshot(existing: SessionState | undefined, incoming: Sess
   return oldRevision > newRevision || (oldRevision === newRevision && Date.parse(existing.server_now) > Date.parse(incoming.server_now)) ? existing : incoming;
 }
 export async function storeSnapshot(banker: string, state: SessionState): Promise<void> {
+  const epoch = generation(banker);
   const db = await storage();
+  if (blockedOwners.has(banker) || generation(banker) !== epoch) return;
   const transaction = db.transaction('snapshots', 'readwrite');
   const done = complete(transaction);
   const store = transaction.objectStore('snapshots');
   const key = snapshotKey(banker, state.session.id);
   const existing = await req(store.get(key)) as SnapshotRecord | undefined;
+  if (blockedOwners.has(banker) || generation(banker) !== epoch) { await done; return; }
   store.put({ key, banker_id: banker, state: newerSnapshot(existing?.state, state) } satisfies SnapshotRecord);
   await done;
 }
@@ -499,7 +570,7 @@ export function syncOutbox(banker: string, onSaved: (state: SessionState, item: 
         if (!isCurrent()) { await settleClaim(item, isCurrent); break; }
         let state: SessionState;
         try {
-          state = await ownerApi<SessionState>(banker, item);
+          state = await ownerApi<SessionState>(banker, item, isCurrent);
         } catch (error) {
           await settleClaim(item, isCurrent, error);
           if (!isCurrent()) break;

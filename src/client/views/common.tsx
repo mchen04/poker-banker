@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { Banker, OutboxItem } from '../data';
+import type { Banker, BankerClient, OutboxItem } from '../data';
 import { deleteDraft, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftRequest } from '../data';
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
@@ -8,6 +8,7 @@ import { formatRational, formatSquareRoot, type Rational } from '../../domain/ra
 export type SheetState = { kind: string; player?: string; entry?: string } | null;
 export type ClientState = {
   banker: Banker | null;
+  client: BankerClient | null;
   state: SessionState | null;
   online: boolean;
   pending: OutboxItem[];

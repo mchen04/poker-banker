@@ -3,7 +3,7 @@ import { useDebouncedSearch } from '../search';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { EntryKind, LedgerEntry, PaymentMethod, PlayerState, SessionState } from '../../domain/session';
 import { currencyExponent, parseMoney } from '../../domain/money';
-import { api, draftKey, enqueue } from '../data';
+import { draftKey, enqueue } from '../data';
 import { decimal, duration, entryLabels, DraftRecovery, ErrorText, methodLabel, money, resultCurrencyDecimal, resultMoney, resultNumber, Sheet, useClient, useDraft, useFormBusy } from './common';
 
 type RosterPlayer = { id: string; display_name: string };
@@ -140,7 +140,8 @@ export function MoneySheet({ title, playerId, kind: initialKind }: { title: stri
     <details><summary>Record an earlier time or note</summary><label>Entry time<input type="datetime-local" step="1" value={draft.value.occurred_at} onChange={event => draft.update({ ...draft.value, occurred_at: event.target.value })} /></label>{initialKind !== 'expense' && <label>Note<input value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}</details><ErrorText text={error || draft.error} /><p className="hint">Only confirmed entries change the totals.</p></div><footer className="money-actions"><button className="primary wide" disabled={saving || !draft.ready}>{saving ? 'Saving…' : 'Save entry'}</button></footer></form>}</Sheet>;
 }
 export function AddPlayerSheet() {
-  const { banker, state, open } = useClient();
+  const { banker, state, open, client } = useClient();
+  const api = client!.api;
   const savedSearch = useDraft(draftKey(banker!.id, state!.session.id, 'add-player'), { op_id: crypto.randomUUID(), search: '' });
   const search = savedSearch.value.search;
   const settledSearch = useDebouncedSearch(search);

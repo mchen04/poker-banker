@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Page, Request } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { test, expect } from './fixtures';
@@ -184,13 +184,15 @@ for (const recovery of ['same mounted sheet', 'workspace'] as const) {
     const rejected = page.waitForResponse(response => new URL(response.url()).pathname === path && response.request().method() === 'POST');
     await check.click();
     expect((await rejected).status()).toBe(404);
-    await expect(check).toBeEnabled();
+    await expect(page.getByRole('heading', { name: 'Account changed', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reload account state', exact: true })).toBeEnabled();
     expect((await records(page)).drafts.find(draft => draft.key === submitted.key)!.value).toEqual(submitted.value);
     if (recovery === 'same mounted sheet') await expect(page.getByLabel('Search players', { exact: true })).toHaveCount(0);
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toBe(bodies[0]);
     await page.context().addCookies(aCookies);
-    await check.click();
+    await page.getByRole('button', { name: 'Reload account state', exact: true }).click();
+    await page.getByRole('button', { name: 'Check saved form: Add player', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toHaveCount(0);
     expect((await records(page)).drafts.some(draft => draft.key === submitted.key)).toBe(false);
     const confirmed = await current(page, session.session.id);
@@ -266,6 +268,8 @@ test('a cross-tab account transition invalidates a held same-owner draft rejecti
   const path = `/api/sessions/${session.session.id}/players`;
   const held = deferred();
   const release = deferred();
+  const completed = deferred();
+  let heldRequest: Request | undefined;
   let attempt = 0;
   await page.route(`**${path}`, async route => {
     attempt++;
@@ -274,10 +278,13 @@ test('a cross-tab account transition invalidates a held same-owner draft rejecti
     expect(response.status()).toBe(409);
     expect(response.headers()['x-pb-banker-id']).toBe(a.banker.id);
     if (attempt === 2) {
+      heldRequest = route.request();
       held.resolve();
       await release.promise;
+      if (heldRequest.failure()) { completed.resolve(); return; }
     }
     await route.fulfill({ response });
+    if (attempt === 2) completed.resolve();
   });
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
   await page.getByLabel('Search players', { exact: true }).fill('Justin');
@@ -290,12 +297,13 @@ test('a cross-tab account transition invalidates a held same-owner draft rejecti
   const other = await context.newPage();
   await other.route('**/account-transition.html', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Account transition</title>' }));
   await other.goto('/account-transition.html');
+  const canceled = page.waitForEvent('requestfailed', { predicate: request => request === heldRequest });
   await other.evaluate(banker => localStorage.setItem('pb-banker', JSON.stringify(banker)), b.banker);
-  await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Account changed', exact: true })).toBeVisible();
+  expect((await canceled).failure()).not.toBeNull();
   await other.evaluate(banker => localStorage.setItem('pb-banker', JSON.stringify(banker)), a.banker);
-  const delivered = page.waitForResponse(response => new URL(response.url()).pathname === path && response.request().method() === 'POST');
   release.resolve();
-  await (await delivered).finished();
+  await completed.promise;
   expect((await records(page)).drafts.find(draft => draft.key === submitted.key)!.value).toEqual(submitted.value);
   expect((await records(page)).drafts.filter(draft => draft.kind === 'acknowledged_operation' && draft.key.endsWith(submitted.value.op_id))).toHaveLength(0);
   await page.reload();

@@ -1,12 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { parseMoney } from '../../domain/money';
-import { api, draftKey, listOutbox } from '../data';
+import { draftKey, listOutbox } from '../data';
 import type { SessionState } from '../../domain/session';
 import { decimal, DraftRecovery, ErrorText, money, sessionLabel, useClient, useDraft, useFormBusy } from './common';
 
 export type SessionSummary = { id: string; name: string; played_on: string; currency: string; status: string; revision: string };
 export function SessionForm({ creating, created }: { creating: boolean; created: (state: SessionState) => void }) {
-  const { banker, state, open } = useClient();
+  const { banker, state, open, client } = useClient();
+  const api = client!.api;
   const initial = { op_id: crypto.randomUUID(), name: creating ? '' : state!.session.name, played_on: creating ? new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10) : state!.session.played_on, currency: creating ? 'USD' : state!.session.currency, location: creating ? '' : state!.session.location ?? '', game: creating ? '' : state!.session.game ?? '', blind: creating ? '' : state!.session.big_blind_minor ? decimal(state!.session.big_blind_minor, state!.session.currency) : '' };
   const draft = useDraft(draftKey(banker!.id, creating ? 'new' : state!.session.id, creating ? 'new-session' : 'settings'), initial);
   const [suggestions, setSuggestions] = useState<{ locations: string[]; games: string[] }>({ locations: [], games: [] });
@@ -31,6 +32,7 @@ export function SessionForm({ creating, created }: { creating: boolean; created:
   return <form onSubmit={submit}><label>Session name<input value={draft.value.name} onChange={event => draft.update({ ...draft.value, name: event.target.value })} required maxLength={100} /></label><label>Session date<input type="date" value={draft.value.played_on} onChange={event => draft.update({ ...draft.value, played_on: event.target.value })} required /></label><label>Currency<select aria-label="Currency" value={draft.value.currency} disabled={!creating} onChange={event => draft.update({ ...draft.value, currency: event.target.value })}>{['USD', 'JPY', 'CAD', 'EUR', 'GBP', 'SGD', 'HKD', 'AUD'].map(currency => <option key={currency}>{currency}</option>)}</select></label><label>Location<input list="past-locations" value={draft.value.location} onChange={event => draft.update({ ...draft.value, location: event.target.value })} /></label><datalist id="past-locations">{suggestions.locations.map(location => <option key={location}>{location}</option>)}</datalist><label>Game<input list="past-games" value={draft.value.game} onChange={event => draft.update({ ...draft.value, game: event.target.value })} /></label><datalist id="past-games">{suggestions.games.map(game => <option key={game}>{game}</option>)}</datalist><label>Big blind<input inputMode="decimal" placeholder="Optional" value={draft.value.blind} onChange={event => draft.update({ ...draft.value, blind: event.target.value })} /></label><ErrorText text={error} /><button className="primary wide" disabled={busy || !draft.ready || (!creating && state!.session.status === 'closed')}>{creating ? 'Create session' : 'Save settings'}</button></form>;
 }
 export function HistorySheet({ choose }: { choose: (id: string) => void }) {
+  const api = useClient().client!.api;
   const [search, setSearch] = useState('');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [error, setError] = useState('');

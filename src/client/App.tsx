@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SessionState } from '../domain/session';
-import { api, clearBankerData, discardItem, outboxUncertain, flushDraftWrites, hasUnsent, invalidateBankerWork, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, retryItem, storeSnapshot, syncOutbox, type Banker, type OutboxItem, type SubmittedDraft } from './data';
+import { bankerClient, blockBankerWork, clearBankerData, discoverAccount, discardItem, outboxUncertain, flushDraftWrites, hasUnsent, invalidateBankerWork, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, resumeBankerWork, retryItem, storeSnapshot, syncOutbox, type Banker, type OutboxItem, type SubmittedDraft } from './data';
 import { usePwaUpdate } from './pwa';
 import { Auth } from './views/Auth';
 import { AddPlayerSheet, CorrectionSheet, MoneySheet, PlayerSheet, SessionView } from './views/Session';
@@ -27,6 +27,8 @@ export function App() {
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [accountChanged, setAccountChanged] = useState(false);
+  const [reloadingAccount, setReloadingAccount] = useState(false);
   const [formBusy, setFormBusy] = useState(false);
   const current = useRef(state);
   const chosen = useRef(sessionId);
@@ -37,6 +39,7 @@ export function App() {
   const activeSessionTab = useRef<HTMLButtonElement>(null);
   useEffect(() => { activeSessionTab.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [sessionId, sessions.length, screen]);
   const renderEpoch = epoch.current;
+  const client = useMemo(() => banker ? bankerClient(banker.id) : null, [banker, renderEpoch]);
   current.current = state; chosen.current = sessionId; activeBanker.current = banker;
   const pwa = usePwaUpdate({ sheetOpen: sheet !== null || childDialog || checking || loggingOut || formBusy || (!banker && !viewerToken), outboxCount: pending.length });
   const dialogChange = useCallback((open: boolean) => { if (epoch.current === renderEpoch) setChildDialog(open); }, [renderEpoch]);
@@ -56,6 +59,7 @@ export function App() {
     activeBanker.current = null; current.current = null; chosen.current = null; initialSession.current = null;
     setBanker(null); setState(null); setSessionId(null); setSessions([]); setPending([]); setSubmittedForms([]); setCheckingForm(false);
     setSheet(null); setChildDialog(false); setFormBusy(false); setNotice(''); setError(''); setScreen('workspace'); setLastUpdated(null);
+    setAccountChanged(false);
     if (options.clearIdentity !== false) {
       let stored: Banker | null = null;
       try { stored = JSON.parse(localStorage.getItem('pb-banker') ?? 'null') as Banker | null; } catch {}
@@ -64,18 +68,31 @@ export function App() {
     if (!viewerToken) history.replaceState(null, '', '/');
   }, []);
   useEffect(() => {
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<{ bankerId: string }>).detail.bankerId !== activeBanker.current?.id) return;
+      epoch.current++; stopSync.current?.(); stopSync.current = null;
+      setAccountChanged(true); setSheet(null); setChildDialog(false); setFormBusy(false); setCheckingForm(false); setLoggingOut(false); setError('');
+    };
+    window.addEventListener('pb-account-changed', changed);
+    return () => window.removeEventListener('pb-account-changed', changed);
+  }, []);
+  useEffect(() => {
     const changedAccount = (event: StorageEvent) => {
       if (event.key !== 'pb-banker' || !activeBanker.current) return;
       let account: Banker | null = null;
       try { account = event.newValue ? JSON.parse(event.newValue) as Banker : null; } catch {}
-      if (account?.id !== activeBanker.current.id) resetAuth({ clearIdentity: false });
+      if (account?.id !== activeBanker.current.id) {
+        if (account) blockBankerWork(activeBanker.current.id);
+        else resetAuth({ clearIdentity: false });
+      }
     };
     window.addEventListener('storage', changedAccount);
     return () => window.removeEventListener('storage', changedAccount);
   }, [resetAuth]);
   const signedIn = useCallback((account: Banker) => {
     const requested = initialSession.current;
-    resetAuth();
+    resetAuth({ clearIdentity: false });
+    resumeBankerWork(account.id);
     setBanker(account); activeBanker.current = account;
     if (requested) { chosen.current = requested; setSessionId(requested); history.replaceState(null, '', `/?session=${encodeURIComponent(requested)}`); }
     localStorage.setItem('pb-banker', JSON.stringify(account)); setChecking(false); void requestPersistence();
@@ -84,7 +101,7 @@ export function App() {
     if (viewerToken) return;
     let active = true;
     const generation = epoch.current;
-    void api<{ banker: Banker }>('/api/auth/me').then(async result => {
+    void discoverAccount().then(async result => {
       const pendingKey = localStorage.getItem('pb-pending-codes');
       const pending = pendingKey ? await readDraft<{ banker: Banker; codes: string[] }>(pendingKey) : undefined;
       if (active && epoch.current === generation && pending?.banker.id !== result.banker.id) signedIn(result.banker);
@@ -99,19 +116,20 @@ export function App() {
     return () => { active = false; };
   }, [signedIn, resetAuth]);
   const update = useCallback((next: SessionState) => {
-    if (!viewerToken && !activeBanker.current) return;
+    if (epoch.current !== renderEpoch || (!viewerToken && (!banker || activeBanker.current?.id !== banker.id || !client?.isCurrent()))) return;
     if (current.current?.session.id === next.session.id && (BigInt(current.current.revision) > BigInt(next.revision) || (current.current.revision === next.revision && Date.parse(current.current.server_now) > Date.parse(next.server_now)))) return;
-    if (activeBanker.current) void storeSnapshot(activeBanker.current.id, next).catch(storageFailure);
+    if (banker && !viewerToken) void storeSnapshot(banker.id, next).catch(storageFailure);
     if (chosen.current === next.session.id || viewerToken) { setState(next); current.current = next; setLastUpdated(new Date().toISOString()); setError(''); }
     setSessions(rows => {
       const summary: SessionSummary = { id: next.session.id, name: next.session.name, played_on: next.session.played_on, currency: next.session.currency, status: next.session.status, revision: next.revision };
       return [...rows.filter(row => row.id !== summary.id), summary].sort((a, b) => b.played_on.localeCompare(a.played_on) || b.id.localeCompare(a.id));
     });
-  }, []);
+  }, [banker, client, renderEpoch]);
   const refreshSessions = useCallback(async (account: Banker) => {
     const generation = epoch.current;
     try {
-      const result = await api<{ sessions: SessionSummary[] }>('/api/sessions');
+      if (!client || client.bankerId !== account.id) return [];
+      const result = await client.api<{ sessions: SessionSummary[] }>('/api/sessions');
       if (epoch.current === generation && activeBanker.current?.id === account.id) setSessions(result.sessions);
       return result.sessions;
     } catch (problem) {
@@ -122,9 +140,9 @@ export function App() {
       if (epoch.current === generation && activeBanker.current?.id === account.id) setSessions(rows);
       return rows;
     }
-  }, [resetAuth]);
+  }, [client, resetAuth]);
   useEffect(() => {
-    if (!banker) return;
+    if (!banker || accountChanged || loggingOut) return;
     let active = true;
     const generation = epoch.current;
     void refreshSessions(banker).then(rows => {
@@ -134,9 +152,9 @@ export function App() {
       setSessionId(selected);
     });
     return () => { active = false; };
-  }, [banker, refreshSessions]);
+  }, [banker, refreshSessions, accountChanged, loggingOut]);
   useEffect(() => {
-    if (!banker || loggingOut) return;
+    if (!banker || loggingOut || accountChanged) return;
     const account = banker;
     const generation = epoch.current;
     const changed = () => { void Promise.all([listOutbox(account.id), listSubmittedDrafts(account.id)]).then(([items, forms]) => { if (epoch.current === generation) { setPending(items); setSubmittedForms(forms); if (!items.length) setNotice(current => current === 'Not saved yet' ? '' : current); } }).catch(storageFailure); };
@@ -151,9 +169,9 @@ export function App() {
     stopSync.current = stop;
     window.addEventListener('pb-data', changed);
     return () => { stop(); window.removeEventListener('pb-data', changed); stopSync.current = null; };
-  }, [banker, loggingOut, update, notify, refreshSessions]);
+  }, [banker, loggingOut, accountChanged, update, notify, refreshSessions]);
   useEffect(() => {
-    if (loggingOut || (!viewerToken && (!banker || !sessionId))) return;
+    if (loggingOut || accountChanged || (!viewerToken && (!banker || !sessionId || !client))) return;
     let active = true;
     let requestRunning = false;
     let pendingForce = false;
@@ -168,7 +186,7 @@ export function App() {
       if (requestRunning || !visible()) return;
       const force = pendingForce; pendingForce = false;
       requestRunning = true;
-      try { const result = await pollSession(path, !force && (current.current?.session.id === sessionId || viewerToken) ? current.current?.revision : undefined); if (isCurrent() && result) update(result); if (isCurrent()) setLastUpdated(new Date().toISOString()); }
+      try { const revision = !force && (current.current?.session.id === sessionId || viewerToken) ? current.current?.revision : undefined; const result = viewerToken ? await pollSession(path, revision) : await client!.pollSession(path, revision); if (isCurrent() && result) update(result); if (isCurrent()) setLastUpdated(new Date().toISOString()); }
       catch (problem) {
         if (!isCurrent()) return;
         const failure = problem as Error & { status?: number };
@@ -182,7 +200,7 @@ export function App() {
     for (const event of ['visibilitychange', 'pageshow', 'focus', 'online']) window.addEventListener(event, refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => { active = false; clearInterval(timer); for (const event of ['visibilitychange', 'pageshow', 'focus', 'online']) window.removeEventListener(event, refresh); document.removeEventListener('visibilitychange', refresh); };
-  }, [banker, sessionId, loggingOut, update, resetAuth]);
+  }, [banker, client, sessionId, loggingOut, accountChanged, update, resetAuth]);
   function choose(id: string) {
     setScreen('workspace'); setSheet(null); setError('');
     setSessionId(id); chosen.current = id;
@@ -191,9 +209,10 @@ export function App() {
   }
   async function mutate(path: string, body: Record<string, unknown>, method = 'POST') {
     const generation = epoch.current;
-    const account = activeBanker.current?.id;
+    const account = client?.bankerId;
     try {
-      const result = await api<SessionState>(path, method, body);
+      if (!client) throw new Error('Sign in to continue');
+      const result = await client.api<SessionState>(path, method, body);
       if (epoch.current !== generation || activeBanker.current?.id !== account) throw new Error('Account changed. Sign in to review your saved work.');
       update(result); return result;
     } catch (problem) {
@@ -221,17 +240,44 @@ export function App() {
     finally { if (isCurrent()) setCheckingForm(false); }
   }
   async function signOut() {
-    setLoggingOut(true); epoch.current++; if (banker) invalidateBankerWork(banker.id); stopSync.current?.();
+    if (!client || !sameAccount()) return;
+    const account = client.bankerId;
+    setLoggingOut(true); const generation = ++epoch.current; invalidateBankerWork(account); stopSync.current?.();
+    const logoutClient = bankerClient(account);
+    const isCurrent = () => epoch.current === generation && activeBanker.current?.id === account && logoutClient.isCurrent();
     try {
       await flushDraftWrites();
-      await api('/api/auth/logout', 'POST', {});
-      await clearBankerData(banker!.id);
-      localStorage.removeItem('pb-banker'); localStorage.removeItem(`pb-session-${banker!.id}`);
-      resetAuth();
-    } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not sign out. Reconnect and try again.'); }
+      if (!isCurrent()) return;
+      await logoutClient.api('/api/auth/logout', 'POST', {});
+      if (!isCurrent()) return;
+      await clearBankerData(account);
+      if (epoch.current !== generation || activeBanker.current?.id !== account) return;
+      let stored: Banker | null = null;
+      try { stored = JSON.parse(localStorage.getItem('pb-banker') ?? 'null') as Banker | null; } catch {}
+      if (stored?.id === account) localStorage.removeItem('pb-banker');
+      if (localStorage.getItem('pb-pending-codes')?.startsWith(`${account}/`)) localStorage.removeItem('pb-pending-codes');
+      localStorage.removeItem(`pb-session-${account}`);
+      resetAuth({ clearIdentity: false });
+    } catch (problem) { if (isCurrent()) setError(problem instanceof Error ? problem.message : 'Could not sign out. Reconnect and try again.'); }
     finally { setLoggingOut(false); }
   }
-  const sameAccount = () => !loggingOut && epoch.current === renderEpoch && (!!viewerToken || activeBanker.current?.id === banker?.id);
+  async function reloadAccount() {
+    if (reloadingAccount) return;
+    setReloadingAccount(true); setError('');
+    const generation = epoch.current;
+    try {
+      const result = await discoverAccount();
+      const pendingKey = localStorage.getItem('pb-pending-codes');
+      const pending = pendingKey ? await readDraft<{ banker: Banker; codes: string[] }>(pendingKey) : undefined;
+      if (epoch.current === generation) {
+        if (pending?.banker.id === result.banker.id) resetAuth({ clearIdentity: false });
+        else signedIn(result.banker);
+      }
+    }
+    catch (problem) { if (epoch.current === generation) { if ((problem as { status?: number }).status === 401) resetAuth({ clearIdentity: false }); else setError(problem instanceof Error ? problem.message : 'Could not reload account state'); } }
+    finally { setReloadingAccount(false); }
+  }
+  const sameAccount = () => !loggingOut && !accountChanged && epoch.current === renderEpoch && (!!viewerToken || (activeBanker.current?.id === banker?.id && !!client?.isCurrent()));
   const boundUpdate = (next: SessionState) => { if (sameAccount()) update(next); };
   const boundOpen = (next: SheetState) => { if (sameAccount()) open(next); };
   const boundNotify = (text: string) => { if (sameAccount()) notify(text); };
@@ -257,8 +303,9 @@ export function App() {
   const updateBanner = pwa.waiting ? <div className="update-banner" role="status"><span>Update ready</span><button data-testid="update-reload" disabled={pending.length > 0 || formBusy || loggingOut} onClick={() => { void pwa.activate().catch(problem => setError(problem.message)); }}>Reload</button></div> : null;
   const recentClosed = new Set(sessions.filter(session => session.status === 'closed').slice(0, 5).map(session => session.id));
   const tabSessions = sessions.filter(session => session.status === 'open' || session.id === sessionId || recentClosed.has(session.id));
-  const provider = { banker: viewerToken ? null : banker, state, online, pending, open: boundOpen, update: boundUpdate, notify: boundNotify, mutate: boundMutate, updateBanner, formBusy: formBusy || loggingOut, setFormBusy, isCurrent: sameAccount };
+  const provider = { banker: viewerToken ? null : banker, client, state, online, pending, open: boundOpen, update: boundUpdate, notify: boundNotify, mutate: boundMutate, updateBanner, formBusy: formBusy || loggingOut, setFormBusy, isCurrent: sameAccount };
   if (checking) return <main className="auth"><div className="brand-mark">PB</div><p>Opening your bank…</p></main>;
+  if (accountChanged) return <main className="auth"><div className="brand-mark">PB</div><h1>Account changed</h1><p>Reload account state to continue. Saved drafts and entries stay with their account.</p><ErrorText text={error} /><button className="primary wide" disabled={reloadingAccount} onClick={() => { void reloadAccount(); }}>{reloadingAccount ? 'Reloading…' : 'Reload account state'}</button></main>;
   if (!banker && !viewerToken) return <>{updateBanner}<Auth signedIn={signedIn} /></>;
   return <ClientContext.Provider value={provider}><div className="app-shell">{!viewerToken && <header className="app-bar"><a className="wordmark" href="/" onClick={event => { event.preventDefault(); setScreen('workspace'); }}>Poker banker</a><nav aria-label="Workspace navigation"><button aria-pressed={screen === 'workspace'} onClick={() => setScreen('workspace')}>Workspace</button><button aria-pressed={screen === 'players'} onClick={() => { setScreen('players'); setSheet(null); }}>Players</button></nav></header>}
     {!sheet && !childDialog && updateBanner}

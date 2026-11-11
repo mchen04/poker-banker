@@ -3,7 +3,7 @@ import type { playerReport, ReportGrouping, ReportFilters, Metric, SquareRoot } 
 import type { Rational } from '../../domain/rational';
 import { formatRational, formatSquareRoot as formatSquareRootForReport } from '../../domain/rational';
 import type { PlayerState, SessionSettings } from '../../domain/session';
-import { api, draftKey } from '../data';
+import { draftKey } from '../data';
 import { useDebouncedSearch } from '../search';
 import { currencyDecimal, duration, DraftRecovery, ErrorText, money, resultMoney, resultCurrencyDecimal, resultNumber, sessionLabel, Sheet, useClient, useDraft, useFormBusy } from './common';
 
@@ -13,7 +13,8 @@ type Roster = { id: string; display_name: string; cumulative: CurrencyResult[]; 
 type History = { player: { id: string; display_name: string }; cumulative: CurrencyResult[]; outstanding: Outstanding[]; sessions: { session: SessionSettings; player: PlayerState }[] };
 type Report = ReturnType<typeof playerReport>;
 export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: (id: string) => void; dialogChange: (open: boolean) => void }) {
-  const { notify } = useClient();
+  const { notify, client } = useClient();
+  const api = client!.api;
   const [players, setPlayers] = useState<Roster[]>([]);
   const [search, setSearch] = useState('');
   const settledSearch = useDebouncedSearch(search);
