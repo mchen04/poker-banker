@@ -27,6 +27,7 @@
     "scripts",
     "tests",
     "*.ts",
-    "e2e"
+    "e2e",
+    ".claude/skills/verify-poker-banker/scripts"
   ]
 }

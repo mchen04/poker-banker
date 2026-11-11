@@ -3,7 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { testDatabase } from '../tests/database';
 
+let shutdownRequested = false;
+let requestShutdown = () => { shutdownRequested = true; };
+process.on('message', message => { if (message && typeof message === 'object' && 'type' in message && message.type === 'pb-shutdown') requestShutdown(); });
 const database = await testDatabase();
+if (shutdownRequested) { await database.stop(); process.exit(0); }
 const certificateDir = await mkdtemp(resolve('.cache/e2e-tls-'));
 const key = `${certificateDir}/key.pem`;
 const cert = `${certificateDir}/cert.pem`;
@@ -32,4 +36,6 @@ async function stop(code: number) {
 }
 child.on('error', error => { console.error(error); void stop(1); });
 child.on('exit', code => { void stop(code ?? 1); });
+requestShutdown = () => { void stop(0); };
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { void stop(0); });
+if (shutdownRequested) await stop(0);
