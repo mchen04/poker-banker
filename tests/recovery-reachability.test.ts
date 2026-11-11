@@ -273,3 +273,36 @@ it.each([
   expect(recovered.value).toMatchObject(operation.value);
   expect(recovered.value).not.toHaveProperty(operation.raw);
 });
+
+it('keeps each physical edit beside a frozen request until replay releases the complete later value', async () => {
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, 'add-player');
+  const initial = { op_id: 'original', amount: 'Justin' };
+  const request = { path: `/api/sessions/${session}/players`, method: 'POST', body: { op_id: initial.op_id, new_player_name: 'Justin' } };
+  await data.writeDraft(key, initial);
+  const begin = source.indexOf('function draftForm(');
+  const end = source.indexOf("\nit.each([false, true])('adopts", begin);
+  const code = ts.transpileModule(source.slice(begin, end) + '\nreturn draftForm;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const create = Function('ts', 'readFileSync', 'runInNewContext', 'window', 'crypto', 'structuredClone', 'Event', 'CustomEvent', code)(ts, readFileSync, runInNewContext, window, crypto, structuredClone, Event, CustomEvent);
+  const harness = create(data, key, initial) as { render: () => { ready: boolean; value: typeof initial; update: (value: typeof initial) => void; error: string; submitted: boolean; submit: (path: string, body: object) => Promise<unknown> }; close: () => void };
+  let form = harness.render();
+  try {
+    await vi.waitFor(() => { form = harness.render(); expect(form.ready).toBe(true); });
+    vi.resetModules();
+    const other = await import('../src/client/data');
+    await other.readDraft(key);
+    await other.prepareDraftSubmission(key, initial, request);
+    for (const amount of ['', 'A', 'Alex']) {
+      form.update({ ...form.value, amount });
+      await data.flushDraftWrites();
+      await vi.waitFor(() => { form = harness.render(); expect(form.value.amount).toBe(amount); expect(form.submitted).toBe(false); expect(form.error).toMatch(/submitted.*another tab/i); });
+    }
+    expect(form.error).toMatch(/submitted.*another tab/i);
+    await expect(form.submit(request.path, { op_id: initial.op_id, new_player_name: 'Alex' })).rejects.toThrow(/submitted.*another tab/i);
+    expect(fetch).not.toHaveBeenCalled();
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/auth/me' ? { banker: { id: owner, username: owner } } : { ok: true }, { headers: { 'X-PB-Banker-ID': owner } })));
+    await other.replaySubmittedDraft(key);
+    await vi.waitFor(() => { form = harness.render(); expect(form.value.amount).toBe('Alex'); expect(form.value.op_id).not.toBe(initial.op_id); });
+    expect((await data.readDraft<typeof initial>(key))?.amount).toBe('Alex');
+  } finally { harness.close(); }
+});
