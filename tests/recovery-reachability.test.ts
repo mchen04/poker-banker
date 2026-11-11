@@ -384,7 +384,7 @@ it('permits submission after multiple earlier keystroke writes finish in the sam
   expect(fetch).not.toHaveBeenCalled();
 });
 
-it('keeps an observation of a queued own edit bound to the write that supplies its version', async () => {
+it.each(['submit', 'edit'] as const)('keeps an observation of a queued own edit bound to its writer (%s)', async action => {
   const fixture = storage() as unknown as { holdNextWrite: () => { started: Promise<void>; release: () => void } };
   const data = await import('../src/client/data');
   const key = data.draftKey(owner, 'new', 'new-session');
@@ -404,8 +404,16 @@ it('keeps an observation of a queued own edit bound to the write that supplies i
   const observed = await reading;
   await lastHold.started;
   expect(observed).toEqual(final);
-  const preparing = data.prepareDraftSubmission(key, observed!, { path: '/api/sessions', method: 'POST', body: { ...final, currency: 'USD' } }, () => true, observer);
-  lastHold.release();
-  await Promise.all([firstWrite, lastWrite]);
-  expect((await preparing).previouslyConfirmed).toBe(false);
+  if (action === 'submit') {
+    const preparing = data.prepareDraftSubmission(key, observed!, { path: '/api/sessions', method: 'POST', body: { ...final, currency: 'USD' } }, () => true, observer);
+    lastHold.release();
+    await Promise.all([firstWrite, lastWrite]);
+    expect((await preparing).previouslyConfirmed).toBe(false);
+  } else {
+    const successor = { ...final, played_on: '2026-11-12' };
+    const nextWrite = data.writeDraft(key, successor, observer);
+    lastHold.release();
+    await Promise.all([firstWrite, lastWrite, nextWrite]);
+    expect(await data.readDraft(key)).toEqual(successor);
+  }
 });
