@@ -203,3 +203,50 @@ it.each([false, true])('retains the latest edit behind a frozen cross-tab reques
   expect(await (await freshData()).readDraft(key)).toEqual(retained);
   expect(await data.prepareDraftSubmission(key, retained!, request(retained!.op_id, '45600'))).toMatchObject({ first: true, previouslyConfirmed: false });
 });
+
+it.each([false, true])('does not acknowledge or lose a healthy edit behind another module\'s frozen request (rejected=%s)', async rejected => {
+  draftStorage();
+  const editing = await freshData();
+  const playerKey = 'banker/session/add-player/';
+  const initial = { op_id: 'original-player-operation', search: 'Justin' };
+  const latest = { ...initial, search: 'Alex' };
+  await editing.writeDraft(playerKey, initial);
+  const submitting = await freshData();
+  const frozen: DraftRequest = {
+    path: '/api/sessions/session/players', method: 'POST',
+    body: { op_id: initial.op_id, new_player_name: initial.search },
+  };
+  await submitting.prepareDraftSubmission(playerKey, initial, frozen);
+  const outcome = await editing.writeDraft(playerKey, latest).then(() => ({ saved: true as const }), error => ({ saved: false as const, error }));
+  const stored = await new Promise<Row | undefined>((resolve, reject) => {
+    const opening = indexedDB.open('poker-banker');
+    opening.onerror = () => reject(opening.error);
+    opening.onsuccess = () => {
+      const reading = opening.result.transaction('drafts').objectStore('drafts').get(playerKey);
+      reading.onerror = () => reject(reading.error);
+      reading.onsuccess = () => resolve(reading.result as Row | undefined);
+    };
+  });
+  const containsLatest = (value: unknown): boolean => !!value && typeof value === 'object' && (
+    (value as { search?: string }).search === latest.search || Object.values(value).some(containsLatest)
+  );
+  if (outcome.saved) expect(containsLatest(stored), 'a resolved draft write must persist the latest edit').toBe(true);
+  else {
+    expect(outcome.error).toBeInstanceOf(Error);
+    expect(editing.draftSaveFailed(playerKey)).toBe(true);
+    expect(editing.hasPendingLocalWrites()).toBe(true);
+    await expect(editing.flushDraftWrites()).rejects.toThrow('Not saved on this device');
+  }
+  expect(await submitting.readDraft(playerKey)).toMatchObject({ search: 'Justin', __submitted: frozen });
+  const bodies = serverReply(rejected);
+  if (rejected) await expect(submitting.replaySubmittedDraft(playerKey)).rejects.toMatchObject({ code: 'session_closed' });
+  else await submitting.replaySubmittedDraft(playerKey);
+  expect(bodies).toEqual([frozen.body]);
+  await editing.flushDraftWrites();
+  const restored = await (await freshData()).readDraft<typeof latest & { __submitted?: DraftRequest }>(playerKey);
+  expect(restored).toMatchObject({ search: 'Alex' });
+  expect(restored?.op_id).not.toBe(initial.op_id);
+  expect(restored?.__submitted).toBeUndefined();
+  expect(editing.draftSaveFailed(playerKey)).toBe(false);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+});
