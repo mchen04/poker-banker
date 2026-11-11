@@ -3,7 +3,7 @@ import { flushDraftWrites, hasAnyOutbox, hasPendingLocalWrites } from './data';
 
 declare const __APP_RELEASE__: string;
 
-type Holds = { sheetOpen: boolean; outboxCount: number };
+type Holds = { sheetOpen: boolean; outboxCount: number; busy: boolean };
 
 export function usePwaUpdate(holds: Holds) {
   const [waiting, setWaiting] = useState(false);
@@ -14,7 +14,7 @@ export function usePwaUpdate(holds: Holds) {
   const pendingReload = useRef(false);
   const manualReload = useRef(false);
 
-  const canReload = useCallback((manual: boolean) => document.visibilityState === 'visible' && current.current.outboxCount === 0 && (manual || !current.current.sheetOpen), []);
+  const canReload = useCallback((manual: boolean) => document.visibilityState === 'visible' && !current.current.busy && current.current.outboxCount === 0 && (manual || !current.current.sheetOpen), []);
   const reload = useCallback(async (manual: boolean) => {
     if (!pendingReload.current || !canReload(manual)) return;
     await flushDraftWrites();
