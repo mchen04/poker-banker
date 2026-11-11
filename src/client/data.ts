@@ -218,7 +218,16 @@ export async function replaySubmittedDraft<T>(key: string): Promise<T> {
   if (!request || !request.path.startsWith('/api/') || !['POST', 'PATCH'].includes(request.method)) throw new Error('There is no submitted form to check');
   const identity = await api<{ banker: Banker }>('/api/auth/me');
   if (identity.banker.id !== key.split('/')[0]) throw new Error('Account changed. Sign in to check this form.');
-  const result = await api<T>(request.path, request.method, request.body);
+  let result: T;
+  try { result = await api<T>(request.path, request.method, request.body); }
+  catch (problem) {
+    if (problem instanceof ApiError && ((problem.status === 400 && ['invalid_request', 'outside_timer_bounds'].includes(problem.code)) || (problem.status === 409 && problem.code === 'entries_outside_timing'))) {
+      const editable = { ...value, op_id: crypto.randomUUID() };
+      delete editable.__submitted;
+      if (!await finishDraftSubmission(key, request, editable, false, epoch)) throw new Error('This submitted form was cleared in another tab. Check your signed-in account.');
+    }
+    throw problem;
+  }
   if (!await finishDraftSubmission(key, request, undefined, true, epoch)) throw new Error('This submitted form was cleared in another tab. Check your signed-in account.');
   return result;
 }

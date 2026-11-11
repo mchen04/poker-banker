@@ -105,7 +105,11 @@ export function useDraft<T extends object>(key: string, initial: T) {
       let result: R;
       try { result = await replaySubmittedDraft<R>(key); }
       catch (problem) {
-        if (first && problem instanceof ApiError && problem.status >= 400 && problem.status < 500 && ![401, 403, 429].includes(problem.status) && problem.code !== 'idempotency_mismatch' && active.current) {
+        const restored = await readDraft<Value>(key);
+        if (restored && !restored.__submitted && active.current) {
+          submitted.current = undefined;
+          setValue(restored);
+        } else if (first && problem instanceof ApiError && problem.status >= 400 && problem.status < 500 && ![401, 403, 429].includes(problem.status) && problem.code !== 'idempotency_mismatch' && active.current) {
           submitted.current = undefined;
           const fresh = { ...value, ...('op_id' in value ? { op_id: crypto.randomUUID() } : {}) };
           delete fresh.__submitted;

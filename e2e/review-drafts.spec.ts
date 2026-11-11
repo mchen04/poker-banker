@@ -38,6 +38,85 @@ test('a lost create response reconciles the submitted draft before a fresh sessi
   expect(history.sessions.map(session => session.name).sort()).toEqual(['First committed game', 'Second distinct game']);
 });
 
+for (const recovery of ['sheet', 'workspace'] as const) {
+  test(`a dropped validation rejection returns the ${recovery} draft to editing with a fresh operation`, async ({ page }) => {
+    await createAccount(page);
+    const bodies: { op_id: string; name: string; location: string }[] = [];
+    let drop = true;
+    await page.route('**/api/sessions', async route => {
+      if (route.request().method() !== 'POST') { await route.continue(); return; }
+      bodies.push(route.request().postDataJSON());
+      if (!drop) { await route.continue(); return; }
+      drop = false;
+      expect((await route.fetch()).status()).toBe(400);
+      await route.abort('failed');
+    });
+    await page.getByRole('button', { name: 'New session', exact: true }).click();
+    await page.getByLabel('Session name', { exact: true }).fill('   ');
+    await page.getByLabel('Location', { exact: true }).fill('Retained typed location');
+    await page.getByRole('button', { name: 'Create session', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
+    await page.reload();
+    if (recovery === 'sheet') {
+      await page.getByRole('button', { name: 'New session', exact: true }).click();
+      await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
+    } else {
+      await page.getByRole('button', { name: 'Check saved form: New session', exact: true }).click();
+      await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toHaveCount(0);
+      await page.getByRole('button', { name: 'New session', exact: true }).click();
+    }
+    await expect(page.getByLabel('Session name', { exact: true })).toHaveValue('   ');
+    await expect(page.getByLabel('Location', { exact: true })).toHaveValue('Retained typed location');
+    await expect(page.getByLabel('Session name', { exact: true })).toBeEnabled();
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toEqual(bodies[0]);
+    await page.getByLabel('Session name', { exact: true }).fill('Corrected rejected game');
+    await page.getByRole('button', { name: 'Create session', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Corrected rejected game', exact: true })).toBeVisible();
+    expect(bodies).toHaveLength(3);
+    expect(bodies[2]!.op_id).not.toBe(bodies[0]!.op_id);
+    expect((await call<{ sessions: { name: string }[] }>(page, '/sessions')).sessions.map(session => session.name)).toEqual(['Corrected rejected game']);
+  });
+}
+
+test('a dropped timer-bound rejection restores an editable correction without applying the void', async ({ page }) => {
+  await createAccount(page);
+  let state = await newSession(page, 'Recover rejected correction');
+  const player = await addPlayer(page, 'Justin');
+  state = await call<SessionState>(page, `/sessions/${state.session.id}/timing`, 'PATCH', { op_id: crypto.randomUUID(), started_at: '2026-11-10T00:00:00Z', ended_at: '2026-11-10T06:00:00Z' });
+  state = await call<SessionState>(page, `/sessions/${state.session.id}/entries`, 'POST', { op_id: crypto.randomUUID(), player_id: player.id, kind: 'buy_in', amount_minor: '10000', paid_now: false, occurred_at: '2026-11-10T02:00:00Z' });
+  const original = state.entries[0]!;
+  await page.reload();
+  const bodies: { op_id: string; replacement_occurred_at: string }[] = [];
+  let drop = true;
+  await page.route(`**/api/sessions/${state.session.id}/entries/${original.id}/void`, async route => {
+    bodies.push(route.request().postDataJSON());
+    if (!drop) { await route.continue(); return; }
+    drop = false;
+    const response = await route.fetch();
+    expect(response.status()).toBe(400);
+    expect((await response.json()).error.code).toBe('outside_timer_bounds');
+    await route.abort('failed');
+  });
+  await page.getByTestId(`entry-${original.id}`).getByRole('button', { name: 'Correct', exact: false }).click();
+  await page.getByLabel('Entry time', { exact: true }).fill('2026-11-09T23:00:00');
+  await page.getByRole('button', { name: 'Save correction', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
+  await expect(page.getByLabel('Entry time', { exact: true })).toHaveValue(/^2026-11-09T23:00(?::00)?$/);
+  expect((await current(page)).entries).toHaveLength(1);
+  await page.getByLabel('Entry time', { exact: true }).fill('2026-11-10T03:00:00');
+  await page.getByRole('button', { name: 'Save correction', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const after = await current(page);
+  expect(after.entries).toHaveLength(3);
+  expect(after.entries.find(entry => entry.voids_entry_id === original.id)).toBeDefined();
+  expect(after.entries.find(entry => !entry.voids_entry_id && entry.id !== original.id)!.occurred_at).toBe('2026-11-10T03:00:00.000Z');
+  expect(bodies).toHaveLength(3);
+  expect(bodies[0]).toEqual(bodies[1]);
+  expect(bodies[2]!.op_id).not.toBe(bodies[0]!.op_id);
+});
+
 test('a committed reopen stays recoverable after reload changes the available lifecycle controls', async ({ page }) => {
   await createAccount(page);
   await newSession(page, 'Recover lifecycle');
@@ -166,4 +245,46 @@ test('a late form acknowledgement after another tab signs out cannot restore pri
     db.close(); return values;
   });
   expect(counts).toEqual([0, 0, 0]);
+});
+
+test('a dropped timing-validation rejection restores editing before a fresh timing operation', async ({ page }) => {
+  await createAccount(page);
+  let state = await newSession(page, 'Recover rejected timing');
+  const player = await addPlayer(page, 'Justin');
+  state = await call<SessionState>(page, `/sessions/${state.session.id}/timing`, 'PATCH', { op_id: crypto.randomUUID(), started_at: '2026-11-10T18:00:00Z', ended_at: '2026-11-10T22:00:00Z' });
+  state = await call<SessionState>(page, `/sessions/${state.session.id}/entries`, 'POST', { op_id: crypto.randomUUID(), player_id: player.id, kind: 'buy_in', amount_minor: '10000', paid_now: false, occurred_at: '2026-11-10T20:00:00Z' });
+  await page.reload();
+  const bodies: { op_id: string; started_at: string; ended_at: string | null }[] = [];
+  let drop = true;
+  await page.route(`**/api/sessions/${state.session.id}/timing`, async route => {
+    if (route.request().method() !== 'PATCH') { await route.continue(); return; }
+    bodies.push(route.request().postDataJSON());
+    if (!drop) { await route.continue(); return; }
+    drop = false;
+    const response = await route.fetch();
+    expect(response.status()).toBe(409);
+    expect((await response.json()).error.code).toBe('entries_outside_timing');
+    await route.abort('failed');
+  });
+  await menu(page, 'Correct times');
+  await page.getByLabel('Started at', { exact: true }).fill('2026-11-10T21:00:00');
+  await page.getByRole('button', { name: 'Save timing', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
+  await page.reload();
+  await menu(page, 'Correct times');
+  await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
+  await expect(page.getByLabel('Started at', { exact: true })).toHaveValue(/^2026-11-10T21:00(?::00)?$/);
+  await expect(page.getByLabel('Ended at', { exact: true })).toHaveValue(/^2026-11-10T22:00(?::00)?$/);
+  expect((await current(page)).session.started_at).toBe('2026-11-10T18:00:00.000Z');
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0]).toEqual(bodies[1]);
+  await page.getByLabel('Started at', { exact: true }).fill('2026-11-10T19:00:00');
+  await page.getByRole('button', { name: 'Save timing', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const saved = await current(page);
+  expect(saved.session.started_at).toBe('2026-11-10T19:00:00.000Z');
+  expect(saved.session.ended_at).toBe('2026-11-10T22:00:00.000Z');
+  expect(saved.events.filter(event => event.kind === 'timing_corrected')).toHaveLength(2);
+  expect(bodies).toHaveLength(3);
+  expect(bodies[2]!.op_id).not.toBe(bodies[0]!.op_id);
 });
