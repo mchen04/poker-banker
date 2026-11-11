@@ -149,6 +149,60 @@ export async function playerHistory(db: Queryable, banker: string, player: strin
 export async function playerRoster(db: Queryable, banker: string, search: string) {
   const players = await db.query<{ id: string; display_name: string; created_at: string }>(
     'SELECT id,display_name,created_at::text FROM players WHERE banker_id=$1 AND position($2 in name_key)>0 ORDER BY name_key,id', [banker, search]);
-  const histories = await playerSessionHistories(db, banker, players.rows);
-  return players.rows.map(player => ({ ...player, ...summarizeHistory(histories.get(player.id)!) }));
+  if (!players.rows.length) return [];
+  const summaries = await db.query<{
+    player_id: string; currency: string; result_minor: string | null;
+    owed_to_banker_minor: string; owed_by_banker_minor: string;
+  }>(`WITH RECURSIVE entries AS MATERIALIZED (
+    SELECT id, session_id, player_id, kind, amount_minor::numeric AS amount_minor,
+      occurred_at, voids_entry_id, revision
+    FROM ledger_entries WHERE banker_id = $1 AND player_id = ANY($2::uuid[])
+  ), live AS (
+    SELECT e.* FROM entries e WHERE e.voids_entry_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM entries v WHERE v.voids_entry_id = e.id)
+  ), ancestry AS (
+    SELECT id, session_id, player_id, kind, revision AS original_revision
+    FROM live WHERE kind IN ('buy_in', 'cash_out')
+    UNION ALL
+    SELECT a.id, a.session_id, a.player_id, a.kind, original.revision
+    FROM ancestry a JOIN entries correction ON correction.session_id = a.session_id
+      AND correction.player_id = a.player_id AND correction.kind = a.kind
+      AND correction.revision = a.original_revision AND correction.voids_entry_id IS NOT NULL
+    JOIN entries original ON original.id = correction.voids_entry_id AND original.revision < a.original_revision
+  ), chip_order AS (
+    SELECT e.*, min(a.original_revision) AS original_revision,
+      bool_or(e.occurred_at IS NULL) OVER (PARTITION BY e.session_id, e.player_id) AS unknown_time
+    FROM live e JOIN ancestry a ON a.id = e.id
+    GROUP BY e.id, e.session_id, e.player_id, e.kind, e.amount_minor, e.occurred_at, e.voids_entry_id, e.revision
+  ), last_chip AS (
+    SELECT DISTINCT ON (session_id, player_id) session_id, player_id, kind
+    FROM chip_order ORDER BY session_id, player_id,
+      CASE WHEN NOT unknown_time THEN date_trunc('milliseconds', occurred_at) END DESC NULLS LAST,
+      original_revision DESC, id DESC
+  ), amounts AS (
+    SELECT session_id, player_id,
+      coalesce(sum(CASE WHEN kind = 'cash_out' THEN amount_minor ELSE -amount_minor END)
+        FILTER (WHERE kind IN ('buy_in', 'cash_out')), 0) AS result_minor,
+      sum(CASE WHEN kind IN ('buy_in', 'payment_out') THEN amount_minor
+        WHEN kind IN ('cash_out', 'payment_in') THEN -amount_minor ELSE 0 END) AS balance_minor
+    FROM live GROUP BY session_id, player_id
+  )
+  SELECT sp.player_id, s.currency,
+    sum(a.result_minor) FILTER (WHERE s.status = 'closed' AND chip.kind = 'cash_out')::text AS result_minor,
+    sum(greatest(coalesce(a.balance_minor, 0), 0))::text AS owed_to_banker_minor,
+    sum(greatest(-coalesce(a.balance_minor, 0), 0))::text AS owed_by_banker_minor
+  FROM session_players sp JOIN game_sessions s ON s.id = sp.session_id AND s.banker_id = sp.banker_id
+    LEFT JOIN amounts a ON a.session_id = sp.session_id AND a.player_id = sp.player_id
+    LEFT JOIN last_chip chip ON chip.session_id = sp.session_id AND chip.player_id = sp.player_id
+  WHERE sp.banker_id = $1 AND sp.player_id = ANY($2::uuid[])
+  GROUP BY sp.player_id, s.currency`, [banker, players.rows.map(player => player.id)]);
+  const byPlayer = new Map(players.rows.map(player => [player.id, [] as typeof summaries.rows]));
+  for (const summary of summaries.rows) byPlayer.get(summary.player_id)!.push(summary);
+  return players.rows.map(player => {
+    const currencies = byPlayer.get(player.id)!.sort((a, b) => a.currency.localeCompare(b.currency));
+    return { ...player,
+      cumulative: currencies.filter(row => row.result_minor !== null).map(row => ({ currency: row.currency, result_minor: row.result_minor! })),
+      outstanding: currencies.map(row => ({ currency: row.currency, owed_to_banker_minor: row.owed_to_banker_minor, owed_by_banker_minor: row.owed_by_banker_minor })),
+    };
+  });
 }
