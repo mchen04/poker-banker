@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
 import { addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newSession, openMoney, share, signIn, signOut, workerReady } from './helpers';
-import type { SessionState } from '../src/domain/session';
 
 test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
   const user = await createAccount(page, testInfo);

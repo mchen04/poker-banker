@@ -7,3 +7,5 @@ playwright-report/
 .local-db/
 evidence/
 .vercel/
+
+/public/icon-*.png

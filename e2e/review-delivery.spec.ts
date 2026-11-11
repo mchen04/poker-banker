@@ -3,7 +3,7 @@ import { addPlayer, call, createAccount, current, newSession, openMoney } from '
 
 test.use({ serviceWorkers: 'block' });
 
-test('a response lost after commit remains uncertain and replays the original operation once', async ({ page, context }) => {
+test('a response lost after commit remains uncertain and replays the original operation once', async ({ page }) => {
   await createAccount(page);
   const session = await newSession(page, 'Lost acknowledgement');
   const player = await addPlayer(page, 'Justin');

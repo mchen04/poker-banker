@@ -7,7 +7,7 @@ import type { SessionState } from '../src/domain/session';
 let database: Awaited<ReturnType<typeof testDatabase>>;
 beforeAll(async () => { database = await testDatabase(); });
 afterAll(async () => { await database.stop(); });
-for (const skew of [-60000, 60000]) it(`keeps ${skew}ms tolerated wall skew inside a started timer and a normal close`, async () => {
+it('keeps both signs of tolerated wall skew inside a started timer and a normal close', async () => {
   const origin = 'https://skew.test'; const app = createApp(database.pool, { origin }); let cookie = '';
   const call = async (path: string, body?: unknown) => {
     const response = await app.request(`${origin}/api${path}`, { method: body ? 'POST' : 'GET', headers: { origin, cookie, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
@@ -21,7 +21,9 @@ for (const skew of [-60000, 60000]) it(`keeps ${skew}ms tolerated wall skew insi
   state = await call(`${path}/start`, { op_id: randomUUID() });
   state = await call(path);
   const clock = createEntryClock(); clock.observe(state.server_now, 100);
-  const stamp = clock.stamp(Date.parse(state.server_now) + skew, 100);
+  const stamps = [-60000, 60000].map(skew => clock.stamp(Date.parse(state.server_now) + skew, 100));
+  expect(stamps).toEqual([state.server_now, state.server_now]);
+  const stamp = stamps[0]!;
   for (const kind of ['buy_in', 'cash_out']) state = await call(`${path}/entries`, { op_id: randomUUID(), player_id: state.players[0]!.id, kind, amount_minor: '10000', paid_now: false, occurred_at: stamp });
   state = await call(`${path}/close`, { op_id: randomUUID(), expected_revision: state.revision });
   expect(state.session.status).toBe('closed'); expect(Date.parse(stamp!)).toBeLessThanOrEqual(Date.parse(state.session.ended_at!));
