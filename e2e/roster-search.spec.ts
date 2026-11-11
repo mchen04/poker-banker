@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { test, expect } from './fixtures';
 import { addPlayer, call, createAccount, newSession } from './helpers';
 
@@ -12,7 +13,7 @@ test('roster searches debounce the final text and wait for exact-name lookup bef
   await expect(page.getByRole('button', { name: 'Justin · Already seated', exact: true })).toBeVisible();
   searches.length = 0;
   const search = page.getByLabel('Search players', { exact: true });
-  await search.pressSequentially('Justin', { delay: 5 });
+  await typeInput(search, 'Justin', { append: true });
   await expect(page.getByRole('button', { name: "Add 'Justin' as new", exact: true })).toBeDisabled();
   await expect(page.getByText('An exact name match already exists.', { exact: false })).toBeVisible();
   expect(searches).toEqual(['Justin']);
@@ -21,7 +22,7 @@ test('roster searches debounce the final text and wait for exact-name lookup bef
   await expect(page.getByTestId(/^roster-player-/)).toHaveCount(2);
   searches.length = 0;
   const find = page.getByLabel('Find a player', { exact: true });
-  await find.pressSequentially('Mike', { delay: 5 });
+  await typeInput(find, 'Mike', { append: true });
   await expect(page.getByTestId(/^roster-player-/)).toHaveCount(1);
   await expect(page.getByTestId(/^roster-player-/)).toContainText('Mike');
   expect(searches).toEqual(['Mike']);

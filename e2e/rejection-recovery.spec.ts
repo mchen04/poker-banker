@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { addPlayer, call, createAccount, current, newSession, openMoney } from './helpers';
@@ -41,7 +42,7 @@ for (const recovery of ['same sheet', 'workspace'] as const) {
       else await route.continue();
     });
     await page.getByRole('button', { name: 'Add player', exact: true }).click();
-    await page.getByLabel('Search players', { exact: true }).fill('Justin');
+    await typeInput(page.getByLabel('Search players', { exact: true }), 'Justin');
     await page.getByRole('dialog').getByRole('button', { name: 'Justin', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
     const submitted = (await localRecords(page)).drafts.find(draft => draft.key.includes('/add-player/'))!;
@@ -65,7 +66,7 @@ for (const recovery of ['same sheet', 'workspace'] as const) {
     expect(editable.value.op_id).not.toBe(submitted.value.op_id);
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toEqual(bodies[0]);
-    await page.getByLabel('Search players', { exact: true }).fill('Alex');
+    await typeInput(page.getByLabel('Search players', { exact: true }), 'Alex');
     await page.getByRole('dialog').getByRole('button', { name: 'Alex', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     expect(bodies).toHaveLength(3);
@@ -89,7 +90,7 @@ test('a previously uncertain outbox replay confirmed as rejected becomes safely 
     else await route.continue();
   });
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('100');
+  await typeInput(page.getByLabel('Amount', { exact: true }), '100');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeEnabled();
   const queued = (await localRecords(page)).outbox[0]!;
@@ -127,8 +128,8 @@ for (const status of [431, 503]) {
       else await route.fulfill({ response });
     });
     await page.getByRole('button', { name: 'New session', exact: true }).click();
-    await page.getByLabel('Session name', { exact: true }).fill('Committed during delivery failure');
-    await page.getByLabel('Location', { exact: true }).fill('Preserved uncertain location');
+    await typeInput(page.getByLabel('Session name', { exact: true }), 'Committed during delivery failure');
+    await typeInput(page.getByLabel('Location', { exact: true }), 'Preserved uncertain location');
     await page.getByRole('button', { name: 'Create session', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
     const submitted = (await localRecords(page)).drafts.find(draft => draft.value.__submitted)!;

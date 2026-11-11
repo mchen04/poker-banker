@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { createAccount, current, newSession } from './helpers';
@@ -26,7 +27,7 @@ test('an open tab retains its later player draft while another tab confirms the 
   const session = await newSession(page, 'Cross-tab player draft');
   const key = `${account.banker.id}/${session.session.id}/add-player/`;
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
-  await page.getByLabel('Search players', { exact: true }).fill('Justin');
+  await typeInput(page.getByLabel('Search players', { exact: true }), 'Justin');
   await expect.poll(async () => (await storedPlayerDraft(page, key))?.value.search).toBe('Justin');
   const other = await context.newPage();
   let release!: () => void;
@@ -47,7 +48,7 @@ test('an open tab retains its later player draft while another tab confirms the 
     await expect(other.getByLabel('Search players', { exact: true })).toHaveValue('Justin');
     await page.getByRole('button', { name: "Add 'Justin' as new", exact: true }).click();
     await submitted;
-    await other.getByLabel('Search players', { exact: true }).fill('Alex');
+    await typeInput(other.getByLabel('Search players', { exact: true }), 'Alex');
     await expect(other.getByText(/submitted.*another tab|submitted elsewhere/i).first()).toBeVisible();
     expect(bodies).toHaveLength(1);
     expect(bodies[0]!.new_player_name).toBe('Justin');

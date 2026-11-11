@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Page } from '@playwright/test';
 import type { OutboxItem } from '../src/client/data';
 import { test, expect } from './fixtures';
@@ -26,7 +27,7 @@ async function localWork(page: Page): Promise<Work> {
 
 async function addOtherTabWork(page: Page, banker: string, session: string, player: string) {
   await openMoney(page, player);
-  await page.getByLabel('Amount', { exact: true }).fill('123');
+  await typeInput(page.getByLabel('Amount', { exact: true }), '123');
   const key = `${banker}/${session}/buy_in/${player}`;
   await expect.poll(async () => (await localWork(page)).drafts.find(draft => draft.key === key)?.value.amount).toBe('123');
   const op = await page.evaluate(async ({ banker, session, player }) => {
@@ -75,7 +76,7 @@ test('a quota failure blocks a waiting update until the typed draft is saved and
   await openMoney(page, player.id);
   const amount = page.getByLabel('Amount', { exact: true });
   const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
-  await amount.fill('10');
+  await typeInput(amount, '10');
   await expect.poll(async () => (await localWork(page)).drafts.find(draft => draft.key === key)?.value.amount).toBe('10');
   await page.evaluate(() => {
     const original = IDBObjectStore.prototype.put;
@@ -85,7 +86,7 @@ test('a quota failure blocks a waiting update until the typed draft is saved and
     };
     window.addEventListener('durability-storage-recovered', () => { IDBObjectStore.prototype.put = original; }, { once: true });
   });
-  await amount.fill('123');
+  await typeInput(amount, '123');
   await expect(amount).toHaveValue('123');
   expect((await localWork(page)).drafts.find(draft => draft.key === key)?.value.amount).toBe('10');
   buildRelease(releaseB);

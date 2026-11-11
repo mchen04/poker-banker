@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { addPlayer, call, createAccount, current, newSession, openMoney } from './helpers';
@@ -27,14 +28,14 @@ test('a stale money submission refreshes the newer draft from another page befor
   const player = await addPlayer(page, 'Shared draft player');
   const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('10');
+  await typeInput(page.getByLabel('Amount', { exact: true }), '10');
   await expect.poll(() => storedAmount(page, key)).toBe('10');
   const other = await context.newPage();
   try {
     await other.goto(`/?session=${session.session.id}`);
     await openMoney(other, player.id);
     await expect(other.getByLabel('Amount', { exact: true })).toHaveValue('10');
-    await other.getByLabel('Amount', { exact: true }).fill('25');
+    await typeInput(other.getByLabel('Amount', { exact: true }), '25');
     await expect.poll(() => storedAmount(other, key)).toBe('25');
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('25');
@@ -55,7 +56,7 @@ test('a failed edit recovered after another page saves reviews a fresh operation
   const player = await addPlayer(page, 'Recovered draft player');
   const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('10');
+  await typeInput(page.getByLabel('Amount', { exact: true }), '10');
   await expect.poll(() => storedAmount(page, key)).toBe('10');
   const originalOperation = await page.evaluate(async key => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -84,7 +85,7 @@ test('a failed edit recovered after another page saves reviews a fresh operation
       };
       window.addEventListener('recovered-operation-storage', () => { IDBObjectStore.prototype.put = original; }, { once: true });
     });
-    await page.getByLabel('Amount', { exact: true }).fill('50');
+    await typeInput(page.getByLabel('Amount', { exact: true }), '50');
     await expect(page.getByText(/not saved on this device/i).first()).toBeVisible();
     await other.getByRole('button', { name: 'Save entry', exact: true }).click();
     await expect(other.getByTestId('saved-confirmation')).toContainText('10.00');
@@ -117,7 +118,7 @@ test('a mismatched entry and a newer saved draft both remain reviewable and pres
   const player = await addPlayer(page, 'Two retained versions');
   const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('50');
+  await typeInput(page.getByLabel('Amount', { exact: true }), '50');
   await page.getByLabel('Paid now', { exact: true }).uncheck();
   await expect.poll(() => storedAmount(page, key)).toBe('50');
   const operation = await page.evaluate(async key => {
@@ -147,7 +148,7 @@ test('a mismatched entry and a newer saved draft both remain reviewable and pres
     await sent;
     await other.goto(`/?session=${session.session.id}`);
     await openMoney(other, player.id);
-    await other.getByLabel('Amount', { exact: true }).fill('25');
+    await typeInput(other.getByLabel('Amount', { exact: true }), '25');
     await expect.poll(() => storedAmount(other, key)).toBe('25');
     release();
     const recovery = page.getByTestId('recovered-draft');

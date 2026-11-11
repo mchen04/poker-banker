@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { addPlayer, createAccount, keepMoneyDraft, newSession, openMoney, password } from './helpers';
@@ -33,10 +34,10 @@ async function failDraftWrites(page: Page) {
 
 async function failedAmount(page: Page, key: string) {
   const amount = page.getByLabel('Amount', { exact: true });
-  await amount.fill('10');
+  await typeInput(amount, '10');
   await expect.poll(() => storedAmount(page, key)).toBe('10');
   await failDraftWrites(page);
-  await amount.fill('123');
+  await typeInput(amount, '123');
   await expect(amount).toHaveValue('123');
   await expect(page.getByRole('button', { name: 'Retry saving draft', exact: true })).toBeVisible();
   expect(await storedAmount(page, key)).toBe('10');
@@ -84,8 +85,8 @@ test('another tab signing out preserves the failed draft through auth reset and 
     await expect(other.getByLabel('Username', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
     expect(await storedAmount(page, key)).toBeUndefined();
-    await page.getByLabel('Username', { exact: true }).fill(account.username);
-    await page.getByLabel('Password', { exact: true }).fill(password);
+    await typeInput(page.getByLabel('Username', { exact: true }), account.username);
+    await typeInput(page.getByLabel('Password', { exact: true }), password);
     await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
     await expect(page.getByTestId(`player-${player.id}`)).toBeVisible();
     await openMoney(page, player.id);

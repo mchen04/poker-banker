@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { randomUUID } from 'node:crypto';
 import type { Page, TestInfo } from '@playwright/test';
 import type { SessionState } from '../src/domain/session';
@@ -16,8 +17,8 @@ export async function createAccount(page: Page, testInfo?: TestInfo) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Sign up', exact: true }).click();
   if (testInfo) await screen(page, testInfo, 'signup');
-  await page.getByLabel('Username', { exact: true }).fill(username);
-  await page.getByLabel('Password', { exact: true }).fill(password);
+  await typeInput(page.getByLabel('Username', { exact: true }), username);
+  await typeInput(page.getByLabel('Password', { exact: true }), password);
   await page.getByRole('button', { name: 'Create account', exact: true }).click();
   await expect(page.getByTestId('recovery-codes')).toBeVisible();
   const codes = (await page.getByTestId('recovery-codes').textContent())!.match(/[a-f0-9]{8}(?:-[a-f0-9]{8}){3}/g)!;
@@ -37,8 +38,8 @@ export async function createAccount(page: Page, testInfo?: TestInfo) {
 export async function signIn(page: Page, username: string, secret = password) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await page.getByLabel('Username', { exact: true }).fill(username);
-  await page.getByLabel('Password', { exact: true }).fill(secret);
+  await typeInput(page.getByLabel('Username', { exact: true }), username);
+  await typeInput(page.getByLabel('Password', { exact: true }), secret);
   await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
   await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
 }
@@ -55,8 +56,8 @@ export async function signOut(page: Page) {
 }
 export async function newSession(page: Page, name: string, testInfo?: TestInfo) {
   await page.getByRole('button', { name: 'New session', exact: true }).click();
-  await page.getByLabel('Session name', { exact: true }).fill(name);
-  await page.getByLabel('Session date', { exact: true }).fill('2026-11-10');
+  await typeInput(page.getByLabel('Session name', { exact: true }), name);
+  await typeInput(page.getByLabel('Session date', { exact: true }), '2026-11-10');
   if (testInfo) await screen(page, testInfo, 'new-session');
   await page.getByRole('button', { name: 'Create session', exact: true }).click();
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
@@ -70,9 +71,7 @@ export async function current(page: Page, id?: string) {
 export async function addPlayer(page: Page, name: string, testInfo?: TestInfo) {
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
   const search = page.getByLabel('Search players', { exact: true });
-  await search.click();
-  await search.fill('');
-  await search.pressSequentially(name);
+  await typeInput(search, name);
   if (testInfo) await screen(page, testInfo, 'add-player');
   await page.getByRole('button', { name: `Add '${name}' as new`, exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -89,7 +88,7 @@ export async function openMoney(page: Page, player: string, kind: 'Buy-in' | 'Ca
 export async function money(page: Page, player: string, amount: string, options: { kind?: 'Buy-in' | 'Cash out' | 'Record payment' | 'Tips and meals'; paid?: boolean; method?: 'cash' | 'venmo' | 'zelle'; testInfo?: TestInfo } = {}) {
   const kind = options.kind ?? 'Buy-in';
   await openMoney(page, player, kind);
-  await page.getByLabel('Amount', { exact: true }).fill(amount);
+  await typeInput(page.getByLabel('Amount', { exact: true }), amount);
   if (options.paid !== undefined && (kind === 'Buy-in' || kind === 'Cash out')) await page.getByLabel(kind === 'Buy-in' ? 'Paid now' : 'Paid out now', { exact: true }).setChecked(options.paid);
   if (options.method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: options.method[0]!.toUpperCase() + options.method.slice(1), exact: true }).click();
   if (options.testInfo) await screen(page, options.testInfo, kind === 'Buy-in' ? 'buy-in' : kind === 'Cash out' ? 'cash-out' : kind === 'Record payment' ? 'payment' : 'expense');

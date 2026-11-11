@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { test, expect, screen } from './fixtures';
 import { addPlayer, createAccount, current, newSession, openMoney, workerReady } from './helpers';
 import { buildRelease } from './global-setup';
@@ -27,7 +28,7 @@ test('waiting release update after hidden and visible preserves auth, drafts and
   await workerReady(page);
   await expect.poll(() => version(page)).toBe(releaseA);
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('37.');
+  await typeInput(page.getByLabel('Amount', { exact: true }), '37.');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }).click();
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });

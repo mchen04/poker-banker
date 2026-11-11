@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { test, expect } from './fixtures';
 import { addPlayer, call, createAccount, current, newSession, openMoney } from './helpers';
 
@@ -20,7 +21,7 @@ for (const failure of ['connection', 413] as const) {
       committed();
     });
     await openMoney(page, player.id);
-    await page.getByLabel('Amount', { exact: true }).fill('100');
+    await typeInput(page.getByLabel('Amount', { exact: true }), '100');
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     await firstCommit;
     await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeVisible();

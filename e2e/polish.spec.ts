@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { test, expect, screen } from './fixtures';
 import { addPlayer, createAccount, current, keepMoneyDraft, money, newSession, openMoney } from './helpers';
 
@@ -35,7 +36,7 @@ test('money cancellation, last buy-in, method selection and compact controls pre
   await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
   await openMoney(page, player.id);
   await expect(amount).toHaveValue('');
-  await amount.fill('17.');
+  await typeInput(amount, '17.');
   await keepMoneyDraft(page);
   await page.reload();
   await openMoney(page, player.id);

@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Page, Request } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
@@ -164,7 +165,7 @@ for (const recovery of ['same mounted sheet', 'workspace'] as const) {
       }
     });
     await page.getByRole('button', { name: 'Add player', exact: true }).click();
-    await page.getByLabel('Search players', { exact: true }).fill('Justin');
+    await typeInput(page.getByLabel('Search players', { exact: true }), 'Justin');
     await page.getByRole('button', { name: "Add 'Justin' as new", exact: true }).click();
     await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
     const submitted = (await records(page)).drafts.find(draft => draft.value.__submitted)!;
@@ -287,7 +288,7 @@ test('a cross-tab account transition invalidates a held same-owner draft rejecti
     if (attempt === 2) completed.resolve();
   });
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
-  await page.getByLabel('Search players', { exact: true }).fill('Justin');
+  await typeInput(page.getByLabel('Search players', { exact: true }), 'Justin');
   await page.getByRole('dialog').getByRole('button', { name: 'Justin', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
   const submitted = (await records(page)).drafts.find(draft => draft.value.__submitted)!;

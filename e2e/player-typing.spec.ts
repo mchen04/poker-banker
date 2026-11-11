@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { test, expect } from './fixtures';
 import { addPlayer, createAccount, current, keepMoneyDraft, newSession, openMoney } from './helpers';
 
@@ -38,14 +39,14 @@ test('a conflict after closing the form shows a non-storage notice that can be d
     } finally { database.close(); }
   }, key);
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('10');
+  await typeInput(page.getByLabel('Amount', { exact: true }), '10');
   await expect.poll(storedAmount).toBe('10');
   const other = await context.newPage();
   try {
     await other.goto(`/?session=${session.session.id}`);
     await openMoney(other, player.id);
     await expect(other.getByLabel('Amount', { exact: true })).toHaveValue('10');
-    await other.getByLabel('Amount', { exact: true }).fill('25');
+    await typeInput(other.getByLabel('Amount', { exact: true }), '25');
     await expect.poll(storedAmount).toBe('25');
     await other.evaluate(async key => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -74,7 +75,7 @@ test('a conflict after closing the form shows a non-storage notice that can be d
         cycle();
       });
     }, key);
-    await page.getByLabel('Amount', { exact: true }).fill('50');
+    await typeInput(page.getByLabel('Amount', { exact: true }), '50');
     await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('50');
     await keepMoneyDraft(page);
     await other.evaluate(async () => { await (window as unknown as { __releaseDraftLock?: () => Promise<void> }).__releaseDraftLock?.(); });
