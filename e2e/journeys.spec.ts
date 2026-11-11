@@ -1,7 +1,7 @@
 import { typeInput } from './input';
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newSession, openMoney, share, signIn, signOut, workerReady } from './helpers';
+import { addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newSession, openMoney, share, signIn, signOut, storedDraft, workerReady } from './helpers';
 
 test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
   const user = await createAccount(page, testInfo);
@@ -64,7 +64,7 @@ test('two bankers cannot open each other session or private history', async ({ p
 });
 
 test('same-day session tabs and month history restore separate drafts after reload', async ({ page }, testInfo) => {
-  await createAccount(page);
+  const account = await createAccount(page);
   const first = await newSession(page, 'Early game', testInfo);
   const justin = await addPlayer(page, 'Justin', testInfo);
   await openMoney(page, justin.id);
@@ -78,6 +78,7 @@ test('same-day session tabs and month history restore separate drafts after relo
   await page.getByRole('dialog').getByRole('button', { name: 'Justin', exact: true }).click();
   await openMoney(page, justin.id);
   await typeInput(page.getByTestId('money-amount'), '34.');
+  await expect.poll(async () => (await storedDraft<{ amount: string }>(page, `${account.banker.id}/${second.session.id}/buy_in/${justin.id}`))?.amount).toBe('34.');
   await page.reload();
   await openMoney(page, justin.id);
   await expect(page.getByTestId('money-amount')).toHaveValue('34.');

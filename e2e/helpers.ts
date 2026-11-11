@@ -12,6 +12,19 @@ export async function call<T>(page: Page, path: string, method = 'GET', body?: u
   expect(response.status(), JSON.stringify(value)).toBe(200);
   return value as T;
 }
+export async function storedDraft<T>(page: Page, key: string): Promise<T | undefined> {
+  return page.evaluate(async key => {
+    const opening = indexedDB.open('poker-banker');
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
+    try {
+      const record = await new Promise<{ value: T } | undefined>((resolve, reject) => {
+        const read = database.transaction('drafts').objectStore('drafts').get(key);
+        read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error);
+      });
+      return record?.value;
+    } finally { database.close(); }
+  }, key);
+}
 export async function createAccount(page: Page, testInfo?: TestInfo) {
   const username = `browser-${randomUUID().slice(0, 12)}`;
   await page.goto('/');
