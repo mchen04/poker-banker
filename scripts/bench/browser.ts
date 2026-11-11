@@ -16,15 +16,19 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   const wanted = (metric: string) => !options.metrics || options.metrics.has(metric);
   const hasWrites = wanted('entry.confirm') || [1,10,25].some(count => wanted(`viewer.delay.${count}`));
   const profiled = wanted('entry.confirm') || ['workspace.cold','workspace.warm','viewer.cold','viewer.warm'].some(wanted);
-  const server = await webkit.launchServer({ executablePath: engine.executable });
-  const browser = await webkit.connect(server.wsEndpoint());
+  const server = await webkit.launchServer({ executablePath: engine.executable, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+  let browser: Awaited<ReturnType<typeof webkit.connect>>;
+  try { browser = await webkit.connect(server.wsEndpoint()); } catch (error) { await server.close(); throw error; }
   const budget = new CpuBudget(engine.engine, server);
+  let closingBrowser: Promise<void> | undefined;
+  const closeBrowser = () => closingBrowser ??= (async () => { try { await budget.pause(); } finally { try { await browser.close(); } finally { await server.close(); } } })();
+  const releaseBrowser = await stack.own(closeBrowser);
   const errors: string[] = [];
   const teardownErrors: { url: string; message: string }[] = [];
   const closing = new WeakSet<Page>();
   const fixture = stack.fixture;
-  const initial = await stack.client.request(`/api/sessions/${fixture.sessionId}`);
-  expect(initial.status).toBe(200);
+  let initial: Awaited<ReturnType<typeof stack.client.request>>;
+  try { initial = await stack.client.request(`/api/sessions/${fixture.sessionId}`); expect(initial.status).toBe(200); } catch (error) { try { await closeBrowser(); } finally { releaseBrowser(); } throw error; }
   let state = initial.body as SessionState;
   expect(state.entries).toHaveLength(60);
   const context = async (banker: boolean) => {
@@ -170,7 +174,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   } finally {
     try { await budget.pause(); } finally {
       stack.proxy.enabled = false;
-      try { for (const owned of observers) await closeContext(owned); if (bankerContext) await closeContext(bankerContext); await browser.close(); } finally { await server.close(); }
+      try { for (const owned of observers) await closeContext(owned); if (bankerContext) await closeContext(bankerContext); } finally { try { await closeBrowser(); } finally { releaseBrowser(); } }
     }
   }
 }

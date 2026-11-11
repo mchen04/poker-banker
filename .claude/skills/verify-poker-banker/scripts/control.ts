@@ -11,6 +11,7 @@ import { webkit, devices, expect, type Browser, type BrowserContext, type Page }
 import type { SessionState } from '../../../../src/domain/session';
 import { createAccount, signIn, current } from '../../../../e2e/helpers';
 import { ledger } from './ledger';
+import { stopOwnedProcess } from '../../../../scripts/owned-process';
 
 export type RecipeContext = {
   page: Page; context: BrowserContext; browser: Browser; baseURL: string;
@@ -50,7 +51,7 @@ async function files(directory: string): Promise<string[]> {
   const values = await readdir(directory, { withFileTypes: true });
   return (await Promise.all(values.map(value => value.isDirectory() ? files(join(directory, value.name)) : [join(directory, value.name)]))).flat();
 }
-function owned(meta: Meta) {
+function owned(meta: Pick<Meta, 'pid' | 'runId'>) {
   const command = execFileSync('ps', ['-p', String(meta.pid), '-o', 'command='], { encoding: 'utf8' }).trim();
   if (!command.includes('control.ts') || !command.includes(`_daemon ${meta.runId}`)) throw new Error('PID no longer belongs to this verification run; refusing to signal it');
   return command;
@@ -75,27 +76,32 @@ async function daemon() {
   const pages = new Map<Mode, Page>();
   let busy = false;
   let cleanupTask: Promise<void> | undefined;
+  let startupTask: Promise<void> | undefined;
+  let stopping = false;
+  let browserClosing: Promise<void> | undefined;
+  const closeBrowser = () => browser ? browserClosing ??= browser.close() : Promise.resolve();
+  const starting = () => { if (stopping) throw new Error('Verification launch was stopped'); };
   const saveMeta = () => json(metadata, meta);
   function cleanup(): Promise<void> {
+    stopping = true;
     cleanupTask ??= (async () => {
-      const errors: string[] = [];
-      try { await browser?.close(); } catch (error) { errors.push(String(error)); }
-      try {
-        if (child?.pid && child.exitCode === null && child.signalCode === null) {
-          const exited = new Promise<void>(resolve => child!.once('exit', () => resolve()));
-          if (child.connected) child.send({ type: 'pb-shutdown' }); else child.kill('SIGTERM');
-          await exited;
-        }
-      } catch (error) { errors.push(String(error)); }
+      const errors = new Set<string>();
+      const settle = async (task: Promise<unknown>) => { try { await task; } catch (error) { errors.add(String(error)); } };
+      const earlyBrowser = settle(closeBrowser());
+      const earlyChild = child ? settle(stopOwnedProcess(child)) : Promise.resolve();
+      await startupTask?.catch(() => {});
+      await Promise.all([earlyBrowser, earlyChild]);
+      await settle(closeBrowser());
+      if (child) await settle(stopOwnedProcess(child));
       try {
         meta.state = 'stopped';
         const proofFiles = (await files(evidence)).filter(path => path.endsWith('.png') || path.endsWith('-result.json'));
-        await json(join(evidence, 'cleanup.json'), { runId, stopped: new Date().toISOString(), ownedDaemonPid: process.pid, ownedServerPid: child?.pid ?? null, evidenceFilesPreserved: proofFiles.length, errors });
+        await json(join(evidence, 'cleanup.json'), { runId, stopped: new Date().toISOString(), ownedDaemonPid: process.pid, ownedServerPid: child?.pid ?? null, evidenceFilesPreserved: proofFiles.length, errors: [...errors] });
         await manifest();
       } finally {
         server.close(); await rm(socket, { force: true }); await rm(metadata, { force: true });
       }
-      if (errors.length) throw new Error(`Owned cleanup errors: ${errors.join('; ')}`);
+      if (errors.size) throw new Error(`Owned cleanup errors: ${[...errors].join('; ')}`);
     })();
     return cleanupTask;
   }
@@ -180,36 +186,47 @@ async function daemon() {
     });
   });
   await new Promise<void>(resolve => server.listen(socket, resolve)); await chmod(socket, 0o600); await saveMeta();
-  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { void cleanup().finally(() => process.exit(0)); });
-  try {
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { void cleanup().then(() => process.exit(0)).catch(error => { console.error(error); process.exit(1); }); });
+  startupTask = (async () => {
+    starting();
     if (local) {
       const portServer = createServer(); await new Promise<void>(resolve => portServer.listen(0, '127.0.0.1', resolve));
       const address = portServer.address(); if (!address || typeof address === 'string') throw new Error('No owned local port');
       meta.port = address.port; await new Promise<void>(resolve => portServer.close(() => resolve()));
       meta.baseURL = `https://127.0.0.1:${meta.port}`;
+      starting();
       child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { ...process.env, PORT: String(meta.port) } });
       await new Promise<void>((resolve, reject) => {
         let output = ''; const timeout = setTimeout(() => reject(new Error('Owned local stack startup exceeded 30 seconds')), 30000);
         child!.stdout!.on('data', chunk => { process.stdout.write(chunk); output += String(chunk); if (output.includes('Poker banker ready at')) { clearTimeout(timeout); resolve(); } });
         child!.stderr!.on('data', chunk => process.stderr.write(chunk));
         child!.once('exit', code => { clearTimeout(timeout); reject(new Error(`Owned server exited ${code}`)); });
-        child!.once('error', reject);
+        child!.once('error', error => { clearTimeout(timeout); reject(error); });
       });
+      starting();
       meta.listenerPid = Number(execFileSync('lsof', ['-nP', `-iTCP:${meta.port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).trim());
     }
-    browser = await webkit.launch();
+    starting();
+    browser = await webkit.launch({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+    starting();
     const page = await contextPage('iphone-webkit');
+    starting();
     user = await createAccount(page);
+    starting();
     await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
     const shell = await page.request.get(meta.baseURL);
     meta.release = (await shell.text()).match(/name="pb-release" content="([^"]+)"/)?.[1];
     if (!meta.release) throw new Error('Build release stamp is missing');
     await page.screenshot({ path: join(evidence, 'launch-workspace.png') });
     await json(join(evidence, 'launch-result.json'), { ready: true, runId, baseURL: meta.baseURL, release: meta.release, account: user.username, local, setup: local ? ['Production build', 'Fresh embedded Postgres with migrations', 'Throwaway loopback HTTPS certificate', 'Headless Playwright WebKit', 'Synthetic signup with codes acknowledgement'] : ['Existing HTTPS deployment', 'Headless Playwright WebKit', 'Unique synthetic signup with codes acknowledgement'] });
+    starting();
     meta.state = 'ready'; await saveMeta(); await doctor();
-  } catch (error) {
-    console.error(error); await json(join(evidence, 'launch-failure-result.json'), { error: error instanceof Error ? error.message : String(error) });
-    await cleanup(); process.exit(1);
+  })();
+  try { await startupTask; } catch (error) {
+    if (!stopping) {
+      console.error(error); await json(join(evidence, 'launch-failure-result.json'), { error: error instanceof Error ? error.message : String(error) });
+      await cleanup(); process.exit(1);
+    }
   }
 }
 await mkdir(cache, { recursive: true }); await mkdir(evidence, { recursive: true });
@@ -231,14 +248,37 @@ else if (action === 'launch') {
   const log = openSync(join(evidence, 'server.log'), 'a');
   const child = spawn(process.execPath, ['--import', 'tsx', '.claude/skills/verify-poker-banker/scripts/control.ts', '_daemon', runId, local ? '--local' : '--live'], { detached: true, stdio: ['ignore', log, log] });
   closeSync(log); child.unref();
+  let interrupted: string | undefined;
+  let launchCleanup: Promise<void> | undefined;
+  const stopLaunch = () => launchCleanup ??= (async () => {
+    child.ref();
+    const exited = new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once('exit', () => resolve()); });
+    try { await request({ action: 'cleanup' }); }
+    catch {
+      if (child.exitCode === null && child.signalCode === null) { owned({ runId, pid: child.pid! }); child.kill('SIGTERM'); }
+    }
+    await exited;
+    await rm(socket, { force: true }); await rm(metadata, { force: true });
+    if (child.exitCode !== 0 && child.signalCode !== 'SIGTERM') throw new Error(`Owned verification daemon exited ${child.exitCode ?? child.signalCode}`);
+  })();
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  const handlers = signals.map(signal => { const handler = () => { if (interrupted) return; interrupted = signal; process.exitCode = signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 129; void stopLaunch().catch(() => {}); }; process.on(signal, handler); return { signal, handler }; });
   let ready: unknown;
-  for (let attempt = 0; attempt < 180; attempt++) {
-    await pause(500);
-    try { const result = await request({ action: 'doctor' }) as { state: string }; if (result.state === 'ready') { ready = result; break; } } catch {}
-    try { process.kill(child.pid!, 0); } catch { throw new Error(`Launch failed; evidence preserved at ${evidence}`); }
+  try {
+    for (let attempt = 0; attempt < 180 && !interrupted; attempt++) {
+      await pause(500);
+      if (interrupted) break;
+      try { const result = await request({ action: 'doctor' }) as { state: string }; if (result.state === 'ready') { ready = result; break; } } catch {}
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Launch failed; evidence preserved at ${evidence}`);
+    }
+    if (interrupted) { await stopLaunch(); console.error(`Verification launch interrupted by ${interrupted}; evidence preserved at ${evidence}`); }
+    else {
+      if (!ready) { await stopLaunch(); throw new Error(`Launch never reached workspace; evidence preserved at ${evidence}`); }
+      console.log(JSON.stringify({ runId, evidence, ready }, null, 2));
+    }
+  } finally {
+    try { if (!ready || interrupted) await stopLaunch(); } finally { for (const { signal, handler } of handlers) process.removeListener(signal, handler); }
   }
-  if (!ready) { try { await request({ action: 'cleanup' }); } catch { const meta = JSON.parse(await readFile(metadata, 'utf8')) as Meta; owned(meta); process.kill(meta.pid, 'SIGTERM'); } throw new Error(`Launch never reached workspace; evidence preserved at ${evidence}`); }
-  console.log(JSON.stringify({ runId, evidence, ready }, null, 2));
 } else {
   const meta = JSON.parse(await readFile(metadata, 'utf8')) as Meta;
   owned(meta);

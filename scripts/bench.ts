@@ -38,24 +38,42 @@ await writeFile(join(output, 'method.json'), JSON.stringify({ preflight, version
 const allSamples: Sample[] = [];
 const runSummaries: unknown[] = [];
 let engine: Awaited<ReturnType<typeof isolatedEngine>> | undefined;
+let stackTask: Promise<Awaited<ReturnType<typeof benchmarkStack>>> | undefined;
+let interrupted: NodeJS.Signals | undefined;
+let signalStop: Promise<void> = Promise.resolve();
+let signalCleanupError: unknown;
+const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+const stopForSignal = (signal: NodeJS.Signals) => {
+  if (interrupted) return;
+  interrupted = signal; process.exitCode = signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 129;
+  signalStop = (stackTask?.then(stack => stack.stop()) ?? Promise.resolve()).catch(error => { signalCleanupError = error; });
+};
+const checkInterrupted = () => { if (interrupted) throw new Error(`Benchmark interrupted by ${interrupted}`); };
+const handlers = signals.map(signal => { const handler = () => stopForSignal(signal); process.on(signal, handler); return { signal, handler }; });
 try {
-  if (wantsBrowser) { engine = await isolatedEngine(); await primeEngine(engine); }
+  if (wantsBrowser) { engine = await isolatedEngine(); checkInterrupted(); await primeEngine(engine); }
   for (let index = 0; index < runs; index++) {
+    checkInterrupted();
     if (index > 0) await pause(5000);
+    checkInterrupted();
     const host = await boundedHost(0);
+    checkInterrupted();
     const directory = join(output, `run-${String(index + 1).padStart(2, '0')}`); await mkdir(directory);
     console.log(`Benchmark run ${index + 1}/${runs}, ${index % 2 ? 'reverse' : 'forward'} order; production ${release}`);
     const samples: Sample[] = [];
-    const stack = await benchmarkStack(directory);
-    const ownBackend = Number((await stack.database.pool.query('SELECT pg_backend_pid() AS pid')).rows[0]!.pid);
-    const postmaster = Number(execFileSync('ps', ['-p', String(ownBackend), '-o', 'ppid='], { encoding: 'utf8' }).trim());
+    stackTask = benchmarkStack(directory);
+    const stack = await stackTask;
     let phase = 'prepare';
-    const monitorRun = hostMonitor(stack.serverPid, postmaster, engine?.engine ?? resolve('.cache/nonexistent-benchmark-engine'), () => phase);
+    let monitorRun: ReturnType<typeof hostMonitor> | undefined;
     let failure: string | undefined;
     try {
+      checkInterrupted();
+      const ownBackend = Number((await stack.database.pool.query('SELECT pg_backend_pid() AS pid')).rows[0]!.pid);
+      const postmaster = Number(execFileSync('ps', ['-p', String(ownBackend), '-o', 'ppid='], { encoding: 'utf8' }).trim());
+      monitorRun = hostMonitor(stack.serverPid, postmaster, engine?.engine ?? resolve('.cache/nonexistent-benchmark-engine'), () => phase);
       versions.postgres = String((await stack.database.pool.query('SELECT version() AS version')).rows[0]!.version);
       await writeFile(join(directory, 'seed.json'), JSON.stringify({ counts: stack.fixture.counts, versions, host, order: index % 2 ? 'reverse' : 'forward', startingOpenEntries: 60 }, null, 2));
-      const record = (sample: Sample) => { if (!Number.isFinite(sample.ms) || sample.ms < 0) throw new Error(`Invalid timing for ${sample.metric}`); const load = monitorRun.snapshot(Number(sample.work.renderedEpoch ?? sample.work.confirmedEpoch ?? Date.now())); samples.push({ ...sample, host: { ...hostPolicy(host.cores, load.otherCpu), serverCpu: load.serverCpu, browserCpu: load.browserCpu, controllerCpu: load.controllerCpu }, work: { ...sample.work, run: index + 1 }, recordedAt: new Date().toISOString() }); };
+      const record = (sample: Sample) => { if (!Number.isFinite(sample.ms) || sample.ms < 0) throw new Error(`Invalid timing for ${sample.metric}`); const load = monitorRun!.snapshot(Number(sample.work.renderedEpoch ?? sample.work.confirmedEpoch ?? Date.now())); samples.push({ ...sample, host: { ...hostPolicy(host.cores, load.otherCpu), serverCpu: load.serverCpu, browserCpu: load.browserCpu, controllerCpu: load.controllerCpu }, work: { ...sample.work, run: index + 1 }, recordedAt: new Date().toISOString() }); };
       phase = 'api.reads';
       await benchmarkReads(stack.client, stack.database.pool, stack.fixture, record, { samples: count, reverse: index % 2 === 1, metrics });
       console.log(`Run ${index + 1}: API reads complete; measuring WebKit user paths`);
@@ -67,15 +85,15 @@ try {
       assert(samples.every(sample => sample.ok), 'All reported samples must validate completed work');
     } catch (error) { failure = error instanceof Error ? error.stack : String(error); throw error; }
     finally {
-      const monitor = monitorRun.stop();
-      const noise = monitor.samples.filter(sample => sample.otherCpu >= host.cores * 50);
-      const measured = monitor.samples.filter(sample => !sample.phase.startsWith('prepare'));
-      const saturated = monitor.eventLoopDelayMs.p95 > 100 && measured.some(sample => sample.browserCpu >= host.cores * 85 || (sample.controllerCpu ?? 0) >= 90);
-      const noisyHost = preflight.noisyHost || host.noisyHost || noise.length > 0;
-      if (noisyHost) console.log(`Run ${index + 1}: noisy host; timings retained with host observations`);
       try {
+        const monitor = monitorRun?.stop();
+        const noise = monitor?.samples.filter(sample => sample.otherCpu >= host.cores * 50) ?? [];
+        const measured = monitor?.samples.filter(sample => !sample.phase.startsWith('prepare')) ?? [];
+        const saturated = !!monitor && monitor.eventLoopDelayMs.p95 > 100 && measured.some(sample => sample.browserCpu >= host.cores * 85 || (sample.controllerCpu ?? 0) >= 90);
+        const noisyHost = preflight.noisyHost || host.noisyHost || noise.length > 0;
+        if (noisyHost) console.log(`Run ${index + 1}: noisy host; timings retained with host observations`);
         await writeFile(join(directory, 'samples.json'), JSON.stringify(samples, null, 2));
-        await writeFile(join(directory, 'host.json'), JSON.stringify({ ...monitor, unrelatedHeavyObservations: noise.length, loadGeneratorSaturated: saturated }, null, 2));
+        await writeFile(join(directory, 'host.json'), JSON.stringify({ ...(monitor ?? { unavailable: 'Interrupted before host monitor started' }), unrelatedHeavyObservations: noise.length, loadGeneratorSaturated: saturated }, null, 2));
         const summary = { run: index + 1, order: index % 2 ? 'reverse' : 'forward', metrics: summarize(samples), noisyHost, loadGeneratorSaturated: saturated, host, error: failure ?? null, proxy: stack.proxy.counts };
         await writeFile(join(directory, 'summary.json'), JSON.stringify(summary, null, 2));
         allSamples.push(...samples); runSummaries.push(summary);
@@ -91,4 +109,10 @@ try {
   console.log('Metric | samples | errors | median ms | p95 ms | range ms | completed work');
   for (const row of summary.metrics) console.log(`${row.metric} | ${row.samples} | ${row.errors} | ${row.median?.toFixed(2) ?? 'unavailable'} | ${row.p95?.toFixed(2) ?? 'unavailable'} | ${row.min?.toFixed(2) ?? 'n/a'}..${row.max?.toFixed(2) ?? 'n/a'} | ${workSummary(row.metric, allSamples)}`);
   console.log(`Evidence ${output}`);
-} finally { await engine?.cleanup(); }
+} catch (error) { if (!interrupted) throw error; console.error(`Benchmark interrupted by ${interrupted}`); }
+finally {
+  try { await signalStop; } finally {
+    try { await engine?.cleanup(); } finally { for (const { signal, handler } of handlers) process.removeListener(signal, handler); }
+  }
+  if (signalCleanupError) throw signalCleanupError;
+}
