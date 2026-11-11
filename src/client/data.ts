@@ -39,7 +39,7 @@ export type OutboxItem = {
   draft_value?: unknown;
 };
 export type DraftRequest = { path: string; method: string; body: Record<string, unknown> };
-export type DraftCursor = { version?: string | null };
+export type DraftCursor = { version?: string | null; submitted?: DraftRequest };
 export type DraftConflict = { draft_conflict: true; key: string; value: unknown; version: string | null; message: string };
 export class DraftConflictError extends Error {
   readonly draft_conflict = true;
@@ -432,7 +432,7 @@ export function draftConflictNotices(banker?: string): DraftConflictError[] {
 export function dismissDraftConflict(problem: DraftConflictError): void {
   if (forgetDraftConflict(problem)) changed();
 }
-export async function readDraft<T>(key: string, cursor?: DraftCursor): Promise<T | undefined> {
+export async function readDraft<T>(key: string, cursor?: DraftCursor, options?: { includeNext?: boolean }): Promise<T | undefined> {
   await draftWrites.get(key)?.catch(() => {});
   try {
     const db = await storage();
@@ -464,7 +464,11 @@ export async function readDraft<T>(key: string, cursor?: DraftCursor): Promise<T
     }
     const observation = cursorFor(key, cursor);
     if (stored?.__operation_conflict && !draftConflictNotice(key)) operationNotice(key, stored, draftVersion(record), observation);
-    if ((record?.value as DraftValue | undefined)?.__submitted) { observedDraftIntents.delete(observation); observation.version = draftVersion(record); return record!.value as T; }
+    if ((record?.value as DraftValue | undefined)?.__submitted) {
+      observedDraftIntents.delete(observation); observation.version = draftVersion(record);
+      if (options?.includeNext && record!.next_value !== undefined) { observation.submitted = stored!.__submitted; return record!.next_value as T; }
+      return record!.value as T;
+    }
     if (intent) observedDraftIntents.set(observation, { key, intent });
     else observedDraftIntents.delete(observation);
     observation.version = intent ? intent.expectedVersion : draftVersion(record);

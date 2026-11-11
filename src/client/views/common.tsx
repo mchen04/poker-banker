@@ -81,6 +81,8 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
   const initialValue = useRef(initial);
   const previousKey = useRef(key);
   const submitted = useRef<DraftRequest | undefined>(undefined);
+  const retainedEdit = useRef(false);
+  const retainedEditMessage = 'This form was submitted in another tab. Your later edit is kept. Check the saved result before submitting it.';
   const inFlight = useRef<symbol | undefined>(undefined);
   const scope = useRef({ active: true, version: 0 });
   if (previousKey.current !== key) {
@@ -91,7 +93,13 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
   const owner = scope.current;
   const current = () => scope.current === owner && owner.active && (!client || (client.banker?.id === key.split('/')[0] && client.isCurrent?.() !== false));
   const capture = () => { const version = owner.version; return () => current() && owner.version === version; };
-  function adopt(next: Value) { latestValue.current = next; submitted.current = next.__submitted; setValue(next); }
+  function adopt(next: Value) { latestValue.current = next; submitted.current = next.__submitted; retainedEdit.current = false; setValue(next); }
+  function adoptObserved(next: Value, observation: DraftCursor) {
+    const waiting = retainedEdit.current;
+    adopt(next);
+    if (observation.submitted) { submitted.current = observation.submitted; retainedEdit.current = true; setError(retainedEditMessage); }
+    else if (waiting) setError(previous => previous === retainedEditMessage ? '' : previous);
+  }
   function requireReview() { if (options.requireConflictReview) { reviewBlocked.current = true; setReviewRequired(true); } }
   function acknowledgeReview() {
     if (!current() || !reviewBlocked.current) return;
@@ -135,10 +143,10 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
       const isCurrent = capture();
       const previous = latestValue.current;
       const observation: DraftCursor = {};
-      void readDraft<Value>(key, observation).then(saved => {
+      void readDraft<Value>(key, observation, { includeNext: retainedEdit.current }).then(saved => {
         if (!isCurrent() || latestValue.current !== previous || inFlight.current || draftSaveFailed(key)) return;
         cursor.current = observation;
-        if (saved) adopt(saved);
+        if (saved) adoptObserved(saved, observation);
         else freshValue(isCurrent);
       }).catch(problem => { if (isCurrent()) storageFailure(problem); });
     };
@@ -147,12 +155,12 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
       const isCurrent = capture();
       const previous = latestValue.current;
       const observation: DraftCursor = {};
-      void readDraft<Value>(key, observation).then(saved => {
+      void readDraft<Value>(key, observation, { includeNext: retainedEdit.current }).then(saved => {
         if (!isCurrent() || latestValue.current !== previous || inFlight.current || draftSaveFailed(key)) return;
         const edited = saved === undefined ? observation.version !== cursor.current.version : JSON.stringify(saved) !== JSON.stringify(previous);
         if (edited) requireReview();
         cursor.current = observation;
-        if (saved) adopt(saved);
+        if (saved) adoptObserved(saved, observation);
         else if (edited) freshValue(isCurrent);
         if (edited) setError('This draft was edited in another tab. Review the latest draft and submit again.');
         else setError(previous => previous === 'Not saved on this device' ? '' : previous);
@@ -162,18 +170,20 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
     return () => { window.removeEventListener('pb-data', refresh); window.removeEventListener('pb-storage-saved', refreshSaved); };
   }, [key]);
   function update(next: T) {
-    if (!ready || cursor.current.version === undefined || !current() || submitted.current || inFlight.current || reviewBlocked.current) return;
+    if (!ready || cursor.current.version === undefined || !current() || (submitted.current && !retainedEdit.current) || inFlight.current || reviewBlocked.current) return;
     const isCurrent = capture();
+    const earlier = retainedEdit.current ? submitted.current : undefined;
     adopt(next);
+    if (earlier) { submitted.current = earlier; retainedEdit.current = true; }
     void writeDraft(key, next, cursor.current).then(async () => {
       if (!isCurrent() || latestValue.current !== next) return;
       const observation: DraftCursor = {};
-      const saved = await readDraft<Value>(key, observation);
+      const saved = await readDraft<Value>(key, observation, { includeNext: true });
       if (!isCurrent() || latestValue.current !== next || draftSaveFailed(key)) return;
-      if (JSON.stringify(saved) !== JSON.stringify(next)) requireReview();
+      if (!observation.submitted && JSON.stringify(saved) !== JSON.stringify(next)) requireReview();
       cursor.current = observation;
-      setError(JSON.stringify(saved) === JSON.stringify(next) ? '' : 'This draft was edited in another tab. Review the latest draft and submit again.');
-      if (saved) adopt(saved);
+      setError(observation.submitted ? retainedEditMessage : JSON.stringify(saved) === JSON.stringify(next) ? '' : 'This draft was edited in another tab. Review the latest draft and submit again.');
+      if (saved) adoptObserved(saved, observation);
     }).catch(problem => { if (isCurrent() && latestValue.current === next) { if (problem instanceof DraftConflictError) refreshConflict(problem); else { setError('Not saved on this device'); storageFailure(problem); } } });
   }
   function freshValue(isCurrent: () => boolean) {
@@ -183,6 +193,7 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
     adopt(fresh);
   }
   async function clear() {
+    if (retainedEdit.current) throw new Error(retainedEditMessage);
     if (!ready || cursor.current.version === undefined) throw new Error('Restoring draft. Wait before changing this form.');
     const isCurrent = capture();
     if (!isCurrent()) return;
@@ -203,6 +214,7 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
     freshValue(isCurrent);
   }
   async function queue(input: Parameters<typeof enqueue>[0]) {
+    if (retainedEdit.current) throw new Error(retainedEditMessage);
     if (!ready || cursor.current.version === undefined) throw new Error('Restoring draft. Wait before changing this form.');
     const isCurrent = capture();
     if (!isCurrent()) throw new Error('Account changed or this form is no longer open. Check your saved work.');
@@ -265,6 +277,7 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
     finally { if (inFlight.current === flight) inFlight.current = undefined; }
   }
   async function submit<R>(path: string, body: Record<string, unknown>, method = 'POST') {
+    if (retainedEdit.current) throw new Error(retainedEditMessage);
     const request = submitted.current ?? { path, body: structuredClone(body), method };
     return perform<R>(request, !submitted.current);
   }
@@ -276,6 +289,7 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
     if (!ready || cursor.current.version === undefined) throw new Error('Restoring draft. Wait before changing this form.');
     const isCurrent = capture();
     if (!isCurrent()) throw new Error('Account changed or this form is no longer open. Check your saved work.');
+    if (retainedEdit.current) throw new Error(retainedEditMessage);
     if (inFlight.current) throw new Error('Wait for this draft to finish saving');
     if (reviewBlocked.current && !allowReviewRequired) throw new Error('Review the saved draft before changing or resubmitting it.');
     const flight = Symbol();
