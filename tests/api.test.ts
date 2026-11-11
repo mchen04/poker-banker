@@ -54,6 +54,7 @@ async function entry(account: Account, session: SessionState, kind = 'buy_in', a
   return ok<SessionState>(await request(`/sessions/${session.session.id}/entries`, 'POST', {
     op_id: randomUUID(), player_id: session.players[0]!.id, kind, amount_minor: amount,
     ...(paid_now === undefined ? {} : { paid_now }),
+    ...((kind === 'buy_in' && paid_now !== false) || (kind === 'cash_out' && paid_now === true) || kind === 'payment_in' || kind === 'payment_out' ? { method: 'cash' } : {}),
   }, account));
 }
 async function close(account: Account, session: SessionState, accept?: string) {
@@ -222,7 +223,7 @@ describe('HTTP boundaries and banking journeys', () => {
   it('validates amounts, operation IDs, kinds, membership and queries', async () => {
     const account = await signup();
     const session = await seat(account, await game(account));
-    const base = { op_id: randomUUID(), player_id: session.players[0]!.id, kind: 'buy_in', amount_minor: '100' };
+    const base = { op_id: randomUUID(), player_id: session.players[0]!.id, kind: 'buy_in', amount_minor: '100', method: 'cash' };
     for (const amount_minor of ['0', '-1', '1.005', '100x', '9223372036854775808', 1.5, 100]) await error(await request(`/sessions/${session.session.id}/entries`, 'POST', { ...base, amount_minor }, account), 400);
     await error(await request(`/sessions/${session.session.id}/entries`, 'POST', { ...base, kind: 'bogus' }, account), 400);
     await error(await request(`/sessions/${session.session.id}/entries`, 'POST', { ...base, op_id: 'bad' }, account), 400);
@@ -255,7 +256,7 @@ describe('account boundaries and private viewers', () => {
       [`/sessions/${session.session.id}`, 'PATCH', { op_id: randomUUID(), name: 'Steal' }],
       [`/players/${player}`, 'GET', undefined],
       [`/players/${player}`, 'PATCH', { op_id: randomUUID(), display_name: 'Steal' }],
-      [`/sessions/${session.session.id}/entries`, 'POST', { op_id: randomUUID(), player_id: player, kind: 'buy_in', amount_minor: '10' }],
+      [`/sessions/${session.session.id}/entries`, 'POST', { op_id: randomUUID(), player_id: player, kind: 'buy_in', amount_minor: '10', method: 'cash' }],
       [`/sessions/${session.session.id}/entries/${session.entries[0]!.id}/void`, 'POST', { op_id: randomUUID() }],
       [`/sessions/${session.session.id}/share`, 'POST', { op_id: randomUUID(), action: 'enable' }],
       [`/sessions/${session.session.id}/players`, 'POST', { op_id: randomUUID(), new_player_name: 'Intruder' }],
@@ -284,7 +285,7 @@ describe('account boundaries and private viewers', () => {
     expect(text).not.toContain('banker_id');
     expect((await request(`/view/${token}?since=${viewer.revision}`)).status).toBe(304);
     for (const method of ['POST', 'PATCH', 'DELETE']) expect((await request(`/view/${token}`, method, { op_id: randomUUID() })).status).toBe(401);
-    await error(await request(`/sessions/${session.session.id}/entries`, 'POST', { op_id: randomUUID(), player_id: session.players[0]!.id, kind: 'buy_in', amount_minor: '10' }, { cookie: `pb_session=${token}`, ip: 'viewer' }), 401);
+    await error(await request(`/sessions/${session.session.id}/entries`, 'POST', { op_id: randomUUID(), player_id: session.players[0]!.id, kind: 'buy_in', amount_minor: '10', method: 'cash' }, { cookie: `pb_session=${token}`, ip: 'viewer' }), 401);
     session = await ok<SessionState>(await request(`/sessions/${session.session.id}/share`, 'POST', { op_id: randomUUID(), action: 'rotate' }, account));
     await error(await request(`/view/${token}`), 404);
     await ok(await request(`/view/${session.session.share_token}`));
@@ -351,11 +352,11 @@ describe('idempotency and concurrent transactions', () => {
     await locker.query('BEGIN');
     await locker.query('SELECT id FROM game_sessions WHERE id = $1 FOR UPDATE', [session.session.id]);
     const buy = entry(account, session, 'buy_in', '100', false);
-    const buyWaiter = await database.pool.query("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'SELECT id,%'");
+    const buyWaiter = await database.pool.query("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM game_sessions s%FOR UPDATE%'");
     let waiting = Number(buyWaiter.rows[0].count);
     for (let i = 0; i < 100 && waiting === 0; i++) {
       await new Promise(resolve => setTimeout(resolve, 5));
-      waiting = Number((await database.pool.query("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'SELECT id,%'")).rows[0].count);
+      waiting = Number((await database.pool.query("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM game_sessions s%FOR UPDATE%'")).rows[0].count);
     }
     expect(waiting).toBeGreaterThan(0);
     const closing = request(`/sessions/${session.session.id}/close`, 'POST', { op_id: randomUUID(), expected_revision: session.revision }, account);
@@ -378,7 +379,7 @@ describe('lifecycle and cumulative results', () => {
     session = await close(account, session, '2000');
     expect(session.session).toMatchObject({ status: 'closed', closed_balanced: false });
     expect((await history(account, player)).cumulative).toEqual([{ currency: 'USD', result_minor: '2000' }]);
-    await error(await request(`/sessions/${session.session.id}/entries`, 'POST', { op_id: randomUUID(), player_id: player, kind: 'payment_out', amount_minor: '100' }, account), 409, 'session_closed');
+    await error(await request(`/sessions/${session.session.id}/entries`, 'POST', { op_id: randomUUID(), player_id: player, kind: 'payment_out', amount_minor: '100', method: 'cash' }, account), 409, 'session_closed');
     await error(await request(`/sessions/${session.session.id}/entries/${session.entries[0]!.id}/void`, 'POST', { op_id: randomUUID() }, account), 409, 'session_closed');
     await error(await request(`/sessions/${session.session.id}/players`, 'POST', { op_id: randomUUID(), new_player_name: 'Late' }, account), 409, 'session_closed');
     await error(await request(`/sessions/${session.session.id}/reopen`, 'POST', { op_id: randomUUID(), reason: ' ' }, account), 400);

@@ -4,11 +4,12 @@ import { deriveSession, type LedgerEntry, type SessionSettings } from '../src/do
 
 const settings: SessionSettings = {
   id: 'session', name: 'Friday', played_on: '2026-11-10', currency: 'USD', status: 'open',
+  location: null, game: null, big_blind_minor: null, started_at: null, ended_at: null,
   closed_balanced: null, closed_at: null, share_token: null, created_at: '', updated_at: '',
 };
 const entry = (kind: LedgerEntry['kind'], amount: string, revision: number, extra: Partial<LedgerEntry> = {}): LedgerEntry => ({
   id: String(revision), player_id: 'p', kind, amount_minor: amount, note: null, voids_entry_id: null,
-  created_at: '', revision: String(revision), ...extra,
+  method: null, occurred_at: `2026-11-10T00:00:0${revision}.000Z`, created_at: '', revision: String(revision), ...extra,
 });
 const state = (entries: LedgerEntry[]) => deriveSession(settings, '9', [{ id: 'p', display_name: 'Justin' }], entries);
 

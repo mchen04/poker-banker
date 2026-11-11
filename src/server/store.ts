@@ -2,16 +2,25 @@ import { randomUUID, createHash } from 'node:crypto';
 import type { Database, Transaction } from './db';
 import { transaction } from './db';
 import { conflict, notFound } from './errors';
-import { deriveSession, type LedgerEntry, type SessionEvent, type SessionSettings } from '../domain/session';
+import { effectiveEntries } from '../domain/timing';
+import { deriveSession, type LedgerEntry, type PaymentMethod, type SessionEvent, type SessionSettings } from '../domain/session';
 
 type SessionRow = SessionSettings & { banker_id: string; revision: string };
 type Queryable = Pick<Transaction, 'query'>;
 
+const isoTime = (column: string) => `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+const sessionColumns = `s.id, s.banker_id, s.name, to_char(s.played_on, 'YYYY-MM-DD') AS played_on, s.currency, s.status,
+  s.location, s.game, s.big_blind_minor::text, ${isoTime('s.started_at')} AS started_at, ${isoTime('s.ended_at')} AS ended_at,
+  s.closed_balanced, s.closed_at::text, s.share_token, s.revision::text, s.created_at::text, s.updated_at::text`;
+
+export async function serverTime(db: Queryable): Promise<string> {
+  const result = await db.query<{ server_now: string }>(`SELECT ${isoTime('clock_timestamp()')} AS server_now`);
+  return result.rows[0]!.server_now;
+}
+
 export async function sessionRow(db: Queryable, banker: string, session: string, lock = false): Promise<SessionRow> {
   const result = await db.query<SessionRow>(
-    `SELECT id, banker_id, name, to_char(played_on, 'YYYY-MM-DD') AS played_on, currency, status,
-      closed_balanced, closed_at::text, share_token, revision::text, created_at::text, updated_at::text
-     FROM game_sessions WHERE id = $1 AND banker_id = $2${lock ? ' FOR UPDATE' : ''}`, [session, banker]);
+    `SELECT ${sessionColumns} FROM game_sessions s WHERE s.id = $1 AND s.banker_id = $2${lock ? ' FOR UPDATE' : ''}`, [session, banker]);
   return result.rows[0] ?? notFound();
 }
 
@@ -21,13 +30,13 @@ export async function loadSession(db: Queryable, banker: string, session: string
     `SELECT p.id, p.display_name FROM session_players sp JOIN players p ON p.id = sp.player_id AND p.banker_id = sp.banker_id
      WHERE sp.session_id = $1 AND sp.banker_id = $2 ORDER BY sp.added_at, p.id`, [session, banker]);
   const entries = await db.query<LedgerEntry>(
-    `SELECT id, player_id, kind, amount_minor::text, note, voids_entry_id, created_at::text, revision::text
+    `SELECT id, player_id, kind, amount_minor::text, note, method, ${isoTime('occurred_at')} AS occurred_at, voids_entry_id, created_at::text, revision::text
      FROM ledger_entries WHERE session_id = $1 AND banker_id = $2 ORDER BY ledger_entries.revision, created_at, id`, [session, banker]);
   const events = await db.query<SessionEvent>(
     `SELECT id, kind, detail, created_at::text, revision::text FROM session_events
      WHERE session_id = $1 AND banker_id = $2 ORDER BY session_events.revision DESC, id`, [session, banker]);
   const { banker_id: _, revision, ...settings } = row;
-  return deriveSession(settings, revision, players.rows, entries.rows, events.rows);
+  return deriveSession(settings, revision, players.rows, entries.rows, events.rows, await serverTime(db));
 }
 
 export async function readSnapshot<T>(pool: Database, action: (db: Transaction) => Promise<T>): Promise<T> {
@@ -52,10 +61,11 @@ export function assertOpen(row: SessionRow) {
 
 export async function insertEntry(db: Transaction, banker: string, session: string, revision: string, entry: {
   player_id: string; kind: LedgerEntry['kind']; amount_minor: string; note?: string | null; voids_entry_id?: string;
+  method?: PaymentMethod | null; occurred_at: string;
 }) {
-  await db.query(`INSERT INTO ledger_entries(id,banker_id,session_id,player_id,kind,amount_minor,note,voids_entry_id,revision)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-  [randomUUID(), banker, session, entry.player_id, entry.kind, entry.amount_minor, entry.note ?? null, entry.voids_entry_id ?? null, revision]);
+  await db.query(`INSERT INTO ledger_entries(id,banker_id,session_id,player_id,kind,amount_minor,note,voids_entry_id,revision,method,occurred_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+  [randomUUID(), banker, session, entry.player_id, entry.kind, entry.amount_minor, entry.note ?? null, entry.voids_entry_id ?? null, revision, entry.method ?? null, entry.occurred_at]);
 }
 
 function canonical(value: unknown): string {
@@ -85,27 +95,42 @@ export async function playerRecord(db: Queryable, banker: string, player: string
   return result.rows[0] ?? notFound();
 }
 
+export async function playerSessions(db: Queryable, banker: string, player: { id: string; display_name: string }) {
+  const rows = await db.query<SessionRow & { entries: LedgerEntry[] }>(`SELECT ${sessionColumns},
+    coalesce(jsonb_agg(jsonb_build_object(
+      'id', e.id, 'player_id', e.player_id, 'kind', e.kind, 'amount_minor', e.amount_minor::text,
+      'note', e.note, 'method', e.method, 'occurred_at', ${isoTime('e.occurred_at')},
+      'voids_entry_id', e.voids_entry_id, 'created_at', e.created_at::text, 'revision', e.revision::text
+    )) FILTER (WHERE e.id IS NOT NULL), '[]'::jsonb) AS entries
+    FROM session_players sp JOIN game_sessions s ON s.id = sp.session_id AND s.banker_id = sp.banker_id
+    LEFT JOIN ledger_entries e ON e.session_id = sp.session_id AND e.player_id = sp.player_id AND e.banker_id = sp.banker_id
+    WHERE sp.banker_id = $1 AND sp.player_id = $2 GROUP BY s.id ORDER BY s.played_on DESC,s.id DESC`, [banker, player.id]);
+  const now = await serverTime(db);
+  return rows.rows.map(row => {
+    const { banker_id: _, entries, revision, ...session } = row;
+    const state = deriveSession(session, revision, [player], entries, [], now);
+    return { session, revision, player: state.players[0]!, has_entries: effectiveEntries(entries).length > 0 };
+  });
+}
+
 export async function playerHistory(db: Queryable, banker: string, player: string) {
   const record = await playerRecord(db, banker, player);
-  const sessions = await db.query<{ session_id: string }>('SELECT sp.session_id FROM session_players sp JOIN game_sessions s ON s.id = sp.session_id AND s.banker_id = sp.banker_id WHERE sp.banker_id = $1 AND sp.player_id = $2 ORDER BY s.played_on DESC, s.id DESC', [banker, player]);
+  const history = await playerSessions(db, banker, record);
   const cumulative = new Map<string, bigint>();
   const outstanding = new Map<string, { owed_to_banker: bigint; owed_by_banker: bigint }>();
-  const history = [];
-  for (const item of sessions.rows) {
-    const state = await loadSession(db, banker, item.session_id);
-    const result = state.players.find(item => item.id === player)!;
-    if (state.session.status === 'closed' && result.state === 'cashed_out') cumulative.set(state.session.currency, (cumulative.get(state.session.currency) ?? 0n) + BigInt(result.result_minor));
-    const amounts = outstanding.get(state.session.currency) ?? { owed_to_banker: 0n, owed_by_banker: 0n };
+  for (const item of history) {
+    const result = item.player;
+    if (item.session.status === 'closed' && result.state === 'cashed_out') cumulative.set(item.session.currency, (cumulative.get(item.session.currency) ?? 0n) + BigInt(result.result_minor));
+    const amounts = outstanding.get(item.session.currency) ?? { owed_to_banker: 0n, owed_by_banker: 0n };
     const balance = BigInt(result.balance_minor);
     if (balance > 0n) amounts.owed_to_banker += balance;
     if (balance < 0n) amounts.owed_by_banker -= balance;
-    outstanding.set(state.session.currency, amounts);
-    history.push({ session: state.session, revision: state.revision, player: result });
+    outstanding.set(item.session.currency, amounts);
   }
   return {
     player: record,
     cumulative: [...cumulative].sort(([a], [b]) => a.localeCompare(b)).map(([currency, result]) => ({ currency, result_minor: String(result) })),
     outstanding: [...outstanding].sort(([a], [b]) => a.localeCompare(b)).map(([currency, values]) => ({ currency, owed_to_banker_minor: String(values.owed_to_banker), owed_by_banker_minor: String(values.owed_by_banker) })),
-    sessions: history,
+    sessions: history.map(({ has_entries: _, ...item }) => item),
   };
 }
