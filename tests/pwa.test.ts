@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const template = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
 type Handler = (event: Record<string, unknown>) => void;
@@ -117,6 +117,55 @@ it('aborts a stalled navigation and serves the precached shell', async () => {
   });
   await instance.lifecycle('install');
   expect(await (await instance.request('/', 'GET', true))!.text()).toBe('offline shell');
+});
+
+it('keeps the navigation deadline active while the HTML body stalls after headers', async () => {
+  vi.useFakeTimers();
+  let aborted = false;
+  let body: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const instance = worker(async (_request, options) => {
+    if (!options?.signal) return new Response('cached shell');
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      body = controller;
+      controller.enqueue(new TextEncoder().encode('<!doctype html><html>'));
+      options.signal!.addEventListener('abort', () => { aborted = true; controller.error(new Error('aborted')); });
+    } }), { headers: { 'content-type': 'text/html' } });
+  });
+  try {
+    await instance.lifecycle('install');
+    let result: string | undefined;
+    const pending = instance.request('/', 'GET', true).then(response => response!.text()).then(text => { result = text; });
+    await vi.advanceTimersByTimeAsync(11);
+    expect(result).toBe('cached shell');
+    expect(aborted).toBe(true);
+    expect(await instance.stores.get('poker-banker-test-release')!.get('https://poker.test/index.html')!.clone().text()).toBe('cached shell');
+    await pending;
+  } finally {
+    if (!aborted) body?.close();
+    vi.useRealTimers();
+  }
+});
+
+it.each([200, 404, 204, 304])('preserves a complete navigation response with status %s without caching it', async status => {
+  const bytes = new TextEncoder().encode('<!doctype html><title>Fresh bank €</title>');
+  const empty = status === 204 || status === 304;
+  const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-navigation': 'unchanged' };
+  let signal: AbortSignal | undefined;
+  const instance = worker(async (_request, options) => {
+    if (!options?.signal) return new Response('cached shell');
+    signal = options.signal;
+    return new Response(empty ? null : bytes, { status, statusText: 'Navigation outcome', headers });
+  });
+  await instance.lifecycle('install');
+  const response = (await instance.request('/players', 'GET', true))!;
+  expect(response.status).toBe(status);
+  expect(response.statusText).toBe('Navigation outcome');
+  expect(Object.fromEntries(response.headers)).toEqual(headers);
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(empty ? new Uint8Array() : bytes);
+  expect(signal?.aborted).toBe(false);
+  const cache = instance.stores.get('poker-banker-test-release')!;
+  expect([...cache.keys()].sort()).toEqual(['https://poker.test/assets/main-test.js', 'https://poker.test/index.html']);
+  expect(await cache.get('https://poker.test/index.html')!.clone().text()).toBe('cached shell');
 });
 
 it('waits for the page activation message, cleans old app caches and reports its version', async () => {
