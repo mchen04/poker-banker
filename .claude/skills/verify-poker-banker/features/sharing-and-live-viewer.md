@@ -33,6 +33,8 @@ import { addPlayer, menu, money, newSession, share } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, browser, baseURL, runId, evidence, step }: RecipeContext) {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   const shared = await newSession(page, 'Verify shared game');
   const player = await addPlayer(page, `Share ${runId.slice(-8)}`);
   await money(page, player.id, '40', { method: 'venmo' });

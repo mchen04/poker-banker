@@ -34,6 +34,8 @@ import type { SessionState } from '../src/domain/session';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, context, browser, baseURL, runId, step, checkState }: RecipeContext) {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   await newSession(page, 'Verify manual timer');
   await expect(page.getByTestId('session-timer')).toHaveText('Timer not started');
   await step('timer-manual-start-before');
@@ -66,6 +68,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     expect((await checkState()).session.started_at).toBe(started);
     await page.getByLabel('Ended at', { exact: true }).fill('');
     await page.getByRole('button', { name: 'Save timing', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await menu(page, 'Correct times');
     await expect(page.getByText('Timing corrected', { exact: true })).toBeVisible();
     await step('timer-correction-history');
