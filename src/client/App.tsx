@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { SessionState } from '../domain/session';
-import { api, clearBankerData, discardItem, outboxUncertain, flushDraftWrites, hasUnsent, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, retryItem, storeSnapshot, syncOutbox, type Banker, type OutboxItem, type SubmittedDraft } from './data';
+import { api, clearBankerData, discardItem, outboxUncertain, flushDraftWrites, hasUnsent, invalidateBankerWork, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, retryItem, storeSnapshot, syncOutbox, type Banker, type OutboxItem, type SubmittedDraft } from './data';
 import { usePwaUpdate } from './pwa';
 import { Auth } from './views/Auth';
 import { AddPlayerSheet, CorrectionSheet, MoneySheet, PlayerSheet, SessionView } from './views/Session';
@@ -46,14 +46,15 @@ export function App() {
     function connection() { setOnline(navigator.onLine); }
     function storageError(event: Event) { setError((event as CustomEvent<string>).detail || 'Local storage is unavailable. Keep this page open until your entry is saved.'); }
     window.addEventListener('online', connection); window.addEventListener('offline', connection); window.addEventListener('pb-storage-error', storageError);
-    return () => { window.removeEventListener('online', connection); window.removeEventListener('offline', connection); window.removeEventListener('pb-storage-error', storageError); };
+    return () => { epoch.current++; window.removeEventListener('online', connection); window.removeEventListener('offline', connection); window.removeEventListener('pb-storage-error', storageError); };
   }, []);
   const resetAuth = useCallback((options: { clearIdentity?: boolean } = {}) => {
     const previousBanker = activeBanker.current?.id;
     epoch.current++;
+    if (previousBanker) invalidateBankerWork(previousBanker);
     stopSync.current?.(); stopSync.current = null;
     activeBanker.current = null; current.current = null; chosen.current = null; initialSession.current = null;
-    setBanker(null); setState(null); setSessionId(null); setSessions([]); setPending([]); setSubmittedForms([]);
+    setBanker(null); setState(null); setSessionId(null); setSessions([]); setPending([]); setSubmittedForms([]); setCheckingForm(false);
     setSheet(null); setChildDialog(false); setFormBusy(false); setNotice(''); setError(''); setScreen('workspace'); setLastUpdated(null);
     if (options.clearIdentity !== false) {
       let stored: Banker | null = null;
@@ -204,10 +205,11 @@ export function App() {
     if (checkingForm || !banker) return;
     const generation = epoch.current;
     const account = banker.id;
+    const isCurrent = () => epoch.current === generation && activeBanker.current?.id === account;
     setCheckingForm(true); setError('');
     try {
-      const result = await replaySubmittedDraft<unknown>(form.key);
-      if (epoch.current !== generation || activeBanker.current?.id !== account) return;
+      const result = await replaySubmittedDraft<unknown>(form.key, isCurrent);
+      if (!isCurrent()) return;
       if (result && typeof result === 'object' && 'session' in result) {
         const saved = result as SessionState;
         update(saved);
@@ -215,11 +217,11 @@ export function App() {
       }
       setFormsRevision(value => value + 1);
       setNotice('Saved form confirmed');
-    } catch (problem) { if (epoch.current === generation) setError(problem instanceof Error ? problem.message : 'Could not check the saved form'); }
-    finally { setCheckingForm(false); }
+    } catch (problem) { if (isCurrent()) setError(problem instanceof Error ? problem.message : 'Could not check the saved form'); }
+    finally { if (isCurrent()) setCheckingForm(false); }
   }
   async function signOut() {
-    setLoggingOut(true); epoch.current++; stopSync.current?.();
+    setLoggingOut(true); epoch.current++; if (banker) invalidateBankerWork(banker.id); stopSync.current?.();
     try {
       await flushDraftWrites();
       await api('/api/auth/logout', 'POST', {});
@@ -229,7 +231,7 @@ export function App() {
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not sign out. Reconnect and try again.'); }
     finally { setLoggingOut(false); }
   }
-  const sameAccount = () => !loggingOut && epoch.current === renderEpoch && (viewerToken || activeBanker.current?.id === banker?.id);
+  const sameAccount = () => !loggingOut && epoch.current === renderEpoch && (!!viewerToken || activeBanker.current?.id === banker?.id);
   const boundUpdate = (next: SessionState) => { if (sameAccount()) update(next); };
   const boundOpen = (next: SheetState) => { if (sameAccount()) open(next); };
   const boundNotify = (text: string) => { if (sameAccount()) notify(text); };
@@ -255,7 +257,7 @@ export function App() {
   const updateBanner = pwa.waiting ? <div className="update-banner" role="status"><span>Update ready</span><button data-testid="update-reload" disabled={pending.length > 0 || formBusy || loggingOut} onClick={() => { void pwa.activate().catch(problem => setError(problem.message)); }}>Reload</button></div> : null;
   const recentClosed = new Set(sessions.filter(session => session.status === 'closed').slice(0, 5).map(session => session.id));
   const tabSessions = sessions.filter(session => session.status === 'open' || session.id === sessionId || recentClosed.has(session.id));
-  const provider = { banker: viewerToken ? null : banker, state, online, pending, open: boundOpen, update: boundUpdate, notify: boundNotify, mutate: boundMutate, updateBanner, formBusy: formBusy || loggingOut, setFormBusy };
+  const provider = { banker: viewerToken ? null : banker, state, online, pending, open: boundOpen, update: boundUpdate, notify: boundNotify, mutate: boundMutate, updateBanner, formBusy: formBusy || loggingOut, setFormBusy, isCurrent: sameAccount };
   if (checking) return <main className="auth"><div className="brand-mark">PB</div><p>Opening your bank…</p></main>;
   if (!banker && !viewerToken) return <>{updateBanner}<Auth signedIn={signedIn} /></>;
   return <ClientContext.Provider value={provider}><div className="app-shell">{!viewerToken && <header className="app-bar"><a className="wordmark" href="/" onClick={event => { event.preventDefault(); setScreen('workspace'); }}>Poker banker</a><nav aria-label="Workspace navigation"><button aria-pressed={screen === 'workspace'} onClick={() => setScreen('workspace')}>Workspace</button><button aria-pressed={screen === 'players'} onClick={() => { setScreen('players'); setSheet(null); }}>Players</button></nav></header>}
