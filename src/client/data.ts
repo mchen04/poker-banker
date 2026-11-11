@@ -41,7 +41,6 @@ export type DraftCursor = { version?: string | null };
 export type DraftConflict = { draft_conflict: true; key: string; value: unknown; version: string | null; message: string };
 export class DraftConflictError extends Error {
   readonly draft_conflict = true;
-  intentRevision?: number;
   constructor(public key: string, public value: unknown, public version: string | null) {
     super('This draft was edited in another tab. Review the latest draft and submit again.');
     this.name = 'DraftConflictError';
@@ -56,6 +55,10 @@ let database: Promise<IDBDatabase> | undefined;
 const draftWrites = new Map<string, Promise<void>>();
 const enqueueWrites = new Set<Promise<OutboxItem | DraftConflict>>();
 type DraftIntent = { value: unknown; revision: number; cursor: DraftCursor; expectedVersion?: string | null; error?: unknown };
+type DraftConflictNotice = { key: string; value: unknown; error: DraftConflictError; cursor: DraftCursor };
+const draftConflicts = new WeakMap<DraftCursor, DraftConflictNotice>();
+const draftConflictNotifications = new Map<string, DraftConflictNotice>();
+const observedDraftIntents = new WeakMap<DraftCursor, { key: string; intent: DraftIntent }>();
 const unknownDraftVersion = 'unknown';
 const draftCursors = new Map<string, DraftCursor>();
 const queuedDraftIntents = new Set<DraftIntent>();
@@ -260,6 +263,19 @@ function cursorFor(key: string, cursor?: DraftCursor): DraftCursor {
   if (!existing) { existing = {}; draftCursors.set(key, existing); }
   return existing;
 }
+function observedDraftIntent(key: string, cursor: DraftCursor): DraftIntent | undefined {
+  const intent = draftIntents.get(key);
+  const observed = observedDraftIntents.get(cursor);
+  return intent && (intent.cursor === cursor || (observed?.key === key && observed.intent === intent)) ? intent : undefined;
+}
+function rejectDraftIntent(key: string, cursor: DraftCursor, intent: DraftIntent | undefined, problem: unknown): void {
+  if (!(problem instanceof DraftConflictError) || !intent || draftIntents.get(key) !== intent) return;
+  draftIntents.delete(key);
+  const notice = { key, value: intent.value, error: problem, cursor };
+  draftConflicts.set(cursor, notice);
+  draftConflictNotifications.set(key, notice);
+  changed();
+}
 function assertDraftVersion(key: string, record: DraftRecord | undefined, expected: string | null | undefined): void {
   const actual = draftVersion(record);
   if (expected === undefined ? record !== undefined : expected !== actual) throw new DraftConflictError(key, record?.value, actual);
@@ -280,9 +296,26 @@ function advanceDraftCursor(cursor: DraftCursor, previous: string | null | undef
 }
 export function acceptDraftConflict(key: string, cursor: DraftCursor, conflict: Pick<DraftConflict, 'value' | 'version'>): void {
   cursor.version = conflict.version;
-  const intent = draftIntents.get(key);
-  if (conflict instanceof DraftConflictError && intent?.cursor === cursor && intent.error === conflict && intent.revision === conflict.intentRevision && !(conflict.value as DraftValue | undefined)?.__submitted) draftIntents.delete(key);
+  const notice = draftConflicts.get(cursor);
+  if (notice?.key === key && notice.error === conflict) draftConflicts.delete(cursor);
+  if (conflict instanceof DraftConflictError) forgetDraftConflict(conflict);
   changed();
+}
+function forgetDraftConflict(problem: DraftConflictError): boolean {
+  const notice = draftConflictNotifications.get(problem.key);
+  if (notice?.error !== problem) return false;
+  draftConflictNotifications.delete(problem.key);
+  if (draftConflicts.get(notice.cursor) === notice) draftConflicts.delete(notice.cursor);
+  return true;
+}
+export function draftConflictNotice(key: string): DraftConflictError | undefined {
+  return draftConflictNotifications.get(key)?.error;
+}
+export function draftConflictNotices(banker?: string): DraftConflictError[] {
+  return [...draftConflictNotifications.values()].filter(notice => !banker || notice.key.split('/')[0] === banker).map(notice => notice.error);
+}
+export function dismissDraftConflict(problem: DraftConflictError): void {
+  if (forgetDraftConflict(problem)) changed();
 }
 export async function readDraft<T>(key: string, cursor?: DraftCursor): Promise<T | undefined> {
   await draftWrites.get(key)?.catch(() => {});
@@ -295,12 +328,20 @@ export async function readDraft<T>(key: string, cursor?: DraftCursor): Promise<T
       intent.expectedVersion = null;
       if (intent.cursor.version === previous) intent.cursor.version = null;
     }
-    if ((record?.value as DraftValue | undefined)?.__submitted) { cursorFor(key, cursor).version = draftVersion(record); return record!.value as T; }
-    cursorFor(key, cursor).version = intent ? intent.expectedVersion : draftVersion(record);
+    const observation = cursorFor(key, cursor);
+    if ((record?.value as DraftValue | undefined)?.__submitted) { observedDraftIntents.delete(observation); observation.version = draftVersion(record); return record!.value as T; }
+    if (intent) observedDraftIntents.set(observation, { key, intent });
+    else observedDraftIntents.delete(observation);
+    observation.version = intent ? intent.expectedVersion : draftVersion(record);
     return (intent ? intent.value : record?.value) as T | undefined;
   } catch (problem) {
     const intent = draftIntents.get(key);
-    if (intent) { cursorFor(key, cursor).version = intent.expectedVersion; return intent.value as T; }
+    if (intent) {
+      const observation = cursorFor(key, cursor);
+      observedDraftIntents.set(observation, { key, intent });
+      observation.version = intent.expectedVersion;
+      return intent.value as T;
+    }
     throw problem;
   }
 }
@@ -313,6 +354,8 @@ function draftWrite(key: string, action: () => Promise<void>): Promise<void> {
 }
 export function writeDraft(key: string, value: unknown, observation?: DraftCursor): Promise<void> {
   const cursor = cursorFor(key, observation);
+  draftConflicts.delete(cursor);
+  observedDraftIntents.delete(cursor);
   const intent: DraftIntent = { value: structuredClone(value), revision: ++draftRevision, cursor, expectedVersion: cursor.version, error: draftIntents.get(key)?.error };
   draftIntents.set(key, intent);
   return saveDraftIntent(key, intent);
@@ -336,7 +379,6 @@ function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
         intent.expectedVersion = observed;
       }
       try { assertDraftVersion(key, existing, intent.expectedVersion); } catch (problem) { await done; throw problem; }
-      if ((existing?.value as DraftValue | undefined)?.__submitted && intent.error !== undefined) { await done; throw new Error('Not saved on this device. Check the submitted form before saving this draft.'); }
       let next: DraftRecord;
       if ((existing?.value as DraftValue | undefined)?.__submitted) next = { ...existing!, next_value: intent.value, updated_at: Date.now() };
       else {
@@ -356,10 +398,13 @@ function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
         advanceDraftCursor(intent.cursor, undefined, unknownDraftVersion, intent.revision);
         intent.expectedVersion = unknownDraftVersion;
       }
-      if (problem instanceof DraftConflictError) problem.intentRevision = intent.revision;
-      intent.error = problem;
       const latest = draftIntents.get(key);
-      if (latest) latest.error ??= problem;
+      if (problem instanceof DraftConflictError) {
+        rejectDraftIntent(key, intent.cursor, intent, problem);
+      } else {
+        intent.error = problem;
+        if (latest) latest.error ??= problem;
+      }
       changed();
       throw problem;
     }
@@ -372,17 +417,15 @@ export function draftSaveFailed(key?: string): boolean {
   return key ? draftIntents.get(key)?.error !== undefined : [...draftIntents.values()].some(intent => intent.error !== undefined);
 }
 export function draftConflict(key: string, cursor: DraftCursor, value?: unknown): DraftConflictError | undefined {
-  const intent = draftIntents.get(key);
-  const problem = intent?.error;
-  return intent?.cursor === cursor && problem instanceof DraftConflictError && problem.intentRevision === intent.revision
-    && (value === undefined || JSON.stringify(intent.value) === JSON.stringify(value)) ? problem : undefined;
+  const notice = draftConflicts.get(cursor);
+  return notice?.key === key && (value === undefined || JSON.stringify(notice.value) === JSON.stringify(value)) ? notice.error : undefined;
 }
 export function deleteDraft(key: string, isCurrent = () => true, observation?: DraftCursor): Promise<void> {
   const cursor = cursorFor(key, observation);
   const reservation = reserveDraft(cursor, draftIntents.get(key)?.value);
   const banker = key.split('/')[0]!;
   const epoch = generation(banker);
-  const intent = draftIntents.get(key);
+  const intent = observedDraftIntent(key, cursor);
   const pending = draftWrite(key, async () => {
     const expected = reservation.version;
     const db = await storage();
@@ -392,7 +435,7 @@ export function deleteDraft(key: string, isCurrent = () => true, observation?: D
     const store = transaction.objectStore('drafts');
     const existing = await req(store.get(key)) as DraftRecord | undefined;
     if (generation(banker) !== epoch || !isCurrent()) { await done; return; }
-    try { assertDraftVersion(key, existing, expected); } catch (problem) { await done; throw problem; }
+    try { assertDraftVersion(key, existing, expected); } catch (problem) { await done; if (isCurrent()) rejectDraftIntent(key, cursor, intent, problem); throw problem; }
     if ((existing?.value as DraftValue | undefined)?.__submitted) { await done; throw new Error('Check the saved result before discarding this submitted form'); }
     store.delete(key); await done;
     advanceDraftCursor(cursor, expected, null);
@@ -454,7 +497,7 @@ export async function prepareDraftSubmission<T extends object>(key: string, valu
   return { request: selected, first: !previous && !priorRequest, value: next, previouslyConfirmed: false };
   } finally { draftReservations.delete(reservation); }
 }
-async function claimDraftReplay(key: string, replayId: string, isCurrent: () => boolean, cursor: DraftCursor): Promise<{ value: DraftValue; version: string | null } | undefined> {
+async function claimDraftReplay(key: string, replayId: string, isCurrent: () => boolean, cursor: DraftCursor, intent: DraftIntent | undefined): Promise<{ value: DraftValue; version: string | null } | undefined> {
   const expected = cursor.version;
   await draftWrites.get(key);
   const db = await storage();
@@ -464,15 +507,16 @@ async function claimDraftReplay(key: string, replayId: string, isCurrent: () => 
   const store = transaction.objectStore('drafts');
   const existing = await req(store.get(key)) as DraftRecord | undefined;
   const value = existing?.value as DraftValue | undefined;
-  if (!isCurrent() || existing?.banker_id !== key.split('/')[0] || !value?.__submitted) { await done; return; }
-  try { assertDraftVersion(key, existing, expected); } catch (problem) { await done; throw problem; }
+  if (!isCurrent() || (existing && existing.banker_id !== key.split('/')[0])) { await done; return; }
+  try { assertDraftVersion(key, existing, expected); } catch (problem) { await done; if (isCurrent()) rejectDraftIntent(key, cursor, intent, problem); throw problem; }
+  if (!value?.__submitted) { await done; return; }
   store.put({ ...existing, replay_id: replayId });
   await done;
   const version = draftVersion(existing);
   advanceDraftCursor(cursor, expected, version);
   return { value, version };
 }
-async function finishDraftSubmission(key: string, request: DraftRequest, replayId: string, isCurrent: () => boolean, cursor: DraftCursor, expected: string | null, replacement?: object, acknowledge = false) {
+async function finishDraftSubmission(key: string, request: DraftRequest, replayId: string, isCurrent: () => boolean, cursor: DraftCursor, expected: string | null, capturedIntent: DraftIntent | undefined, replacement?: object, acknowledge = false) {
   const db = await storage();
   if (!isCurrent()) throw new Error('Account changed. Sign in to check this form.');
   const transaction = db.transaction('drafts', 'readwrite');
@@ -482,7 +526,7 @@ async function finishDraftSubmission(key: string, request: DraftRequest, replayI
   const previous = (existing?.value as DraftValue | undefined)?.__submitted;
   const matched = isCurrent() && existing?.banker_id === key.split('/')[0] && existing?.replay_id === replayId && !!previous && JSON.stringify(previous) === JSON.stringify(request);
   if (matched) {
-    try { assertDraftVersion(key, existing, expected); } catch (problem) { await done; throw problem; }
+    try { assertDraftVersion(key, existing, expected); } catch (problem) { await done; if (isCurrent()) rejectDraftIntent(key, cursor, capturedIntent, problem); throw problem; }
   }
   const editable = existing?.next_value !== undefined ? { ...(existing.next_value as DraftValue), op_id: crypto.randomUUID() } : replacement;
   let nextRecord: DraftRecord | undefined;
@@ -512,6 +556,7 @@ export async function listSubmittedDrafts(banker: string): Promise<SubmittedDraf
 }
 export async function replaySubmittedDraft<T>(key: string, isCurrent = () => true, observation?: DraftCursor): Promise<T> {
   const cursor = cursorFor(key, observation);
+  const capturedIntent = observedDraftIntent(key, cursor);
   const banker = key.split('/')[0]!;
   const epoch = generation(banker);
   const replay = Symbol();
@@ -522,7 +567,7 @@ export async function replaySubmittedDraft<T>(key: string, isCurrent = () => tru
   try {
     ensureCurrent();
     if (!observation) { await readDraft(key, cursor); ensureCurrent(); }
-    const claimed = await claimDraftReplay(key, replayId, current, cursor);
+    const claimed = await claimDraftReplay(key, replayId, current, cursor, capturedIntent);
     ensureCurrent();
     const value = claimed?.value;
     const request = value?.__submitted;
@@ -537,12 +582,12 @@ export async function replaySubmittedDraft<T>(key: string, isCurrent = () => tru
       if (isProvenNotApplied(problem)) {
         const editable = { ...value, op_id: crypto.randomUUID() };
         delete editable.__submitted;
-        if (!await finishDraftSubmission(key, request, replayId, current, cursor, claimed!.version, editable)) throw new Error('This submitted form was cleared or checked in another tab. Check your signed-in account.');
+        if (!await finishDraftSubmission(key, request, replayId, current, cursor, claimed!.version, capturedIntent, editable)) throw new Error('This submitted form was cleared or checked in another tab. Check your signed-in account.');
       }
       throw problem;
     }
     ensureCurrent();
-    if (!await finishDraftSubmission(key, request, replayId, current, cursor, claimed!.version, undefined, true)) throw new Error('This submitted form was cleared or checked in another tab. Check your signed-in account.');
+    if (!await finishDraftSubmission(key, request, replayId, current, cursor, claimed!.version, capturedIntent, undefined, true)) throw new Error('This submitted form was cleared or checked in another tab. Check your signed-in account.');
     ensureCurrent();
     return result;
   } finally { if (draftReplays.get(key) === replay) draftReplays.delete(key); }

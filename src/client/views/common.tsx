@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Banker, BankerClient, OutboxItem } from '../data';
-import { acceptDraftConflict, deleteDraft, DraftConflictError, draftConflict, draftSaveFailed, enqueue, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftCursor, type DraftRequest } from '../data';
+import { deleteDraft, dismissDraftConflict, DraftConflictError, draftConflict, draftConflictNotice, draftConflictNotices, draftSaveFailed, enqueue, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftCursor, type DraftRequest } from '../data';
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
@@ -75,6 +75,7 @@ export function useDraft<T extends object>(key: string, initial: T) {
   const cursor = useRef<DraftCursor>({});
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
+  const [shownNotice, setShownNotice] = useState<DraftConflictError | null>(null);
   const initialValue = useRef(initial);
   const previousKey = useRef(key);
   const submitted = useRef<DraftRequest | undefined>(undefined);
@@ -91,8 +92,8 @@ export function useDraft<T extends object>(key: string, initial: T) {
   function adopt(next: Value) { latestValue.current = next; submitted.current = next.__submitted; setValue(next); }
   function refreshConflict(problem: { value: unknown; version: string | null; message: string }) {
     const next = problem.value as Value | undefined;
-    if (!next?.__submitted) acceptDraftConflict(key, cursor.current, problem);
-    else cursor.current.version = problem.version;
+    cursor.current.version = problem.version;
+    setShownNotice(problem instanceof DraftConflictError ? problem : draftConflictNotice(key) ?? null);
     if (next) adopt(next);
     else freshValue(current);
     setError(problem.message);
@@ -100,11 +101,22 @@ export function useDraft<T extends object>(key: string, initial: T) {
   useEffect(() => {
     owner.active = true;
     const isCurrent = capture();
-    setReady(false); setError('');
+    setReady(false); setError(''); setShownNotice(null);
     const observation: DraftCursor = {};
-    void readDraft<Value>(key, observation).then(saved => { if (isCurrent()) { cursor.current = observation; adopt(saved ?? initialValue.current); setReady(true); } }).catch(problem => { if (isCurrent()) { const message = problem instanceof Error ? problem.message : 'Could not restore the draft'; setError(message); storageFailure(problem); } });
+    void readDraft<Value>(key, observation).then(saved => {
+      if (!isCurrent()) return;
+      cursor.current = observation; adopt(saved ?? initialValue.current);
+      const notice = draftConflictNotice(key);
+      if (notice) { setShownNotice(notice); setError(notice.message); }
+      setReady(true);
+    }).catch(problem => { if (isCurrent()) { const message = problem instanceof Error ? problem.message : 'Could not restore the draft'; setError(message); storageFailure(problem); } });
     return () => { owner.active = false; owner.version++; };
   }, [key]);
+  useLayoutEffect(() => {
+    if (!shownNotice || shownNotice.key !== key || !ready || !current() || error !== shownNotice.message) return;
+    dismissDraftConflict(shownNotice);
+    setShownNotice(previous => previous === shownNotice ? null : previous);
+  }, [key, ready, error, shownNotice]);
   useEffect(() => {
     const refresh = () => {
       if (!current()) return;
@@ -150,7 +162,7 @@ export function useDraft<T extends object>(key: string, initial: T) {
       const saved = await readDraft<Value>(key, observation);
       if (!isCurrent() || latestValue.current !== next || draftSaveFailed(key)) return;
       cursor.current = observation;
-      setError('');
+      setError(JSON.stringify(saved) === JSON.stringify(next) ? '' : 'This draft was edited in another tab. Review the latest draft and submit again.');
       if (saved) adopt(saved);
     }).catch(problem => { if (isCurrent() && latestValue.current === next) { if (problem instanceof DraftConflictError) refreshConflict(problem); else { setError('Not saved on this device'); storageFailure(problem); } } });
   }
@@ -164,8 +176,21 @@ export function useDraft<T extends object>(key: string, initial: T) {
     if (!ready || cursor.current.version === undefined) throw new Error('Restoring draft. Wait before changing this form.');
     const isCurrent = capture();
     if (!isCurrent()) return;
-    try { await deleteDraft(key, isCurrent, cursor.current); freshValue(isCurrent); }
-    catch (problem) { if (isCurrent()) { if (problem instanceof DraftConflictError) refreshConflict(problem); else storageFailure(problem); } throw problem; }
+    const previous = latestValue.current;
+    const message = 'This draft changed while discarding. Review your latest edit before discarding again.';
+    try { await deleteDraft(key, isCurrent, cursor.current); }
+    catch (problem) {
+      if (isCurrent()) {
+        if (problem instanceof DraftConflictError) {
+          if (latestValue.current !== previous) setError(message);
+          else refreshConflict(problem);
+        } else storageFailure(problem);
+      }
+      throw problem;
+    }
+    if (!isCurrent()) return;
+    if (latestValue.current !== previous) { setError(message); throw new Error(message); }
+    freshValue(isCurrent);
   }
   async function queue(input: Parameters<typeof enqueue>[0]) {
     if (!ready || cursor.current.version === undefined) throw new Error('Restoring draft. Wait before changing this form.');
@@ -196,7 +221,11 @@ export function useDraft<T extends object>(key: string, initial: T) {
       if (first) {
         const prepared = await prepareDraftSubmission(key, value, request, isCurrent, cursor.current);
         ensureCurrent();
-        if (prepared.previouslyConfirmed) { if (prepared.value) adopt(prepared.value); else freshValue(isCurrent); throw new Error('This draft was edited in another tab. Review the latest draft and submit again.'); }
+        if (prepared.previouslyConfirmed) {
+          const message = 'This draft was edited in another tab. Review the latest draft and submit again.';
+          refreshConflict({ value: prepared.value, version: cursor.current.version ?? null, message });
+          throw new Error(message);
+        }
         adopt(prepared.value);
       }
       let result: R;
@@ -247,10 +276,18 @@ export function useFormBusy(busy: boolean) {
 }
 export function storageFailure(problem: unknown) { window.dispatchEvent(new CustomEvent('pb-storage-error', { detail: problem instanceof Error ? problem.message : 'Local storage is unavailable' })); }
 export function DraftSaveStatus() {
+  const account = useContext(ClientContext);
+  const bankerId = account?.banker?.id;
   const [failed, setFailed] = useState(draftSaveFailed);
+  const [notices, setNotices] = useState<DraftConflictError[]>([]);
   const [busy, setBusy] = useState(false);
-  useEffect(() => { const refresh = () => setFailed(draftSaveFailed()); window.addEventListener('pb-data', refresh); refresh(); return () => window.removeEventListener('pb-data', refresh); }, []);
-  return failed ? <div className="warning" role="alert"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div> : null;
+  useEffect(() => {
+    const refresh = () => { setFailed(draftSaveFailed()); setNotices(bankerId ? draftConflictNotices(bankerId) : []); };
+    window.addEventListener('pb-data', refresh); refresh();
+    return () => window.removeEventListener('pb-data', refresh);
+  }, [bankerId]);
+  const visible = notices.filter(notice => bankerId && notice.key.startsWith(`${bankerId}/`));
+  return <>{visible.length > 0 && <div className="warning" role="alert" data-testid="draft-conflict-notice"><p>Another tab changed a draft. A conflicting edit was not kept. Reopen the form to review the saved version.</p><button type="button" onClick={() => { if (account?.isCurrent?.() === false) return; for (const notice of visible) dismissDraftConflict(notice); }}>Dismiss draft change notice</button></div>}{failed && <div className="warning" role="alert"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
 }
 export function ErrorText({ text }: { text: string }) { return text ? <p role="alert" className="error">{text}</p> : null; }
 export function Sheet({ title, children, close, leadingClose = false, closeLabel = 'Done', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
