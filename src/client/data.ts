@@ -13,7 +13,8 @@ export type OutboxItem = {
   body: Record<string, unknown>;
   label: string;
   order: number;
-  status: 'pending' | 'sending' | 'rejected';
+  status: 'pending' | 'sending' | 'uncertain' | 'rejected';
+  delivery?: 'not_sent' | 'uncertain' | 'not_applied';
   error?: string;
   attempts: number;
   next_attempt_at: number;
@@ -221,7 +222,7 @@ async function enqueueRecord(input: EnqueueInput): Promise<OutboxItem> {
   const item: OutboxItem = {
     op_id: op, banker_id: input.banker_id, session_id: input.session_id, path: input.path, method: input.method ?? 'POST',
     body: input.body, label: input.label, order: records.reduce((maximum, item) => Math.max(maximum, item.order), 0) + 1,
-    attempts: 0, next_attempt_at: 0, status: 'pending',
+    attempts: 0, next_attempt_at: 0, status: 'pending', delivery: 'not_sent',
   };
   store.add(item);
   if (input.draft_key) transaction.objectStore('drafts').delete(input.draft_key);
@@ -239,10 +240,13 @@ async function updateItem(op: string, update: (item: OutboxItem) => OutboxItem):
   await done;
   changed();
 }
-export async function retryItem(op: string): Promise<void> {
-  await updateItem(op, item => ({ ...item, status: 'pending', error: undefined, next_attempt_at: 0, lease_until: 0 }));
+export function outboxUncertain(item: OutboxItem): boolean {
+  return item.delivery === 'uncertain' || (item.delivery === undefined && (item.attempts > 0 || item.status === 'sending' || item.status === 'uncertain'));
 }
-export async function discardItem(op: string): Promise<void> {
+export async function retryItem(op: string): Promise<void> {
+  await updateItem(op, item => ({ ...item, status: outboxUncertain(item) ? 'uncertain' : 'pending', error: undefined, next_attempt_at: 0, lease_until: 0 }));
+}
+export async function discardItem(op: string, acceptMayExist = false): Promise<void> {
   const db = await storage();
   const transaction = db.transaction('outbox', 'readwrite');
   const done = complete(transaction);
@@ -251,6 +255,10 @@ export async function discardItem(op: string): Promise<void> {
   if (item?.status === 'sending' && (item.lease_until ?? 0) > Date.now()) {
     await done;
     throw new Error('Wait for this entry to finish saving before discarding');
+  }
+  if (item && outboxUncertain(item) && !acceptMayExist) {
+    await done;
+    throw new Error('This entry may already exist on the server. Check its saved result before discarding, or explicitly accept that it may exist.');
   }
   store.delete(op);
   await done;
@@ -276,7 +284,7 @@ export async function clearBankerData(banker: string): Promise<void> {
   await done;
   changed();
 }
-async function claim(banker: string): Promise<OutboxItem | undefined> {
+async function claim(banker: string): Promise<(OutboxItem & { previously_uncertain: boolean }) | undefined> {
   const db = await storage();
   const transaction = db.transaction('outbox', 'readwrite');
   const done = complete(transaction);
@@ -286,13 +294,16 @@ async function claim(banker: string): Promise<OutboxItem | undefined> {
   for (const item of items) if (!heads.has(item.session_id)) heads.set(item.session_id, item);
   const now = Date.now();
   const item = [...heads.values()].find(item => item.status !== 'rejected' && item.next_attempt_at <= now && (item.lease_until ?? 0) <= now);
+  const previously_uncertain = item ? outboxUncertain(item) : false;
   if (item) {
     item.status = 'sending';
+    item.delivery = 'uncertain';
+    item.attempts++;
     item.lease_until = now + 30000;
     store.put(item);
   }
   await done;
-  return item;
+  return item ? { ...item, previously_uncertain } : undefined;
 }
 async function acknowledge(banker: string, item: OutboxItem, state: SessionState) {
   const db = await storage();
@@ -331,8 +342,9 @@ export function syncOutbox(banker: string, onSaved: (state: SessionState, item: 
           state = await api<SessionState>(item.path, item.method, item.body);
         } catch (error) {
           const rejected = error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 429;
+          const notApplied = rejected && !item.previously_uncertain && ![401, 403].includes((error as ApiError).status) && (error as ApiError).code !== 'idempotency_mismatch';
           await updateItem(item.op_id, current => ({
-            ...current, status: rejected ? 'rejected' : 'pending', attempts: current.attempts + 1,
+            ...current, status: rejected ? 'rejected' : 'uncertain', delivery: notApplied ? 'not_applied' : 'uncertain',
             next_attempt_at: Date.now() + Math.min(30000, 1000 * 2 ** Math.min(current.attempts, 5)),
             lease_until: 0, error: error instanceof Error ? error.message : 'Waiting for a connection',
           }));
@@ -347,7 +359,7 @@ export function syncOutbox(banker: string, onSaved: (state: SessionState, item: 
   };
   const signal = () => { if (!stopped) { onChange(); void drain().catch(onStorageError); } };
   const online = () => {
-    void listOutbox(banker).then(items => Promise.all(items.filter(item => item.status === 'pending').map(item => updateItem(item.op_id, current => ({ ...current, next_attempt_at: 0 }))))).then(signal).catch(onStorageError);
+    void listOutbox(banker).then(items => Promise.all(items.filter(item => item.status === 'pending' || item.status === 'uncertain').map(item => updateItem(item.op_id, current => ({ ...current, next_attempt_at: 0 }))))).then(signal).catch(onStorageError);
   };
   const interval = window.setInterval(signal, 500);
   window.addEventListener('online', online);
