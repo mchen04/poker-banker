@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { webkit, devices, expect, type Page } from '@playwright/test';
+import { webkit, devices, expect, type Page, type BrowserContext } from '@playwright/test';
 import type { SessionState } from '../../src/domain/session';
 import { formatMoney } from '../../src/domain/money';
 import { observationScript } from './observe';
@@ -9,18 +9,34 @@ import type { LiveClient } from './live-client';
 import type { RecordSample } from './types';
 
 type ObservedWindow = Window & { __pbObserveSaved?: (note: string, total: string) => Promise<number> };
+export async function scopeLiveBrowserRequests(context: BrowserContext, client: LiveClient) {
+  if (!client.bypassEnabled) return;
+  await context.route('**/*', async route => {
+    try {
+      const response = await route.fetch({ headers: client.scopedHeaders(route.request().url(), route.request().headers()), maxRedirects: 0 });
+      if (response.status() >= 300 && response.status() < 400) {
+        await response.dispose();
+        await route.abort('blockedbyclient');
+        return;
+      }
+      await route.fulfill({ response });
+      await response.dispose();
+    } catch { await route.abort().catch(() => {}); }
+  });
+}
 export async function liveBrowser(client: LiveClient, fixture: LiveFixture, record: RecordSample, reverse: boolean, samples: number, directory: string, allowLoopbackCertificate = false) {
+  let state = await publicCall<SessionState>(client, `/api/sessions/${fixture.sessionId}`);
   const browser = await webkit.launch();
   const errors: string[] = [];
   const retiring = new WeakSet<Page>();
-  let state = await publicCall<SessionState>(client, `/api/sessions/${fixture.sessionId}`);
   const context = async (banker: boolean) => {
-    const owned = await browser.newContext({ ...devices['iPhone 15'], baseURL: client.baseURL, locale: 'en-US', timezoneId: 'UTC', ignoreHTTPSErrors: allowLoopbackCertificate });
+    const owned = await browser.newContext({ ...devices['iPhone 15'], baseURL: client.baseURL, locale: 'en-US', timezoneId: 'UTC', ignoreHTTPSErrors: allowLoopbackCertificate, serviceWorkers: 'block' });
+    await scopeLiveBrowserRequests(owned, client);
     if (banker) await owned.addCookies((await client.context.storageState()).cookies);
     await owned.addInitScript({ content: observationScript.replace('__PB_EXPECTED__', JSON.stringify({ name: state.session.name, total: formatMoney(BigInt(state.totals.total_in_minor), 'USD'), ids: fixture.playerIds.slice(0, 9), endpoint: banker ? `/api/sessions/${fixture.sessionId}` : `/api/view/${fixture.token}` })) });
     const page = await owned.newPage();
-    page.on('pageerror', error => { if (!retiring.has(page)) errors.push(error.message.replaceAll(fixture.token, 'OWNED_TOKEN')); });
-    page.on('response', response => { if (!retiring.has(page) && response.url().includes('/api/') && response.status() >= 400) errors.push(`HTTP ${response.status()} ${new URL(response.url()).pathname.replaceAll(fixture.token, 'OWNED_TOKEN')}`); });
+    page.on('pageerror', error => { if (!retiring.has(page)) errors.push(`Browser page failed (${error.name})`); });
+    page.on('response', response => { if (!retiring.has(page) && response.url().includes('/api/') && response.status() >= 400) errors.push(`Browser HTTP ${response.status()}`); });
     await page.goto(banker ? `/?session=${fixture.sessionId}` : `/v/${fixture.token}`, { waitUntil: 'commit' });
     await expect(page.getByRole('heading', { name: state.session.name, exact: true })).toBeVisible();
     await expect(page.locator('.players .player-row')).toHaveCount(9);
@@ -68,11 +84,11 @@ export async function liveBrowser(client: LiveClient, fixture: LiveFixture, reco
             const result = await save(note, count === 0);
             if (count === 0) record({ metric: 'entry.confirm', ms: result.confirmed - result.click, ok: true, work: { batch, ledger_rows_written: 2, buy_in_rows_written: 1, confirmedEpoch: result.confirmed, profile: 'visible unthrottled iPhone WebKit' } });
             else for (const [viewer, epoch] of (await Promise.all(displayed)).entries()) record({ metric: `viewer.delay.${count}`, ms: epoch - result.click, ok: true, work: { batch, concurrency: count, viewer, viewers_completed: count, ledger_rows_written: 1, renderedEpoch: epoch, banker_confirmed_ms: result.confirmed - result.click, confirmed_to_viewer_ms: epoch - result.confirmed, profile: 'visible unthrottled iPhone WebKit' } });
-          } catch (error) { record({ metric: count ? `viewer.delay.${count}` : 'entry.confirm', ms: 0, ok: false, work: { batch, concurrency: count }, error: String(error).replaceAll(fixture.token, 'OWNED_TOKEN') }); throw error; }
+          } catch (error) { record({ metric: count ? `viewer.delay.${count}` : 'entry.confirm', ms: 0, ok: false, work: { batch, concurrency: count }, error: `Browser benchmark failed (${error instanceof Error ? error.name : 'Error'})` }); throw new Error('Browser benchmark failed'); }
         }
         await (viewers[0]?.page ?? banker.page).screenshot({ path: join(directory, count ? `viewers-${count}.png` : 'save-confirmed.png') });
       } finally { for (const viewer of viewers) { retiring.add(viewer.page); await viewer.owned.close(); } }
     }
     expect(errors).toEqual([]);
-  } finally { for (const owned of browser.contexts()) for (const page of owned.pages()) retiring.add(page); await browser.close(); }
+  } catch { throw new Error('Browser benchmark failed'); } finally { for (const owned of browser.contexts()) for (const page of owned.pages()) retiring.add(page); await browser.close(); }
 }

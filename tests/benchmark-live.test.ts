@@ -1,9 +1,17 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { randomUUID, createHash } from 'node:crypto';
+import { readFile, stat, rm, chmod, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { webkit } from '@playwright/test';
+import { scopeLiveBrowserRequests } from '../scripts/bench/live-browser';
+import { handle } from '@hono/node-server/vercel';
+import { runLiveComparison, summarizeLiveComparison, type LiveComparisonRow } from '../scripts/bench-live-compare';
 import { createServer } from 'node:http';
 import { createApp } from '../src/server/app';
 import { testDatabase } from './database';
-import { liveHistoryPlan, seedLiveBenchmark } from '../scripts/bench/live-seed';
+import { liveHistoryPlan, seedLiveBenchmark, writeLiveSeedState, readLiveSeedState, reuseLiveSeed } from '../scripts/bench/live-seed';
 import { liveApi, liveWrites } from '../scripts/bench/live-api';
 import { LiveClient } from '../scripts/bench/live-client';
 import type { BenchmarkClient, Sample } from '../scripts/bench/types';
@@ -95,3 +103,182 @@ it('counts a non-JSON HTTP failure once and keeps its body out of diagnostics', 
     expect(client.counts).toEqual({ requests: 1, mutations: 0, errors: 1, statuses: { '400': 1 } });
   } finally { await client.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
+
+it('scopes the bypass header to every controller request and never follows a redirect with credentials', async () => {
+  const previous = process.env.PB_VERCEL_BYPASS;
+  const sentinel = `synthetic-bypass-${randomUUID()}`;
+  process.env.PB_VERCEL_BYPASS = sentinel;
+  let externalHits = 0;
+  const external = createServer((_request, response) => { externalHits++; response.end('{}'); });
+  await new Promise<void>(resolve => external.listen(0, '127.0.0.1', resolve));
+  const externalAddress = external.address();
+  if (!externalAddress || typeof externalAddress === 'string') throw new Error('No external test port');
+  const received: string[] = [];
+  const server = createServer((request, response) => {
+    received.push(String(request.headers['x-vercel-protection-bypass']));
+    if (request.url === '/redirect') { response.writeHead(302, { location: `http://127.0.0.1:${externalAddress.port}/destination` }); response.end(); }
+    else { response.setHeader('content-type', 'application/json'); response.end('{ "ok": true }'); }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('No controller test port');
+  const client = await LiveClient.create(`http://127.0.0.1:${address.port}`);
+  try {
+    const result = await client.request('/ok');
+    expect(result.sha256).toBe(createHash('sha256').update('{ "ok": true }').digest('hex'));
+    expect((await client.request('/redirect')).status).toBe(302);
+    expect(received).toEqual([sentinel, sentinel]);
+    expect(externalHits).toBe(0);
+    expect(client.scopedHeaders(`http://127.0.0.1:${externalAddress.port}/`, { 'X-Vercel-Protection-Bypass': sentinel })).toEqual({});
+    expect(client.scopedHeaders(`${client.baseURL}/asset.js`, {})).toEqual({ 'x-vercel-protection-bypass': sentinel });
+    expect(JSON.stringify({ counts: client.counts, bypassEnabled: client.bypassEnabled, error: client.redact(`request failed ${sentinel}`) })).not.toContain(sentinel);
+    await expect(client.request(`http://127.0.0.1:${externalAddress.port}/`)).rejects.toThrow('origin');
+  } finally {
+    if (previous === undefined) delete process.env.PB_VERCEL_BYPASS; else process.env.PB_VERCEL_BYPASS = previous;
+    await client.close();
+    for (const owned of [server, external]) { owned.closeAllConnections(); await new Promise<void>(resolve => owned.close(() => resolve())); }
+  }
+});
+it('persists a private owned seed, reuses its banker across loopback origins without mutations, and compares raw bodies', async () => {
+  const previous = process.env.PB_VERCEL_BYPASS;
+  const sentinel = `synthetic-bypass-${randomUUID()}`;
+  process.env.PB_VERCEL_BYPASS = sentinel;
+  const identifier = randomUUID(), cache = join('.cache', `live-test-${identifier}`), evidence = join('evidence/bench/live', `test-${identifier}`);
+  const path = join(cache, 'seed.json'), seedEvidence = `${evidence}-seed`, reuseEvidence = `${evidence}-reuse`, compareEvidence = `${evidence}-compare-cli`, invalidEvidence = `${evidence}-existing-state`, missingReuseEvidence = `${evidence}-missing-reuse`;
+  const seen: { method: string; header: string | undefined }[] = [];
+  const servers = Array.from({ length: 2 }, () => createServer((request, response) => {
+    seen.push({ method: request.method ?? '', header: request.headers['x-vercel-protection-bypass'] as string | undefined });
+    void handle(createApp(database.pool))(request, response);
+  }));
+  for (const [index, server] of servers.entries()) await new Promise<void>(resolve => server.listen(0, index === 0 ? 'localhost' : '127.0.0.1', resolve));
+  const urls = servers.map((server, index) => { const address = server.address(); if (!address || typeof address === 'string') throw new Error('No owned test port'); return `http://${index === 0 ? 'localhost' : '127.0.0.1'}:${address.port}`; });
+  const client = await LiveClient.create(urls[0]!);
+  const reused = await LiveClient.create(urls[1]!);
+  try {
+    const seeded = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[0]!, '--seed-only', '--state', path, '--sessions', '1', '--output', seedEvidence]);
+    const fixture = (await readLiveSeedState(path)).fixture;
+    await client.restoreSession((await readLiveSeedState(path)).sessionCookie);
+    expect(JSON.parse(await readFile(join(seedEvidence, 'summary.json'), 'utf8')).metrics).toEqual([]);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    const state = await readLiveSeedState(path);
+    expect(state.baseURL).toBe(urls[0]);
+    expect(state.fixture.bankerId).toBe(fixture.bankerId);
+    expect(await readFile(path, 'utf8')).not.toContain(sentinel);
+    const beforeExistingState = seen.length;
+    await expect(promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[0]!, '--seed-only', '--state', path, '--sessions', '1', '--output', invalidEvidence])).rejects.toThrow();
+    expect(seen).toHaveLength(beforeExistingState);
+    await expect(promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[0]!, '--sessions', '1', '--api-only', '--runs', '1', '--output', missingReuseEvidence, '--reuse'])).rejects.toThrow();
+    expect(seen).toHaveLength(beforeExistingState);
+    await expect(writeLiveSeedState(path, client, fixture)).rejects.toThrow();
+    await expect(writeLiveSeedState('evidence/not-a-private-state.json', client, fixture)).rejects.toThrow('.cache');
+    await symlink('seed.json', join(cache, 'linked.json'));
+    await expect(readLiveSeedState(join(cache, 'linked.json'))).rejects.toThrow('0600');
+    await chmod(path, 0o644);
+    await expect(readLiveSeedState(path)).rejects.toThrow('0600');
+    await chmod(path, 0o600);
+    const start = seen.length;
+    await expect(reuseLiveSeed(reused, { ...state, fixture: { ...fixture, bankerId: randomUUID() } })).rejects.toThrow('banker');
+    expect(seen.slice(start)).toHaveLength(1);
+    await expect(reuseLiveSeed(reused, { ...state, sessionCookie: 'synthetic-stale-cookie' })).rejects.toThrow('banker');
+    await reuseLiveSeed(reused, state);
+    const samples: Sample[] = [];
+    await liveApi(reused, fixture, sample => samples.push(sample), false, 2, new Set(['api.players']));
+    expect(samples).toHaveLength(2);
+    expect(samples.every(sample => sample.metric === 'api.players' && sample.ok && sample.sha256?.length === 64)).toBe(true);
+    expect(reused.counts.mutations).toBe(0);
+    const comparison = await runLiveComparison({ baselineURL: urls[0]!, candidateURL: urls[1]!, reuse: path, metric: 'api.players', directory: evidence });
+    expect(comparison.errors).toBe(0);
+    expect(comparison.identicalResponses).toBe(true);
+    expect(comparison.pairs).toHaveLength(5);
+    expect(comparison.samples).toBe(10);
+    expect(Object.values(comparison.requests).every(counts => counts.mutations === 0)).toBe(true);
+    const raw = await readFile(join(evidence, 'samples.jsonl'), 'utf8');
+    const rows = raw.trim().split('\n').map(line => JSON.parse(line) as LiveComparisonRow);
+    expect(rows.map(row => row.side).join('')).toBe('ABBAABBAAB');
+    const reusedCLI = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[1]!, '--reuse', path, '--metrics', 'api.players', '--runs', '1', '--output', reuseEvidence]);
+    const reusedSummary = JSON.parse(await readFile(join(reuseEvidence, 'summary.json'), 'utf8'));
+    expect(reusedSummary.requests.mutations).toBe(0);
+    expect(reusedSummary.metrics.map((metric: { metric: string }) => metric.metric)).toEqual(['api.players']);
+    const comparedCLI = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live-compare.ts', '--baseline-url', urls[0]!, '--candidate-url', urls[1]!, '--reuse', path, '--metrics', 'api.players', '--order', 'abba', '--output', compareEvidence]);
+    const compared = JSON.parse(await readFile(join(compareEvidence, 'comparison.json'), 'utf8'));
+    expect(compared).toMatchObject({ errors: 0, samples: 20, identicalResponses: true });
+    expect(compared.pairs).toHaveLength(5);
+    expect(Object.values(compared.requests).every(counts => (counts as { mutations: number }).mutations === 0)).toBe(true);
+    const comparedRaw = await readFile(join(compareEvidence, 'samples.jsonl'), 'utf8');
+    expect(comparedRaw.trim().split('\n').map(line => JSON.parse(line).side).join('')).toBe('ABBA'.repeat(5));
+    expect(JSON.parse(await readFile(join(compareEvidence, 'method.json'), 'utf8')).bypass).toBe(true);
+    const receipts = seeded.stdout + seeded.stderr + reusedCLI.stdout + reusedCLI.stderr + comparedCLI.stdout + comparedCLI.stderr + comparedRaw + raw + await readFile(join(evidence, 'method.json'), 'utf8') + await readFile(join(evidence, 'comparison.json'), 'utf8') + await readFile(join(compareEvidence, 'method.json'), 'utf8') + await readFile(join(compareEvidence, 'comparison.json'), 'utf8');
+    expect(receipts).not.toContain(sentinel);
+    expect(receipts).not.toContain(state.sessionCookie);
+    expect(receipts).not.toContain(fixture.token);
+    expect(seen.every(request => request.header === sentinel)).toBe(true);
+    expect(seen.slice(start).every(request => request.method === 'GET')).toBe(true);
+    const cookies = (await reused.context.storageState()).cookies;
+    expect(cookies).toHaveLength(1);
+    expect(cookies[0]!.domain).toBe('127.0.0.1');
+    expect(cookies[0]!.path).toBe('/');
+  } finally {
+    if (previous === undefined) delete process.env.PB_VERCEL_BYPASS; else process.env.PB_VERCEL_BYPASS = previous;
+    await client.close(); await reused.close();
+    for (const server of servers) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+    await rm(cache, { recursive: true, force: true });
+    for (const directory of [evidence, seedEvidence, reuseEvidence, compareEvidence, invalidEvidence, missingReuseEvidence]) await rm(directory, { recursive: true, force: true });
+  }
+}, 60000);
+it('accepts only five complete wins above both MADs with matching raw responses and zero errors', () => {
+  const rows = Array.from({ length: 5 }, (_, index) => (['A', 'B'] as const).map((side, leg): LiveComparisonRow => ({ metric: 'api.players', pair: index + 1, side, leg: leg + 1, order: index * 2 + leg + 1, ms: side === 'A' ? 20 + index : 10 + index, bytes: 10, status: 200, sha256: 'a'.repeat(64), ok: true, work: { players: 40 }, clientHost: { logicalCores: 1, loadAverage: [0, 0, 0], remoteHostLoad: 'unavailable' } }))).flat();
+  expect(summarizeLiveComparison(rows, 'api.players', 0).accepted).toBe(true);
+  expect(summarizeLiveComparison(rows, 'api.players', 1).accepted).toBe(false);
+  expect(summarizeLiveComparison(rows.slice(1), 'api.players', 0).accepted).toBe(false);
+  expect(summarizeLiveComparison(rows.map((row, index) => index === 1 ? { ...row, ms: 21 } : row), 'api.players', 0).accepted).toBe(false);
+  expect(summarizeLiveComparison(rows.map((row, index) => index === 1 ? { ...row, sha256: 'b'.repeat(64) } : row), 'api.players', 0).accepted).toBe(false);
+  expect(summarizeLiveComparison(rows.map(row => ({ ...row, ms: row.ms + row.pair * 100 })), 'api.players', 0).accepted).toBe(false);
+});
+
+it('adds browser bypass headers only to the exact target origin including assets and API calls', async () => {
+  const previous = process.env.PB_VERCEL_BYPASS;
+  const sentinel = `synthetic-bypass-${randomUUID()}`;
+  process.env.PB_VERCEL_BYPASS = sentinel;
+  const foreignHeaders: (string | undefined)[] = [];
+  const external = createServer((request, response) => { foreignHeaders.push(request.headers['x-vercel-protection-bypass'] as string | undefined); response.setHeader('content-type', 'text/html'); response.end('<p>Foreign destination</p>'); });
+  await new Promise<void>(resolve => external.listen(0, '127.0.0.1', resolve));
+  const externalAddress = external.address();
+  if (!externalAddress || typeof externalAddress === 'string') throw new Error('No foreign test port');
+  const received: { path: string; header: string | undefined }[] = [];
+  const server = createServer((request, response) => {
+    received.push({ path: request.url!, header: request.headers['x-vercel-protection-bypass'] as string | undefined });
+    if (request.url === '/') { response.setHeader('content-type', 'text/html'); response.end('<script src="/asset.js"></script><p>Owned page</p>'); }
+    else if (request.url === '/asset.js') { response.setHeader('content-type', 'application/javascript'); response.end('fetch("/api/auth/me").then(response => response.json()).then(() => document.body.dataset.loaded = "yes")'); }
+    else if (request.url === '/redirect') { response.writeHead(302, { location: `http://127.0.0.1:${externalAddress.port}/destination` }); response.end(); }
+    else void handle(createApp(database.pool))(request, response);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('No browser test port');
+  const client = await LiveClient.create(`http://127.0.0.1:${address.port}`);
+  let browser: Awaited<ReturnType<typeof webkit.launch>> | undefined;
+  try {
+    await client.request('/api/auth/signup', { method: 'POST', body: { username: `browser-${randomUUID().slice(0, 12)}`, password: `test-only-${randomUUID()}` } });
+    browser = await webkit.launch();
+    const context = await browser.newContext({ serviceWorkers: 'block' });
+    await context.addCookies((await client.context.storageState()).cookies);
+    await scopeLiveBrowserRequests(context, client);
+    const page = await context.newPage();
+    await page.goto(client.baseURL);
+    await page.waitForFunction(() => document.body.dataset.loaded === 'yes');
+    expect(await page.content()).not.toContain(sentinel);
+    await expect(page.goto(`${client.baseURL}/redirect`)).rejects.toThrow();
+    expect(foreignHeaders).toEqual([]);
+    await page.goto(`http://127.0.0.1:${externalAddress.port}/destination`);
+    expect(foreignHeaders.length).toBeGreaterThan(0);
+    expect(foreignHeaders.every(header => header === undefined)).toBe(true);
+    expect(received.some(request => request.path === '/asset.js')).toBe(true);
+    expect(received.some(request => request.path === '/api/auth/me')).toBe(true);
+    expect(received.every(request => request.header === sentinel)).toBe(true);
+    await context.close();
+  } finally {
+    if (previous === undefined) delete process.env.PB_VERCEL_BYPASS; else process.env.PB_VERCEL_BYPASS = previous;
+    await browser?.close(); await client.close();
+    for (const owned of [server, external]) { owned.closeAllConnections(); await new Promise<void>(resolve => owned.close(() => resolve())); }
+  }
+}, 30000);

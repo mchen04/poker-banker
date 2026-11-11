@@ -27,3 +27,6 @@ ts	phase	decision	why	evidence	result
 2026-11-11T08:56:17Z	test	held push for one reproduced iPhone sign-up failure	a real banker could hit the same misplaced tap	e2e/auth-startup.spec.ts, commit 83a83b4	fixed; 580 repeats passed
 2026-11-11T08:56:17Z	test	held push to fix leaked test databases	each full run left about 4 GB on the shared test machine	commits 6c70452, 4fb0faa	zero leftover folders after the final suite
 2026-11-11T08:56:17Z	ship	pushed after reviewing every secret-scan finding as a synthetic fixture	all 24 are throwaway test passwords, placeholders or UI labels	card evidence secret-scan-review.md	no real credential in history
+2026-11-11T11:34:41Z	perf	kept the players aggregation in Postgres	live A/B: all five pairs improved, 447 to 140 ms median, beyond both MADs, identical bodies	docs/PERFORMANCE.md live comparison	kept
+2026-11-11T11:34:41Z	perf	did not tune concurrent writes	only one 5.2 s outlier in 50 and server time is not observable live	docs/PERFORMANCE.md live baseline	left as stated limit
+2026-11-11T11:34:41Z	ship	enabled the Vercel automation bypass for deployment URLs	needed to benchmark an unpromoted candidate against the same database	value only in the ignored env file	used for the live A/B

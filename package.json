@@ -19,7 +19,8 @@
     "e2e": "playwright test",
     "e2e:server": "tsx scripts/e2e-server.ts",
     "bench": "tsx scripts/bench.ts",
-    "bench:live": "tsx scripts/bench-live.ts"
+    "bench:live": "tsx scripts/bench-live.ts",
+    "bench:live:compare": "tsx scripts/bench-live-compare.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",
