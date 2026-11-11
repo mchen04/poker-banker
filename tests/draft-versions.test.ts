@@ -911,3 +911,50 @@ it.each([false, true])('does not silently adopt another tab after a completed sa
     expect(editing.hasPendingLocalWrites()).toBe(false);
   } finally { release(); harness.close(); }
 });
+
+it.each([false, true])('shows a closed form rejection after reopening without approving a stale fingerprint (advanced=%s)', async advanced => {
+  const bus = new EventTarget();
+  vi.stubGlobal('window', { setTimeout, clearTimeout, dispatchEvent: bus.dispatchEvent.bind(bus), addEventListener: bus.addEventListener.bind(bus), removeEventListener: bus.removeEventListener.bind(bus) });
+  const storage = sharedStorage();
+  const editing = await freshTab();
+  const other = await freshTab();
+  const harness = draftForm(editing, key, original);
+  let form = harness.render();
+  await vi.waitFor(() => { form = harness.render(); expect(form.ready).toBe(true); });
+  form.update(original);
+  await vi.waitFor(() => expect(storage.draft(key)).toEqual(original));
+  await editing.flushDraftWrites();
+  await editing.readDraft(key);
+  form = harness.render();
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await other.readDraft(key, cursor);
+  await other.writeDraft(key, newer, cursor);
+  form.update(edited);
+  harness.close();
+  await editing.flushDraftWrites();
+  if (advanced) await other.writeDraft(key, { ...newer, amount: '30' }, cursor);
+  const reopened = draftForm(editing, key, original);
+  let current = reopened.render();
+  try {
+    await vi.waitFor(() => {
+      current = reopened.render();
+      expect(current.ready).toBe(true);
+      expect(current.value.amount).toBe(advanced ? '30' : '25');
+      expect(current.error).toContain('edited in another tab');
+    });
+    expect(editing.hasPendingLocalWrites()).toBe(false);
+    expect(editing.draftSaveFailed(key)).toBe(false);
+    await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
+    await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
+    const reviewed = { ...current.value, amount: advanced ? '31' : '26' };
+    current.update(reviewed);
+    await vi.waitFor(() => expect(storage.draft(key)).toEqual(reviewed));
+    await editing.flushDraftWrites();
+    await editing.readDraft(key);
+    current = reopened.render();
+    expect(current.value.amount).toBe(reviewed.amount);
+    expect(current.error).toBe('');
+    expect(editing.hasPendingLocalWrites()).toBe(false);
+    expect(editing.draftSaveFailed(key)).toBe(false);
+  } finally { reopened.close(); }
+});
