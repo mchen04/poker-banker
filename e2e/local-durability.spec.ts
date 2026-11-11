@@ -27,7 +27,7 @@ async function localWork(page: Page): Promise<Work> {
 
 async function addOtherTabWork(page: Page, banker: string, session: string, player: string) {
   await openMoney(page, player);
-  await typeInput(page.getByLabel('Amount', { exact: true }), '123');
+  await typeInput(page.getByTestId('money-amount'), '123');
   const key = `${banker}/${session}/buy_in/${player}`;
   await expect.poll(async () => (await localWork(page)).drafts.find(draft => draft.key === key)?.value.amount).toBe('123');
   const op = await page.evaluate(async ({ banker, session, player }) => {
@@ -74,7 +74,7 @@ test('a quota failure blocks a waiting update until the typed draft is saved and
   const player = await addPlayer(page, 'Justin');
   await workerReady(page);
   await openMoney(page, player.id);
-  const amount = page.getByLabel('Amount', { exact: true });
+  const amount = page.getByTestId('money-amount');
   const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
   await typeInput(amount, '10');
   await expect.poll(async () => (await localWork(page)).drafts.find(draft => draft.key === key)?.value.amount).toBe('10');
@@ -108,7 +108,7 @@ test('a quota failure blocks a waiting update until the typed draft is saved and
   await Promise.all([page.waitForEvent('domcontentloaded'), page.getByTestId('update-reload').click()]);
   await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('123');
+  await expect(page.getByTestId('money-amount')).toHaveValue('123');
   expect((await page.request.get('/api/auth/me')).status()).toBe(200);
 });
 

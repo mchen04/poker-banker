@@ -39,14 +39,14 @@ test('a conflict after closing the form shows a non-storage notice that can be d
     } finally { database.close(); }
   }, key);
   await openMoney(page, player.id);
-  await typeInput(page.getByLabel('Amount', { exact: true }), '10');
+  await typeInput(page.getByTestId('money-amount'), '10');
   await expect.poll(storedAmount).toBe('10');
   const other = await context.newPage();
   try {
     await other.goto(`/?session=${session.session.id}`);
     await openMoney(other, player.id);
-    await expect(other.getByLabel('Amount', { exact: true })).toHaveValue('10');
-    await typeInput(other.getByLabel('Amount', { exact: true }), '25');
+    await expect(other.getByTestId('money-amount')).toHaveValue('10');
+    await typeInput(other.getByTestId('money-amount'), '25');
     await expect.poll(storedAmount).toBe('25');
     await other.evaluate(async key => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -75,8 +75,8 @@ test('a conflict after closing the form shows a non-storage notice that can be d
         cycle();
       });
     }, key);
-    await typeInput(page.getByLabel('Amount', { exact: true }), '50');
-    await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('50');
+    await typeInput(page.getByTestId('money-amount'), '50');
+    await expect(page.getByTestId('money-amount')).toHaveValue('50');
     await keepMoneyDraft(page);
     await other.evaluate(async () => { await (window as unknown as { __releaseDraftLock?: () => Promise<void> }).__releaseDraftLock?.(); });
     const notice = page.getByTestId('draft-conflict-notice');
@@ -90,7 +90,7 @@ test('a conflict after closing the form shows a non-storage notice that can be d
     await notice.getByRole('button', { name: 'Dismiss draft change notice', exact: true }).click();
     await expect(notice).toHaveCount(0);
     await openMoney(page, player.id);
-    await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('25');
+    await expect(page.getByTestId('money-amount')).toHaveValue('25');
     await expect(page.getByText(/edited in another tab|not saved on this device/i)).toHaveCount(0);
     await keepMoneyDraft(page);
     await expect(page.getByTestId('draft-conflict-notice')).toHaveCount(0);

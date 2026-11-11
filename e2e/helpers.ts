@@ -83,12 +83,12 @@ export async function addPlayer(page: Page, name: string, testInfo?: TestInfo) {
 export async function openMoney(page: Page, player: string, kind: 'Buy-in' | 'Cash out' | 'Record payment' | 'Tips and meals' = 'Buy-in') {
   await page.getByTestId(`player-${player}`).click();
   await page.getByRole('dialog').getByRole('button', { name: kind, exact: true }).click();
-  await expect(page.getByLabel('Amount', { exact: true })).toBeEnabled();
+  await expect(page.getByTestId('money-amount')).toBeEnabled();
 }
 export async function money(page: Page, player: string, amount: string, options: { kind?: 'Buy-in' | 'Cash out' | 'Record payment' | 'Tips and meals'; paid?: boolean; method?: 'cash' | 'venmo' | 'zelle'; testInfo?: TestInfo } = {}) {
   const kind = options.kind ?? 'Buy-in';
   await openMoney(page, player, kind);
-  await typeInput(page.getByLabel('Amount', { exact: true }), amount);
+  await typeInput(page.getByTestId('money-amount'), amount);
   if (options.paid !== undefined && (kind === 'Buy-in' || kind === 'Cash out')) await page.getByLabel(kind === 'Buy-in' ? 'Paid now' : 'Paid out now', { exact: true }).setChecked(options.paid);
   if (options.method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: options.method[0]!.toUpperCase() + options.method.slice(1), exact: true }).click();
   if (options.testInfo) await screen(page, options.testInfo, kind === 'Buy-in' ? 'buy-in' : kind === 'Cash out' ? 'cash-out' : kind === 'Record payment' ? 'payment' : 'expense');

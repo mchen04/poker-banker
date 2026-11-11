@@ -90,7 +90,7 @@ test('a previously uncertain outbox replay confirmed as rejected becomes safely 
     else await route.continue();
   });
   await openMoney(page, player.id);
-  await typeInput(page.getByLabel('Amount', { exact: true }), '100');
+  await typeInput(page.getByTestId('money-amount'), '100');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeEnabled();
   const queued = (await localRecords(page)).outbox[0]!;

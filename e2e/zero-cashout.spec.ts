@@ -7,7 +7,7 @@ test('a player losing the full buy-in cashes out zero with no zero payment', asy
   await newSession(page, 'Lost whole stack');
   const player = await addPlayer(page, 'Justin');
   await openMoney(page, player.id);
-  await typeInput(page.getByLabel('Amount', { exact: true }), '0');
+  await typeInput(page.getByTestId('money-amount'), '0');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Enter an amount above zero');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();

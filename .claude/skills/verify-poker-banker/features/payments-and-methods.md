@@ -63,7 +63,7 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
   await money(page, player.id, '60', { kind: 'Cash out', paid: true, method: 'zelle' });
   await openMoney(page, player.id, 'Record payment');
   await page.getByLabel('Payment direction', { exact: true }).selectOption('payment_out');
-  await typeInput(page.getByLabel('Amount', { exact: true }), '1');
+  await typeInput(page.getByTestId('money-amount'), '1');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByTestId('saved-confirmation')).toContainText('$1.00');

@@ -28,7 +28,7 @@ test('waiting release update after hidden and visible preserves auth, drafts and
   await workerReady(page);
   await expect.poll(() => version(page)).toBe(releaseA);
   await openMoney(page, player.id);
-  await typeInput(page.getByLabel('Amount', { exact: true }), '37.');
+  await typeInput(page.getByTestId('money-amount'), '37.');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }).click();
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
@@ -51,7 +51,7 @@ test('waiting release update after hidden and visible preserves auth, drafts and
   await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
   await expect(page.getByRole('heading', { name: 'Survives update', exact: true })).toBeVisible();
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('37.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('37.');
   await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect((await current(page)).session.id).toBe(state.session.id);
   expect((await page.request.get('/api/auth/me')).status()).toBe(200);

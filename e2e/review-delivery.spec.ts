@@ -21,7 +21,7 @@ for (const failure of ['connection', 413] as const) {
       committed();
     });
     await openMoney(page, player.id);
-    await typeInput(page.getByLabel('Amount', { exact: true }), '100');
+    await typeInput(page.getByTestId('money-amount'), '100');
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     await firstCommit;
     await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeVisible();

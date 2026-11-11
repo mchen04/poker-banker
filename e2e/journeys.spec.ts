@@ -11,7 +11,7 @@ test('account signup acknowledgement, sign-in and one-use recovery revoke old co
   const state = await newSession(page, 'Recovery preserves draft');
   const player = await addPlayer(page, 'Justin');
   await openMoney(page, player.id);
-  await typeInput(page.getByLabel('Amount', { exact: true }), '42.');
+  await typeInput(page.getByTestId('money-amount'), '42.');
   const validCookies = await page.context().cookies();
   const old = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
   const recovery = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
@@ -39,7 +39,7 @@ test('account signup acknowledgement, sign-in and one-use recovery revoke old co
     await page.getByTestId(`session-tab-${state.session.id}`).click();
     await expect(page.getByRole('heading', { name: 'Recovery preserves draft', exact: true })).toBeVisible();
     await openMoney(page, player.id);
-    await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('42.');
+    await expect(page.getByTestId('money-amount')).toHaveValue('42.');
   } finally { await old.close(); await recovery.close(); }
 });
 
@@ -68,7 +68,7 @@ test('same-day session tabs and month history restore separate drafts after relo
   const first = await newSession(page, 'Early game', testInfo);
   const justin = await addPlayer(page, 'Justin', testInfo);
   await openMoney(page, justin.id);
-  await typeInput(page.getByLabel('Amount', { exact: true }), '12.');
+  await typeInput(page.getByTestId('money-amount'), '12.');
   await keepMoneyDraft(page);
   const second = await newSession(page, 'Late game');
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
@@ -77,14 +77,14 @@ test('same-day session tabs and month history restore separate drafts after relo
   await expect(page.getByText('An exact name match already exists.', { exact: false })).toBeVisible();
   await page.getByRole('dialog').getByRole('button', { name: 'Justin', exact: true }).click();
   await openMoney(page, justin.id);
-  await typeInput(page.getByLabel('Amount', { exact: true }), '34.');
+  await typeInput(page.getByTestId('money-amount'), '34.');
   await page.reload();
   await openMoney(page, justin.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('34.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('34.');
   await keepMoneyDraft(page);
   await page.getByTestId(`session-tab-${first.session.id}`).click();
   await openMoney(page, justin.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('12.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('12.');
   await keepMoneyDraft(page);
   await page.getByRole('button', { name: 'History', exact: true }).click();
   await typeInput(page.getByLabel('Search sessions', { exact: true }), 'Late');
@@ -92,7 +92,7 @@ test('same-day session tabs and month history restore separate drafts after relo
   await page.getByRole('dialog').getByRole('button', { name: /Late game/ }).click();
   expect(new URL(page.url()).searchParams.get('session')).toBe(second.session.id);
   await openMoney(page, justin.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('34.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('34.');
 });
 
 test('banking, early cash-out, re-entry, corrections and cumulative reclosure preserve history', async ({ page }, testInfo) => {
@@ -288,7 +288,7 @@ test('offline queue excludes unconfirmed totals, survives reload, saves once and
     await viewer.goto(viewerLink);
     await page.context().setOffline(true);
     await openMoney(page, player.id);
-    await typeInput(page.getByLabel('Amount', { exact: true }), '20');
+    await typeInput(page.getByTestId('money-amount'), '20');
     await page.getByRole('button', { name: 'Save entry', exact: true }).dblclick();
     await expect(page.getByText('Not saved yet', { exact: true }).first()).toBeVisible();
     await expect(page.getByTestId('totals')).not.toContainText('$20.00');

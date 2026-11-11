@@ -88,7 +88,7 @@ for (const action of ['roster', 'share', 'logout'] as const) {
     const sessionA = await newSession(page, `A private ${action}`);
     const playerA = await addPlayer(page, `A player ${action}`);
     await openMoney(page, playerA.id);
-    await typeInput(page.getByLabel('Amount', { exact: true }), '37.25');
+    await typeInput(page.getByTestId('money-amount'), '37.25');
     await keepMoneyDraft(page);
     const resumePoll = await holdCurrentPoll(page, sessionA.session.id);
     const blank = await context.newPage();

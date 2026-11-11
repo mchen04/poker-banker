@@ -11,11 +11,11 @@ test('offline entries retain their two-hour submission interval when replayed to
     return response.ok;
   })).toBe(true);
   await context.setOffline(true);
-  await openMoney(page, player.id); await typeInput(page.getByLabel('Amount', { exact: true }), '100');
+  await openMoney(page, player.id); await typeInput(page.getByTestId('money-amount'), '100');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.clock.fastForward(7200000);
-  await openMoney(page, player.id, 'Cash out'); await typeInput(page.getByLabel('Amount', { exact: true }), '150');
+  await openMoney(page, player.id, 'Cash out'); await typeInput(page.getByTestId('money-amount'), '150');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const times = await page.evaluate(async () => {

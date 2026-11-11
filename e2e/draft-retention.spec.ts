@@ -33,7 +33,7 @@ async function failDraftWrites(page: Page) {
 }
 
 async function failedAmount(page: Page, key: string) {
-  const amount = page.getByLabel('Amount', { exact: true });
+  const amount = page.getByTestId('money-amount');
   await typeInput(amount, '10');
   await expect.poll(() => storedAmount(page, key)).toBe('10');
   await failDraftWrites(page);
@@ -54,7 +54,7 @@ test('a failed draft survives closing its sheet and explicit discard clears both
   await failedAmount(page, key);
   await keepMoneyDraft(page);
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('123');
+  await expect(page.getByTestId('money-amount')).toHaveValue('123');
   await expect(page.getByRole('button', { name: 'Retry saving draft', exact: true })).toBeVisible();
   expect(await storedAmount(page, key)).toBe('10');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -63,7 +63,7 @@ test('a failed draft survives closing its sheet and explicit discard clears both
   await expect.poll(() => storedAmount(page, key)).toBeUndefined();
   await expect(page.getByRole('button', { name: 'Retry saving draft', exact: true })).toHaveCount(0);
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('');
+  await expect(page.getByTestId('money-amount')).toHaveValue('');
   expect(await storedAmount(page, key)).toBeUndefined();
 });
 
@@ -90,13 +90,13 @@ test('another tab signing out preserves the failed draft through auth reset and 
     await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
     await expect(page.getByTestId(`player-${player.id}`)).toBeVisible();
     await openMoney(page, player.id);
-    await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('123');
+    await expect(page.getByTestId('money-amount')).toHaveValue('123');
     await expect(page.getByRole('button', { name: 'Retry saving draft', exact: true })).toBeVisible();
     expect(await storedAmount(page, key)).toBeUndefined();
     await page.evaluate(() => window.dispatchEvent(new Event('retention-storage-recovered')));
     await page.getByRole('button', { name: 'Retry saving draft', exact: true }).click();
     await expect.poll(() => storedAmount(page, key)).toBe('123');
     await expect(page.getByRole('button', { name: 'Retry saving draft', exact: true })).toHaveCount(0);
-    await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('123');
+    await expect(page.getByTestId('money-amount')).toHaveValue('123');
   } finally { await other.close(); }
 });

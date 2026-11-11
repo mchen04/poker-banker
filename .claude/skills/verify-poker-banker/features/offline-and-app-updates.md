@@ -46,7 +46,7 @@ export default async function ({ page, context, baseURL, runId, step, checkState
   await context.setOffline(true);
   try {
     await openMoney(page, player.id);
-    await typeInput(page.getByLabel('Amount', { exact: true }), '20');
+    await typeInput(page.getByTestId('money-amount'), '20');
     await page.getByRole('button', { name: 'Save entry', exact: true }).dblclick();
     await expect(page.getByText('Not saved yet', { exact: true }).first()).toBeVisible();
     await expect(page.getByTestId('totals')).not.toContainText('$20.00');
@@ -114,7 +114,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     await context.setOffline(true);
     for (const amount of ['20', '30']) {
       await openMoney(page, player.id);
-      await typeInput(page.getByLabel('Amount', { exact: true }), amount);
+      await typeInput(page.getByTestId('money-amount'), amount);
       await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     }
     await closeSession(other);
@@ -138,7 +138,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     expect(new Set(buyIns.map(entry => entry.revision)).size).toBe(3);
     await context.setOffline(true);
     await openMoney(page, player.id);
-    await typeInput(page.getByLabel('Amount', { exact: true }), '99');
+    await typeInput(page.getByTestId('money-amount'), '99');
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     await page.getByRole('button', { name: 'Discard', exact: true }).click();
     await context.setOffline(false);
@@ -168,7 +168,7 @@ export default async function ({ page, context, baseURL, runId, step, checkState
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
   const releaseA = await page.locator('meta[name="pb-release"]').getAttribute('content');
   await openMoney(page, player.id);
-  await typeInput(page.getByLabel('Amount', { exact: true }), '37.');
+  await typeInput(page.getByTestId('money-amount'), '37.');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }).click();
   await step('updates-draft-before-new-release');
   await page.evaluate(() => {
@@ -187,18 +187,18 @@ export default async function ({ page, context, baseURL, runId, step, checkState
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await expect(page.getByText('Update ready', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('37.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('37.');
   await step('updates-ready-with-sheet-open');
   await Promise.all([page.waitForEvent('domcontentloaded'), page.getByTestId('update-reload').click()]);
   await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
   await expect(page.getByRole('heading', { name: 'Verify update preservation', exact: true })).toBeVisible();
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('37.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('37.');
   await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect((await checkState()).players.some(row => row.id === player.id)).toBe(true);
   expect((await page.request.get(`${baseURL}/api/auth/me`)).status()).toBe(200);
   await step('updates-new-release-draft-and-data-preserved');
-  await typeInput(page.getByLabel('Amount', { exact: true }), '37');
+  await typeInput(page.getByTestId('money-amount'), '37');
   const releaseC = `verify-C-${runId}`;
   execFileSync('pnpm', ['build'], { env: { ...process.env, RELEASE_VERSION: releaseC }, stdio: 'inherit' });
   await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration('/'); if (!registration) throw new Error('No service worker'); await registration.update(); });
