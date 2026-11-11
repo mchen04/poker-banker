@@ -1579,3 +1579,24 @@ it('adopts a newer saved value when recovery normalization loses its fingerprint
   expect(editing.draftSaveFailed()).toBe(false);
   expect(editing.hasPendingLocalWrites()).toBe(false);
 });
+
+it('does not freeze a stale render request against a newer visible edit in the same mounted form', async () => {
+  outboxEvents();
+  const storage = sharedStorage();
+  const editing = await freshTab();
+  await editing.writeDraft(key, original);
+  const harness = draftForm(editing, key, original);
+  const send = vi.fn();
+  vi.stubGlobal('fetch', send);
+  try {
+    await vi.waitFor(() => expect(harness.render().ready).toBe(true));
+    const oldRender = harness.render();
+    oldRender.update(newer);
+    await editing.flushDraftWrites();
+    expect((storage.draft(key) as typeof newer).amount).toBe('25');
+    await expect(oldRender.submit(request.path, request.body, request.method)).rejects.toThrow(/review/i);
+    expect((storage.draft(key) as typeof newer).amount).toBe('25');
+    expect((storage.draft(key) as { __submitted?: DraftRequest }).__submitted).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  } finally { harness.close(); }
+});

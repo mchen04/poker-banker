@@ -33,15 +33,24 @@ test('recovered typing persists across reload and another tab cannot silently re
     await other.goto(`/?session=${session.session.id}`);
     const otherRegion = other.getByRole('region', { name: 'Needs review', exact: true });
     await otherRegion.getByText('Review recovered edit', { exact: true }).click();
+    await expect(otherRegion.getByLabel('Amount', { exact: true })).toHaveValue('50.00');
     await typeInput(region.getByLabel('Amount', { exact: true }), '75.00');
     await expect.poll(() => storedAmount(page, key)).toBe('75.00');
-    await typeInput(otherRegion.getByLabel('Amount', { exact: true }), '25.00');
+    await typeInput(otherRegion.getByLabel('Amount', { exact: true }), '25.00', { expectedValue: '75.00' });
     await expect(otherRegion.getByLabel('Amount', { exact: true })).toHaveValue('75.00');
     await expect(other.getByText(/edited in another tab/i).first()).toBeVisible();
+    await expect(otherRegion.getByLabel('Amount', { exact: true })).toBeDisabled();
+    await expect(otherRegion.getByRole('button', { name: 'Resubmit recovered draft', exact: true })).toBeDisabled();
     await expect(region.getByLabel('Amount', { exact: true })).toHaveValue('75.00');
     expect(await storedAmount(page, key)).toBe('75.00');
     await page.reload();
     await page.getByRole('region', { name: 'Needs review', exact: true }).getByText('Review recovered edit', { exact: true }).click();
     await expect(page.getByRole('region', { name: 'Needs review', exact: true }).getByLabel('Amount', { exact: true })).toHaveValue('75.00');
+    await otherRegion.getByRole('button', { name: 'Review saved draft', exact: true }).click();
+    await typeInput(otherRegion.getByLabel('Amount', { exact: true }), '80.00');
+    await expect.poll(() => storedAmount(other, key)).toBe('80.00');
+    await other.reload();
+    await other.getByRole('region', { name: 'Needs review', exact: true }).getByText('Review recovered edit', { exact: true }).click();
+    await expect(other.getByRole('region', { name: 'Needs review', exact: true }).getByLabel('Amount', { exact: true })).toHaveValue('80.00');
   } finally { await other.close(); }
 });

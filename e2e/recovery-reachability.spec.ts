@@ -71,9 +71,10 @@ for (const group of ['ledger', 'commands'] as const) {
       await region.getByText('Review recovered edit', { exact: true }).click();
       if (command.field) await typeInput(region.getByLabel(command.field, { exact: true }), command.value!);
       await region.getByRole('button', { name: 'Save recovered draft', exact: true }).click();
-      await region.getByText('Review recovered edit', { exact: true }).click();
       if (command.field) await expect(region.getByLabel(command.field, { exact: true })).toHaveValue(command.value!);
+      const response = page.waitForResponse(response => response.request().method() === (command.method ?? 'POST') && new URL(response.url()).pathname === command.path && response.request().postDataJSON().op_id !== oldOp);
       await region.getByRole('button', { name: 'Resubmit recovered draft', exact: true }).click();
+      expect((await response).status(), command.label).toBe(command.label === 'legacy-command' ? 404 : 200);
       if (command.label === 'legacy-command') {
         await expect(region).toBeVisible();
         await region.getByText('Review recovered edit', { exact: true }).click();

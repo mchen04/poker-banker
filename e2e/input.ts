@@ -1,6 +1,6 @@
 import { expect, type Locator } from '@playwright/test';
 
-export async function typeInput(field: Locator, value: string, options: { append?: boolean } = {}) {
+export async function typeInput(field: Locator, value: string, options: { append?: boolean; expectedValue?: string } = {}) {
   const shape = await field.evaluate(element => ({
     type: element instanceof HTMLInputElement ? element.type : element instanceof HTMLTextAreaElement ? 'textarea' : element.tagName.toLowerCase(),
     locale: navigator.language,
@@ -8,7 +8,7 @@ export async function typeInput(field: Locator, value: string, options: { append
   const segmented = shape.type === 'date' || shape.type === 'datetime-local';
   expect(segmented || ['text', 'password', 'search', 'email', 'url', 'tel', 'number', 'textarea'].includes(shape.type), 'Physical keyboard entry requires a typed input or textarea').toBe(true);
   const keyboard = field.page().keyboard;
-  const expected = options.append ? await field.inputValue() + value : value;
+  const expected = options.expectedValue ?? (options.append ? await field.inputValue() + value : value);
   if (segmented) {
     expect(options.append, 'Native date fields require a complete ISO value').not.toBe(true);
     expect(shape.locale, 'Native date keyboard entry requires the configured en-US locale').toBe('en-US');
@@ -55,5 +55,6 @@ export async function typeInput(field: Locator, value: string, options: { append
     await keyboard.press('Backspace');
   }
   await keyboard.type(value);
-  expect(await field.inputValue() === expected, 'Physical keyboard entry must retain the complete requested value').toBe(true);
+  if (options.expectedValue !== undefined) await expect(field).toHaveValue(expected);
+  else expect(await field.inputValue() === expected, 'Physical keyboard entry must retain the complete requested value').toBe(true);
 }

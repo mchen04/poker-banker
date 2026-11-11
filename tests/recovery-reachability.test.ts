@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DraftRequest } from '../src/client/data';
@@ -150,4 +151,74 @@ it.each([
   const recovered = (await data.listRecoveredDrafts(owner))[0]!;
   expect(recovered.request?.body).not.toHaveProperty('method');
   expect(recovered.request?.body).toMatchObject({ kind: edit.kind, amount_minor: edit.amount === '0.00' ? '0' : '5000', paid_now: edit.paid_now });
+});
+
+it('uses an edited raw minor amount when a source-less entry has no currency', async () => {
+  const data = await import('../src/client/data');
+  await data.enqueue({ banker_id: owner, session_id: session, path: `/api/sessions/${session}/entries`, label: 'Payment out', body: { op_id: 'legacy', kind: 'payment_out', player_id: 'player', amount_minor: '5000', method: 'cash', occurred_at: null } });
+  const stop = data.syncOutbox(owner, () => {}, () => {});
+  try { await vi.waitFor(async () => expect(await data.listOutbox(owner)).toEqual([])); } finally { stop(); }
+  const recovered = (await data.listRecoveredDrafts(owner))[0]!;
+  await data.editRecoveredDraft(recovered, { ...(recovered.value as object), amount_minor: '7500' }, 'save');
+  expect((await data.listRecoveredDrafts(owner))[0]!.request?.body.amount_minor).toBe('7500');
+});
+
+it('does not fall back to a previous amount when the decimal amount was cleared', async () => {
+  const data = await import('../src/client/data');
+  const request = { path: `/api/sessions/${session}/entries`, method: 'POST', body: { op_id: 'old', kind: 'payment_out', amount_minor: '5000', method: 'cash' } };
+  await data.writeDraft(data.draftKey(owner, session, 'payment_out'), { op_id: 'fresh', amount: '', kind: 'payment_out', __recovery_currency: 'USD', __operation_conflict: 'Review', __recovery_request: request });
+  const recovered = (await data.listRecoveredDrafts(owner))[0]!;
+  expect(recovered.request).toBeUndefined();
+  expect(recovered.request_error).toMatch(/enter an amount/i);
+});
+
+it('uses the original session currency for an ordinary settings patch', async () => {
+  const data = await import('../src/client/data');
+  const request = { path: `/api/sessions/${session}`, method: 'PATCH', body: { op_id: 'old', big_blind_minor: '100' } };
+  await data.writeDraft(data.draftKey(owner, session, 'settings'), { op_id: 'fresh', blind: '1', currency: 'JPY', __recovery_currency: 'USD', __operation_conflict: 'Review', __recovery_request: request });
+  expect((await data.listRecoveredDrafts(owner))[0]!.request?.body).toMatchObject({ big_blind_minor: '100' });
+});
+
+it('does not infer the attempted request from a conflicting historical operation binding', async () => {
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, 'correction');
+  await data.writeDraft(`${owner}/_operations/requests/old`, { request: { path: `/api/sessions/${session}/entries/entry/void`, method: 'POST', body: { op_id: 'old', replacement_amount_minor: '1000' } }, source: { key, value: { op_id: 'old', amount: '10' } } });
+  await data.writeDraft(key, { op_id: 'fresh', amount: '50', __recovery_currency: 'USD', __operation_conflict: 'Review' });
+  const recovered = (await data.listRecoveredDrafts(owner)).find(item => item.key === key)!;
+  expect(recovered.request).toBeUndefined();
+  expect(recovered.uncertain).toBe(true);
+});
+
+
+it('blocks stale continued typing until the banker explicitly reviews the adopted draft', async () => {
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, 'payment_out', 'player');
+  const original = { op_id: 'fresh', amount: '50.00' };
+  await data.writeDraft(key, original);
+  const begin = source.indexOf('function draftForm(');
+  const end = source.indexOf("\nit.each([false, true])('adopts", begin);
+  const code = ts.transpileModule(source.slice(begin, end).replace('const form = useDraft(formKey, initial);', 'const form = useDraft(formKey, initial, { requireConflictReview: true });') + '\nreturn draftForm;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const create = Function('ts', 'readFileSync', 'runInNewContext', 'window', 'crypto', 'structuredClone', 'Event', 'CustomEvent', code)(ts, readFileSync, runInNewContext, window, crypto, structuredClone, Event, CustomEvent);
+  const harness = create(data, key, original) as { render: () => { ready: boolean; value: typeof original; update: (value: typeof original) => void; reviewRequired?: boolean; acknowledgeReview?: () => void; withSnapshot: (action: () => Promise<unknown>) => Promise<unknown> }; close: () => void };
+  let form = harness.render();
+  try {
+    await vi.waitFor(() => { form = harness.render(); expect(form.ready).toBe(true); });
+    vi.resetModules();
+    const other = await import('../src/client/data');
+    await other.writeDraft(key, { ...original, amount: '75.00' });
+    form.update({ ...original, amount: '' });
+    await vi.waitFor(() => { form = harness.render(); expect(form.value.amount).toBe('75.00'); expect(form.reviewRequired).toBe(true); });
+    form.update({ ...form.value, amount: '75.0025.00' });
+    await data.flushDraftWrites();
+    expect((await other.readDraft<typeof original>(key))?.amount).toBe('75.00');
+    const action = vi.fn(async () => undefined);
+    await expect(form.withSnapshot(action)).rejects.toThrow(/review/i);
+    expect(action).not.toHaveBeenCalled();
+    form.acknowledgeReview!();
+    form = harness.render();
+    expect(form.reviewRequired).toBe(false);
+    form.update({ ...form.value, amount: '80.00' });
+    await data.flushDraftWrites();
+    expect((await other.readDraft<typeof original>(key))?.amount).toBe('80.00');
+  } finally { harness.close(); }
 });
