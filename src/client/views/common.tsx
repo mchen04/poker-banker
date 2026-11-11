@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Banker, OutboxItem } from '../data';
-import { ApiError, deleteDraft, prepareDraftSubmission, readDraft, releaseRejectedDraft, replaySubmittedDraft, writeDraft, type DraftRequest } from '../data';
+import { deleteDraft, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftRequest } from '../data';
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
@@ -98,8 +98,7 @@ export function useDraft<T extends object>(key: string, initial: T) {
       if (first) {
         const prepared = await prepareDraftSubmission(key, value, request);
         if (prepared.previouslyConfirmed) { submitted.current = undefined; if (active.current) setValue(prepared.value); throw new Error('The previous form was saved. Review this new draft and save again.'); }
-        request = prepared.request; first = prepared.first;
-        submitted.current = request;
+        submitted.current = prepared.request;
         if (active.current) setValue(prepared.value);
       }
       let result: R;
@@ -109,11 +108,6 @@ export function useDraft<T extends object>(key: string, initial: T) {
         if (restored && !restored.__submitted && active.current) {
           submitted.current = undefined;
           setValue(restored);
-        } else if (first && problem instanceof ApiError && problem.status >= 400 && problem.status < 500 && ![401, 403, 429].includes(problem.status) && problem.code !== 'idempotency_mismatch' && active.current) {
-          submitted.current = undefined;
-          const fresh = { ...value, ...('op_id' in value ? { op_id: crypto.randomUUID() } : {}) };
-          delete fresh.__submitted;
-          await releaseRejectedDraft(key, request, fresh); setValue(fresh);
         }
         throw problem;
       }

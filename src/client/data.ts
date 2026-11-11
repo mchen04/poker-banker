@@ -5,6 +5,12 @@ export type Banker = { id: string; username: string };
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code: string) { super(message); }
 }
+export function isProvenNotApplied(problem: unknown): boolean {
+  return problem instanceof ApiError && problem.status >= 400 && problem.status < 500
+    && ![401, 403, 408, 415, 429].includes(problem.status)
+    && typeof problem.code === 'string' && problem.code.trim().length > 0
+    && !['request_failed', 'idempotency_mismatch'].includes(problem.code);
+}
 export type OutboxItem = {
   op_id: string;
   banker_id: string;
@@ -204,7 +210,6 @@ async function finishDraftSubmission(key: string, request: DraftRequest, replace
   await done; changed();
   return matched;
 }
-export async function releaseRejectedDraft(key: string, request: DraftRequest, value: object) { if (!await finishDraftSubmission(key, request, value)) throw new Error('This submitted form was cleared in another tab. Check your signed-in account.'); }
 export async function listSubmittedDrafts(banker: string): Promise<SubmittedDraft[]> {
   return (await all<DraftRecord>('drafts')).filter(record => record.banker_id === banker).flatMap(record => {
     const request = (record.value as DraftValue | null)?.__submitted;
@@ -221,7 +226,7 @@ export async function replaySubmittedDraft<T>(key: string): Promise<T> {
   let result: T;
   try { result = await api<T>(request.path, request.method, request.body); }
   catch (problem) {
-    if (problem instanceof ApiError && ((problem.status === 400 && ['invalid_request', 'outside_timer_bounds'].includes(problem.code)) || (problem.status === 409 && problem.code === 'entries_outside_timing'))) {
+    if (isProvenNotApplied(problem)) {
       const editable = { ...value, op_id: crypto.randomUUID() };
       delete editable.__submitted;
       if (!await finishDraftSubmission(key, request, editable, false, epoch)) throw new Error('This submitted form was cleared in another tab. Check your signed-in account.');
@@ -363,7 +368,7 @@ export async function clearBankerData(banker: string): Promise<void> {
   await done;
   changed();
 }
-async function claim(banker: string): Promise<(OutboxItem & { previously_uncertain: boolean }) | undefined> {
+async function claim(banker: string): Promise<OutboxItem | undefined> {
   const db = await storage();
   const transaction = db.transaction('outbox', 'readwrite');
   const done = complete(transaction);
@@ -373,7 +378,6 @@ async function claim(banker: string): Promise<(OutboxItem & { previously_uncerta
   for (const item of items) if (!heads.has(item.session_id)) heads.set(item.session_id, item);
   const now = Date.now();
   const item = [...heads.values()].find(item => item.status !== 'rejected' && item.next_attempt_at <= now && (item.lease_until ?? 0) <= now);
-  const previously_uncertain = item ? outboxUncertain(item) : false;
   if (item) {
     item.status = 'sending';
     item.delivery = 'uncertain';
@@ -382,7 +386,7 @@ async function claim(banker: string): Promise<(OutboxItem & { previously_uncerta
     store.put(item);
   }
   await done;
-  return item ? { ...item, previously_uncertain } : undefined;
+  return item;
 }
 async function acknowledge(banker: string, item: OutboxItem, state: SessionState) {
   const db = await storage();
@@ -420,8 +424,8 @@ export function syncOutbox(banker: string, onSaved: (state: SessionState, item: 
         try {
           state = await api<SessionState>(item.path, item.method, item.body);
         } catch (error) {
-          const rejected = error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 429;
-          const notApplied = rejected && !item.previously_uncertain && ![401, 403].includes((error as ApiError).status) && (error as ApiError).code !== 'idempotency_mismatch';
+          const rejected = error instanceof ApiError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status);
+          const notApplied = isProvenNotApplied(error);
           await updateItem(item.op_id, current => ({
             ...current, status: rejected ? 'rejected' : 'uncertain', delivery: notApplied ? 'not_applied' : 'uncertain',
             next_attempt_at: Date.now() + Math.min(30000, 1000 * 2 ** Math.min(current.attempts, 5)),

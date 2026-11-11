@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, newerSnapshot, pollSession } from '../src/client/data';
+import { ApiError, api, isProvenNotApplied, newerSnapshot, pollSession } from '../src/client/data';
 import { deriveSession, type SessionSettings } from '../src/domain/session';
 
 const settings: SessionSettings = {
@@ -45,4 +45,41 @@ describe('HTTP boundaries', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 304 })));
     expect(await pollSession('/api/sessions/s', '3')).toBeUndefined();
   });
+});
+
+describe('confirmed mutation rejection policy', () => {
+  it.each([
+    [400, 'invalid_request'], [400, 'outside_timer_bounds'], [404, 'not_found'],
+    [409, 'already_seated'], [409, 'session_closed'], [409, 'already_voided'],
+    [409, 'revision_mismatch'], [409, 'entries_outside_timing'], [422, 'invalid_player'],
+  ])('settles an explicit %i %s rejection even after a lost reply', (status, code) => {
+    expect(isProvenNotApplied(new ApiError('Rejected', status, code))).toBe(true);
+  });
+  it.each([
+    [401, 'unauthorized'], [403, 'invalid_origin'], [408, 'request_timeout'],
+    [415, 'json_required'], [429, 'auth_locked'], [409, 'idempotency_mismatch'],
+    [400, 'request_failed'], [409, 'request_failed'], [404, ''], [409, '   '],
+    [500, 'internal_error'], [502, 'bad_gateway'], [503, 'unavailable'],
+  ])('keeps %i %s uncertain when it cannot settle a previous attempt', (status, code) => {
+    expect(isProvenNotApplied(new ApiError('Unconfirmed', status, code))).toBe(false);
+  });
+  it.each([new TypeError('Connection lost'), new DOMException('Timed out', 'AbortError'), { status: 409, code: 'already_seated' }])('keeps transport and unverified errors uncertain: %s', problem => {
+    expect(isProvenNotApplied(problem)).toBe(false);
+  });
+  it('does not mistake an HTTP error without an API code for confirmed nonapplication', async () => {
+    vi.stubGlobal('window', { setTimeout, clearTimeout });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { message: 'Gateway refused this request' } }), { status: 409 })));
+    let problem: unknown;
+    try { await api('/api/sessions/s/players', 'POST', {}); } catch (error) { problem = error; }
+    expect(problem).toBeInstanceOf(ApiError);
+    expect(isProvenNotApplied(problem)).toBe(false);
+  });
+});
+
+it.each([null, 409, {}, ['already_seated']])('does not accept a malformed API error code as delivery proof: %s', async code => {
+  vi.stubGlobal('window', { setTimeout, clearTimeout });
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code, message: 'Unverified failure' } }), { status: 409 })));
+  let problem: unknown;
+  try { await api('/api/sessions/s/players', 'POST', {}); } catch (error) { problem = error; }
+  expect(isProvenNotApplied(problem)).toBe(false);
 });
