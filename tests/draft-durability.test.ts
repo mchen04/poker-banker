@@ -184,7 +184,7 @@ it.each([false, true])('retains the latest edit behind a frozen cross-tab reques
   await secondFailure;
 
   expect(await data.readDraft(key)).toEqual({ ...original, __submitted: submitted });
-  expect(await data.listSubmittedDrafts(owner)).toEqual([{ key, form: 'buy_in', request: submitted }]);
+  expect((await data.listSubmittedDrafts(owner)).map(({ key, form, request }) => ({ key, form, request }))).toEqual([{ key, form: 'buy_in', request: submitted }]);
   expect(data.draftSaveFailed(key)).toBe(true);
   await expect(data.flushDraftWrites()).rejects.toThrow('Not saved on this device');
   const bodies = serverReply(rejected);

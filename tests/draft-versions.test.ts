@@ -2,11 +2,13 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DraftRequest } from '../src/client/data';
 
 type Row = { key?: string; op_id?: string; value?: unknown; [name: string]: unknown };
-type RequestDouble = { result?: unknown; onsuccess?: () => void };
+type RequestDouble = { result?: unknown; error?: DOMException; onsuccess?: () => void; onerror?: () => void };
 function sharedStorage() {
   let rows = new Map(['drafts', 'outbox', 'snapshots'].map(name => [name, new Map<string, Row>()]));
   let active = false;
   let quota = false;
+  let failedRead: 'readonly' | 'any' | undefined;
+  let hold: { started: () => void; release?: () => void } | undefined;
   const waiting: (() => void)[] = [];
   const database = {
     transaction(_names: string | string[], mode?: string) {
@@ -14,6 +16,7 @@ function sharedStorage() {
       let timer: ReturnType<typeof setTimeout> | undefined;
       let finished = false;
       let ready = false;
+      let paused = false;
       const actions: (() => void)[] = [];
       const release = () => {
         finished = true;
@@ -35,7 +38,13 @@ function sharedStorage() {
           const request = (operation: (store: Map<string, Row>) => unknown, write = false) => {
             const result: RequestDouble = {};
             if (timer) clearTimeout(timer);
-            actions.push(() => {
+            const perform = () => {
+              if (!write && failedRead && (failedRead === 'any' || mode !== 'readwrite')) {
+                failedRead = undefined;
+                result.error = new DOMException('Storage read failed', 'UnknownError');
+                result.onerror?.();
+                return;
+              }
               if (write && quota) {
                 tx.error = new DOMException('Storage quota exceeded', 'QuotaExceededError');
                 tx.abort();
@@ -43,6 +52,15 @@ function sharedStorage() {
               }
               result.result = structuredClone(operation(local.get(name)!));
               result.onsuccess?.();
+            };
+            actions.push(() => {
+              if (write && hold) {
+                const held = hold;
+                hold = undefined;
+                paused = true;
+                held.release = () => { perform(); paused = false; pump(); };
+                held.started();
+              } else perform();
             });
             pump();
             return result;
@@ -58,7 +76,7 @@ function sharedStorage() {
       };
       let busy = false;
       function pump() {
-        if (!ready || finished || busy) return;
+        if (!ready || finished || busy || paused) return;
         const action = actions.shift();
         if (action) {
           busy = true;
@@ -86,6 +104,15 @@ function sharedStorage() {
     state: () => structuredClone(rows),
     draft: (key: string) => structuredClone(rows.get('drafts')!.get(key)?.value),
     quota: (full: boolean) => { quota = full; },
+    failNextRead: () => { failedRead = 'readonly'; },
+    failNextGet: () => { failedRead = 'any'; },
+    holdNextWrite: () => {
+      let started!: () => void;
+      const pending = new Promise<void>(resolve => { started = resolve; });
+      const held = { started, release: undefined as (() => void) | undefined };
+      hold = held;
+      return { started: pending, release: () => held.release!() };
+    },
   };
 }
 const owner = 'banker';
@@ -188,15 +215,16 @@ it.each(['read', 'list'] as const)('requires review of a newer frozen record bef
   const a = await freshTab();
   await a.writeDraft(key, original);
   await a.prepareDraftSubmission(key, original, request);
-  if (observation === 'read') await a.readDraft(key);
-  else await a.listSubmittedDrafts(owner);
+  let cursor: import('../src/client/data').DraftCursor = {};
+  if (observation === 'read') await a.readDraft(key, cursor);
+  else cursor = (await a.listSubmittedDrafts(owner))[0]!.cursor;
   const b = await freshTab();
   await b.readDraft(key);
   await b.writeDraft(key, newer);
   const before = storage.state();
   const server = heldReply(false);
   server.release();
-  await settle(a.replaySubmittedDraft(key));
+  await settle(a.replaySubmittedDraft(key, () => true, cursor));
   expect(storage.state()).toEqual(before);
   expect(server.fetch).not.toHaveBeenCalled();
 });
@@ -243,4 +271,202 @@ it('does not clear a newer draft with consent collected before the other tab sav
   const before = storage.state();
   await expect(a.clearBankerData(owner, consent)).rejects.toThrow('Local work changed');
   expect(storage.state()).toEqual(before);
+});
+
+it.each(['write', 'discard', 'freeze', 'enqueue'] as const)('keeps a stale %s cursor independent from another form and background reads in the same tab module', async action => {
+  const storage = sharedStorage();
+  const tab = await freshTab();
+  await tab.writeDraft(key, original);
+  const stale: import('../src/client/data').DraftCursor = {};
+  const fresh: import('../src/client/data').DraftCursor = {};
+  await tab.readDraft(key, stale);
+  await tab.readDraft(key, fresh);
+  await tab.writeDraft(key, newer, fresh);
+  await tab.readDraft(key);
+  const before = storage.state();
+  if (action === 'write') await settle(tab.writeDraft(key, edited, stale));
+  if (action === 'discard') await settle(tab.deleteDraft(key, () => true, stale));
+  if (action === 'freeze') await settle(tab.prepareDraftSubmission(key, original, request, () => true, stale));
+  if (action === 'enqueue') await settle(tab.enqueue({ ...enqueueInput, draft_cursor: stale }));
+  expect(storage.state()).toEqual(before);
+  expect(storage.draft(key)).toEqual(newer);
+});
+
+it.each([['quota', 'write'], ['quota', 'enqueue'], ['conflict', 'write'], ['conflict', 'enqueue']] as const)('does not pair an unsaved %s value with another tab\'s newer permission to %s', async (failure, action) => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await a.readDraft(key, cursor);
+  await a.writeDraft(key, original, cursor);
+  const b = await freshTab();
+  await b.readDraft(key);
+  if (failure === 'quota') {
+    storage.quota(true);
+    await expect(a.writeDraft(key, edited, cursor)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+    storage.quota(false);
+  }
+  await b.writeDraft(key, newer);
+  if (failure === 'conflict') await settle(a.writeDraft(key, edited, cursor));
+  const before = storage.state();
+  const restored = await a.readDraft<typeof edited>(key, cursor);
+  if (restored?.amount === edited.amount) {
+    if (action === 'write') await settle(a.writeDraft(key, restored, cursor));
+    else await settle(a.enqueue({ ...enqueueInput, body: { ...request.body, amount_minor: '5000' }, draft_cursor: cursor }));
+    expect(storage.state()).toEqual(before);
+    expect(await a.listOutbox(owner)).toEqual([]);
+  } else expect(restored).toEqual(newer);
+  expect(storage.draft(key)).toEqual(newer);
+});
+
+it('permits saving only after a stale writer adopts and reviews the actual current draft', async () => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await a.readDraft(key, cursor);
+  await a.writeDraft(key, original, cursor);
+  const b = await freshTab();
+  await b.readDraft(key);
+  await b.writeDraft(key, newer);
+  let problem: unknown;
+  try { await a.writeDraft(key, edited, cursor); } catch (error) { problem = error; }
+  expect(problem).toBeInstanceOf(a.DraftConflictError);
+  const conflict = problem as InstanceType<typeof a.DraftConflictError>;
+  expect(conflict.value).toEqual(newer);
+  a.acceptDraftConflict(key, cursor, conflict);
+  expect(await a.readDraft(key, cursor)).toEqual(newer);
+  await a.writeDraft(key, edited, cursor);
+  expect(storage.draft(key)).toEqual(edited);
+  expect(a.hasPendingLocalWrites()).toBe(false);
+});
+
+it.each([false, true])('an enqueue reservation includes own earlier writes but excludes own later edits (laterEdit=%s)', async laterEdit => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await a.readDraft(key, cursor);
+  await a.writeDraft(key, original, cursor);
+  const hold = storage.holdNextWrite();
+  const prior = { ...original, amount: '11' };
+  const savingPrior = a.writeDraft(key, prior, cursor);
+  await hold.started;
+  const queuing = a.enqueue({ ...enqueueInput, body: { ...request.body, amount_minor: '1100' }, draft_cursor: cursor, draft_value: prior });
+  const result = settle(queuing);
+  const savingLater = laterEdit ? a.writeDraft(key, newer, cursor) : Promise.resolve();
+  hold.release();
+  await savingPrior;
+  await savingLater;
+  await result;
+  if (laterEdit) {
+    expect(storage.draft(key)).toEqual(newer);
+    expect(await a.listOutbox(owner)).toEqual([]);
+  } else {
+    expect(storage.draft(key)).toBeUndefined();
+    expect((await a.listOutbox(owner)).map(item => item.body)).toEqual([{ ...request.body, amount_minor: '1100' }]);
+  }
+});
+
+it('loads the current frozen record for a key-only recovery while preserving its later edit and original request', async () => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  await a.writeDraft(key, original);
+  const b = await freshTab();
+  await b.prepareDraftSubmission(key, original, request);
+  await a.writeDraft(key, newer);
+  const server = heldReply(false);
+  server.release();
+  await b.replaySubmittedDraft(key);
+  await a.flushDraftWrites();
+  const retained = storage.draft(key) as typeof newer & { __submitted?: DraftRequest };
+  expect(retained.amount).toBe('25');
+  expect(retained.op_id).not.toBe(original.op_id);
+  expect(retained.__submitted).toBeUndefined();
+  expect(a.hasPendingLocalWrites()).toBe(false);
+  expect(a.draftSaveFailed(key)).toBe(false);
+  expect(server.fetch).toHaveBeenNthCalledWith(2, request.path, expect.objectContaining({ body: JSON.stringify(request.body) }));
+});
+
+it('retains the dirty value baseline when a restoring read fails before a later edit', async () => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await a.readDraft(key, cursor);
+  await a.writeDraft(key, original, cursor);
+  storage.quota(true);
+  await expect(a.writeDraft(key, edited, cursor)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+  storage.quota(false);
+  const b = await freshTab();
+  await b.writeDraft(key, newer);
+  const restoring: import('../src/client/data').DraftCursor = {};
+  storage.failNextRead();
+  const restored = await a.readDraft<typeof edited>(key, restoring);
+  expect(restored).toEqual(edited);
+  await expect(a.writeDraft(key, { ...restored, amount: '124' }, restoring)).rejects.toBeInstanceOf(a.DraftConflictError);
+  expect(storage.draft(key)).toEqual(newer);
+});
+
+it('retains the first attempted write baseline after quota rejects its transaction', async () => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  storage.quota(true);
+  await expect(a.writeDraft(key, original)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+  storage.quota(false);
+  const b = await freshTab();
+  await b.writeDraft(key, newer);
+  await expect(a.flushDraftWrites()).rejects.toThrow('Not saved on this device');
+  expect(storage.draft(key)).toEqual(newer);
+});
+
+it.each([false, true])('reviews an absent draft before retry without approving a later insert (inserted=%s)', async inserted => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  await a.writeDraft(key, original);
+  storage.quota(true);
+  await expect(a.writeDraft(key, edited)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+  storage.quota(false);
+  const b = await freshTab();
+  await b.readDraft(key);
+  await b.deleteDraft(key);
+  const cursor: import('../src/client/data').DraftCursor = {};
+  expect(await a.readDraft(key, cursor)).toEqual(edited);
+  if (inserted) {
+    await b.writeDraft(key, newer);
+    await expect(a.flushDraftWrites()).rejects.toThrow('Not saved on this device');
+    expect(storage.draft(key)).toEqual(newer);
+  } else {
+    await a.flushDraftWrites();
+    expect(storage.draft(key)).toEqual(edited);
+    expect(a.hasPendingLocalWrites()).toBe(false);
+  }
+});
+
+it.each([false, true])('does not approve another tab after the first draft observation fails (inserted=%s)', async inserted => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  storage.failNextGet();
+  await expect(a.writeDraft(key, original)).rejects.toMatchObject({ name: 'UnknownError' });
+  const b = await freshTab();
+  if (inserted) {
+    await b.writeDraft(key, newer);
+    await expect(a.flushDraftWrites()).rejects.toThrow('Not saved on this device');
+    expect(storage.draft(key)).toEqual(newer);
+  } else {
+    await a.readDraft(key);
+    await a.flushDraftWrites();
+    expect(storage.draft(key)).toEqual(original);
+    expect(a.hasPendingLocalWrites()).toBe(false);
+  }
+});
+
+it('does not let a first-write enqueue reservation stay unbound after another tab saves', async () => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  const b = await freshTab();
+  const saving = a.writeDraft(key, original);
+  const queuing = settle(a.enqueue(enqueueInput));
+  const concurrent = b.writeDraft(key, newer);
+  await saving;
+  await concurrent;
+  await queuing;
+  expect(storage.draft(key)).toEqual(newer);
+  expect(await a.listOutbox(owner)).toEqual([]);
 });
