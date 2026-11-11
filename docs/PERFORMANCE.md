@@ -102,3 +102,32 @@ The default 300-session seed and all five repetitions were proved locally agains
 `--runs`, `--samples`, `--sessions` and `--api-only` support short diagnostic runs; reduced runs are not a five-repetition default baseline. `--output` must stay under `evidence/bench/live/`. `--allow-loopback-certificate` is restricted to an explicitly selected local server and cannot disable deployed-target TLS validation. A missing-browser first attempt and a reproduced error-counter bug are retained in the live evidence; subsequent full receipts use the fixed source.
 
 The independent audit found and closed a live-work validation gap after the full application suite had started: only the benchmark validator and its existing test changed. Final mini typecheck and the five affected tests passed (`evidence/bench/live/mini-cumulative-validation.log`), followed by a fresh full 300-session/five-repetition live proof with exact source hashes. Application/API/domain code stayed unchanged. The single full mini run passed typecheck, Vitest 136/136 and Playwright 52/52 across all four projects with retries zero; receipt `evidence/round-5-full-suite.log`. Screenshots were refreshed to `evidence/screenshots/` (256 PNGs). No full-suite repeat was needed for the isolated validator check.
+
+## Round 6 players query batching
+
+The required read-path fix replaces the per-player loop with one scoped set-based history load and the same pure session derivations and currency reducers. The complete authenticated roster request falls from **125 database calls to seven** for 40 players. That includes auth, BEGIN, SET TRANSACTION and COMMIT; roster data uses three SELECTs. Individual player history already used a constant seven calls and remains seven, now sharing the batch helper. Empty roster responses use fewer calls, never a per-player loop.
+
+Before deleting the old path, an actual embedded-Postgres comparison checked all 63 roster/search responses and 280 player histories across 21 bankers against the new implementation. JSON was byte-identical. Both paths used the same actual SELECT literal for server time so open-player durations were comparable. The comparison was repeated against the integrated Round 6 domain and schema. Temporary legacy code was removed from application/test sources afterward; its source and test receipt remain in `evidence/round-6/R6/equivalence-current.json` and adjacent evidence. The permanent real-Postgres query-budget test failed before with 125 calls and passed after with seven. Existing hand-computed lifecycle, reports and isolation tests remain the behavioral gates.
+
+Client roster searches now debounce for 250 ms on both player search screens. A six-character typing burst sends one settled query. New-player creation waits for that query, so an outstanding lookup cannot bypass the exact-name warning. The original same-day session/draft warning journey and new search journey passed on all four projects, without retries or increased timeouts.
+
+### Alternating measurements
+
+Five A,B pairs ran sequentially on the shared mini with fresh realistic databases and the same production release, Node and dependency versions. Each case used `pnpm bench --runs 1 --samples 1 --wait-ms 0 --skip-build --metrics api.players`. The campaign used `scripts/bench-compare.ts`; raw samples, versions, host observations, status, bytes and cleanup receipts are in `evidence/bench/hillclimb/roster-r6/`. Other work stayed running. This is a loopback server-duration measurement through the benchmark-only Server-Timing header; it does not measure Neon or Vercel latency.
+
+| Metric | Before median ms | Before p95 ms | Before range ms | After median ms | After p95 ms | After range ms | Errors / samples per side | Work per measured response | p95 goal ms | Before / after |
+| --- | ---: | ---: | --- | ---: | ---: | --- | --- | --- | ---: | --- |
+| api.players | 128.275 | 163.313 | 113.296 to 163.313 | 83.289 | 100.138 | 80.360 to 100.138 | 0 / 5 | 40 players, 300 closed sessions, 10,311 response bytes | 150 | miss / pass |
+
+Median latency decreased **35.1%**. All five paired runs improved, the ranges do not overlap, and the 44.986 ms median difference exceeds the 14.791 ms MAD noise floor. With only five independent runs, nearest-rank p95 is the maximum; this is not a production SLO estimate. There are ten measured requests, 400 returned player summaries in total and zero errors. Each database also contained the nine-player/60-entry open session and 20 other bankers.
+
+| Side | Other CPU median (cores) | Other CPU range (cores) | Noisy-host threshold crossed |
+| --- | ---: | --- | --- |
+| A | 2.374 | 1.545 to 3.684 | no |
+| B | 2.302 | 1.594 to 2.644 | no |
+
+The host has ten logical cores; the policy threshold is five cores of other CPU. These are lifetime-decayed macOS ps readings, not instantaneous utilization. Per-case observations and load-generator checks remain attached to the samples. No other work was stopped.
+
+The before limiter was 118 extra serialized calls and repeated per-player ledger scans. After batching, an unreported diagnostic SQL plan aggregated 12,148 ledger rows into 2,409 player/session groups in about 46.9 ms, dominated by JSON aggregation; the ledger scan itself took about 0.74 ms. Remaining work includes JSON transfer/decoding and pure derivation. The separate whole-roster diagnostic was 84.0 ms; this is an explanatory single sample, not an A/B latency result or exact CPU attribution. See `evidence/round-6/R6/bulk-plan.txt` and `bulk-diagnostic.json`. Further SQL/domain optimizations and deployed latency remain unmeasured; no speculative index or stored totals were added.
+
+The measured server app/store files match the integrated R6 files. Final R3 follow-ups only affect client timestamp reliability and are outside this timed server-read path. The decision is recorded in `evidence/bench/hillclimb.tsv` as R6. One required batching change is kept, with no rejected optimization attempts this round.

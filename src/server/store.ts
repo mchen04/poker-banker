@@ -95,8 +95,11 @@ export async function playerRecord(db: Queryable, banker: string, player: string
   return result.rows[0] ?? notFound();
 }
 
-export async function playerSessions(db: Queryable, banker: string, player: { id: string; display_name: string }) {
-  const rows = await db.query<SessionRow & { entries: LedgerEntry[] }>(`SELECT ${sessionColumns},
+async function playerSessionHistories(db: Queryable, banker: string, players: { id: string; display_name: string }[]) {
+  const histories = new Map(players.map(player => [player.id, [] as { session: SessionSettings; revision: string; player: ReturnType<typeof deriveSession>['players'][number]; has_entries: boolean }[]]));
+  if (!players.length) return histories;
+  const records = new Map(players.map(player => [player.id, player]));
+  const rows = await db.query<SessionRow & { owner_player_id: string; entries: LedgerEntry[] }>(`SELECT ${sessionColumns}, sp.player_id AS owner_player_id,
     coalesce(jsonb_agg(jsonb_build_object(
       'id', e.id, 'player_id', e.player_id, 'kind', e.kind, 'amount_minor', e.amount_minor::text,
       'note', e.note, 'method', e.method, 'occurred_at', ${isoTime('e.occurred_at')},
@@ -104,18 +107,22 @@ export async function playerSessions(db: Queryable, banker: string, player: { id
     )) FILTER (WHERE e.id IS NOT NULL), '[]'::jsonb) AS entries
     FROM session_players sp JOIN game_sessions s ON s.id = sp.session_id AND s.banker_id = sp.banker_id
     LEFT JOIN ledger_entries e ON e.session_id = sp.session_id AND e.player_id = sp.player_id AND e.banker_id = sp.banker_id
-    WHERE sp.banker_id = $1 AND sp.player_id = $2 GROUP BY s.id ORDER BY s.played_on DESC,s.id DESC`, [banker, player.id]);
+    WHERE sp.banker_id = $1 AND sp.player_id = ANY($2::uuid[]) GROUP BY s.id,sp.player_id ORDER BY s.played_on DESC,s.id DESC`, [banker, players.map(player => player.id)]);
   const now = await serverTime(db);
-  return rows.rows.map(row => {
-    const { banker_id: _, entries, revision, ...session } = row;
+  for (const row of rows.rows) {
+    const { banker_id: _, owner_player_id, entries, revision, ...session } = row;
+    const player = records.get(owner_player_id)!;
     const state = deriveSession(session, revision, [player], entries, [], now);
-    return { session, revision, player: state.players[0]!, has_entries: effectiveEntries(entries).length > 0 };
-  });
+    histories.get(player.id)!.push({ session, revision, player: state.players[0]!, has_entries: effectiveEntries(entries).length > 0 });
+  }
+  return histories;
 }
 
-export async function playerHistory(db: Queryable, banker: string, player: string) {
-  const record = await playerRecord(db, banker, player);
-  const history = await playerSessions(db, banker, record);
+export async function playerSessions(db: Queryable, banker: string, player: { id: string; display_name: string }) {
+  return (await playerSessionHistories(db, banker, [player])).get(player.id)!;
+}
+
+function summarizeHistory(history: Awaited<ReturnType<typeof playerSessions>>) {
   const cumulative = new Map<string, bigint>();
   const outstanding = new Map<string, { owed_to_banker: bigint; owed_by_banker: bigint }>();
   for (const item of history) {
@@ -128,9 +135,20 @@ export async function playerHistory(db: Queryable, banker: string, player: strin
     outstanding.set(item.session.currency, amounts);
   }
   return {
-    player: record,
     cumulative: [...cumulative].sort(([a], [b]) => a.localeCompare(b)).map(([currency, result]) => ({ currency, result_minor: String(result) })),
     outstanding: [...outstanding].sort(([a], [b]) => a.localeCompare(b)).map(([currency, values]) => ({ currency, owed_to_banker_minor: String(values.owed_to_banker), owed_by_banker_minor: String(values.owed_by_banker) })),
-    sessions: history.map(({ has_entries: _, ...item }) => item),
   };
+}
+
+export async function playerHistory(db: Queryable, banker: string, player: string) {
+  const record = await playerRecord(db, banker, player);
+  const history = await playerSessions(db, banker, record);
+  return { player: record, ...summarizeHistory(history), sessions: history.map(({ has_entries: _, ...item }) => item) };
+}
+
+export async function playerRoster(db: Queryable, banker: string, search: string) {
+  const players = await db.query<{ id: string; display_name: string; created_at: string }>(
+    'SELECT id,display_name,created_at::text FROM players WHERE banker_id=$1 AND position($2 in name_key)>0 ORDER BY name_key,id', [banker, search]);
+  const histories = await playerSessionHistories(db, banker, players.rows);
+  return players.rows.map(player => ({ ...player, ...summarizeHistory(histories.get(player.id)!) }));
 }

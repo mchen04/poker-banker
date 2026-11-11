@@ -4,6 +4,7 @@ import type { Rational } from '../../domain/rational';
 import { formatRational, formatSquareRoot as formatSquareRootForReport } from '../../domain/rational';
 import type { PlayerState, SessionSettings } from '../../domain/session';
 import { api, draftKey } from '../data';
+import { useDebouncedSearch } from '../search';
 import { currencyDecimal, duration, DraftRecovery, ErrorText, money, resultMoney, resultCurrencyDecimal, resultNumber, sessionLabel, Sheet, useClient, useDraft, useFormBusy } from './common';
 
 type CurrencyResult = { currency: string; result_minor: string };
@@ -15,6 +16,7 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
   const { notify } = useClient();
   const [players, setPlayers] = useState<Roster[]>([]);
   const [search, setSearch] = useState('');
+  const settledSearch = useDebouncedSearch(search);
   const [selected, setSelected] = useState<string | null>(null);
   const [history, setHistory] = useState<History | null>(null);
   const [report, setReport] = useState<Report | null>(null);
@@ -27,9 +29,9 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
   useEffect(() => () => dialogChange(false), [dialogChange]);
   useEffect(() => {
     let active = true;
-    void api<{ players: Roster[] }>(`/api/players?q=${encodeURIComponent(search)}`).then(result => { if (active) setPlayers(result.players); }).catch(problem => setError(problem.message));
+    void api<{ players: Roster[] }>(`/api/players?q=${encodeURIComponent(settledSearch)}`).then(result => { if (active) setPlayers(result.players); }).catch(problem => setError(problem.message));
     return () => { active = false; };
-  }, [search, refresh]);
+  }, [settledSearch, refresh]);
   useEffect(() => {
     if (!selected) return;
     let active = true;

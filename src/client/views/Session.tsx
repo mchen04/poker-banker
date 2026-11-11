@@ -1,4 +1,5 @@
 import { submittedAt } from '../clock';
+import { useDebouncedSearch } from '../search';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { EntryKind, LedgerEntry, PaymentMethod, PlayerState, SessionState } from '../../domain/session';
 import { currencyExponent, parseMoney } from '../../domain/money';
@@ -141,22 +142,25 @@ export function AddPlayerSheet() {
   const { banker, state, open } = useClient();
   const savedSearch = useDraft(draftKey(banker!.id, state!.session.id, 'add-player'), { op_id: crypto.randomUUID(), search: '' });
   const search = savedSearch.value.search;
+  const settledSearch = useDebouncedSearch(search);
+  const [loadedSearch, setLoadedSearch] = useState<string | null>(null);
+  const searching = loadedSearch !== search;
   const setSearch = (search: string) => savedSearch.update({ ...savedSearch.value, search });
   const [players, setPlayers] = useState<RosterPlayer[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   useFormBusy(busy);
-  useEffect(() => { let active = true; void api<{ players: RosterPlayer[] }>(`/api/players?q=${encodeURIComponent(search)}`).then(result => { if (active) setPlayers(result.players); }).catch(error => setError(error.message)); return () => { active = false; }; }, [search]);
+  useEffect(() => { let active = true; void api<{ players: RosterPlayer[] }>(`/api/players?q=${encodeURIComponent(settledSearch)}`).then(result => { if (active) { setPlayers(result.players); setLoadedSearch(settledSearch); } }).catch(error => { if (active) setError(error.message); }); return () => { active = false; }; }, [settledSearch]);
   async function add(body: Record<string, unknown>) {
     if (busy) return; setBusy(true); setError('');
     try { await savedSearch.submit(`/api/sessions/${state!.session.id}/players`, { op_id: savedSearch.value.op_id, ...body }, 'POST'); open(null); }
     catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not add player'); setBusy(false); }
   }
-  const exact = players.some(player => player.display_name.trim().toLowerCase() === search.trim().toLowerCase());
+  const exact = !searching && players.some(player => player.display_name.trim().toLowerCase() === search.trim().toLowerCase());
   const [confirmed, setConfirmed] = useState(false);
   if (!savedSearch.ready) return savedSearch.error ? <ErrorText text={savedSearch.error} /> : <p>Restoring draft…</p>;
   if (savedSearch.submitted) return <DraftRecovery pending={busy} recover={() => savedSearch.reconcile()} recovered={() => open(null)} />;
-  return <><label>Search players<input defaultValue={search} onChange={event => { setSearch(event.target.value); setConfirmed(false); }} placeholder="Name" /></label><p className="hint">Choose an existing player to keep their history together.</p><ul className="choice-list">{players.map(player => <li key={player.id}><button disabled={busy || state!.players.some(seated => seated.id === player.id)} onClick={() => { void add({ player_id: player.id }); }}>{player.display_name}{state!.players.some(seated => seated.id === player.id) ? ' · Already seated' : ''}</button></li>)}</ul>{search.trim() && <>{exact && <><p className="warning">An exact name match already exists. Add the existing player unless this is a different person.</p><label className="check"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />This is a different person</label></>}<button className="primary wide" disabled={busy || (exact && !confirmed)} onClick={() => { void add({ new_player_name: search.trim() }); }}>Add '{search.trim()}' as new</button></>}<ErrorText text={error} /></>;
+  return <><label>Search players<input defaultValue={search} onChange={event => { setSearch(event.target.value); setConfirmed(false); }} placeholder="Name" /></label><p className="hint">Choose an existing player to keep their history together.</p>{searching && <p role="status">Searching players…</p>}<ul className="choice-list">{players.map(player => <li key={player.id}><button disabled={busy || searching || state!.players.some(seated => seated.id === player.id)} onClick={() => { void add({ player_id: player.id }); }}>{player.display_name}{state!.players.some(seated => seated.id === player.id) ? ' · Already seated' : ''}</button></li>)}</ul>{search.trim() && <>{exact && <><p className="warning">An exact name match already exists. Add the existing player unless this is a different person.</p><label className="check"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />This is a different person</label></>}<button className="primary wide" disabled={busy || searching || (exact && !confirmed)} onClick={() => { void add({ new_player_name: search.trim() }); }}>Add '{search.trim()}' as new</button></>}<ErrorText text={error} /></>;
 }
 export function CorrectionSheet({ entryId }: { entryId: string }) {
   const { banker, state, open } = useClient();

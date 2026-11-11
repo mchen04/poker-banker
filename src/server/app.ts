@@ -9,7 +9,7 @@ import type { AppContext, AppEnv } from './context.js';
 import { authRoutes, authenticate } from './auth.js';
 import { ApiError, conflict, notFound } from './errors.js';
 import * as v from './validation.js';
-import { assertOpen, bump, command, event, insertEntry, loadSession, playerHistory, playerRecord, playerSessions, readSnapshot, serverTime, sessionRow } from './store.js';
+import { assertOpen, bump, command, event, insertEntry, loadSession, playerHistory, playerRecord, playerRoster, playerSessions, readSnapshot, serverTime, sessionRow } from './store.js';
 import { playerReport } from '../domain/report.js';
 import { viewerState, type SessionSettings } from '../domain/session.js';
 
@@ -269,15 +269,7 @@ export function createApp(pool: Database, config: Config = {}) {
   app.get('/api/players', async c => {
     const query = v.searchQuery.parse(c.req.query());
     const banker = c.get('banker').id;
-    const result = await readSnapshot(pool, async db => {
-      const players = await db.query<{ id: string }>('SELECT id FROM players WHERE banker_id = $1 AND position($2 in name_key) > 0 ORDER BY name_key,id', [banker, recordName(query.q ?? '')]);
-      const summaries = [];
-      for (const player of players.rows) {
-        const history = await playerHistory(db, banker, player.id);
-        summaries.push({ ...history.player, cumulative: history.cumulative, outstanding: history.outstanding });
-      }
-      return summaries;
-    });
+    const result = await readSnapshot(pool, db => playerRoster(db, banker, recordName(query.q ?? '')));
     return c.json({ players: result });
   });
   app.post('/api/players', c => mutate(c, pool, v.playerCreate, async (db, banker, input) => {
