@@ -32,7 +32,7 @@ game_sessions(id uuid pk, banker_id fk, name text, played_on date, currency char
 session_players(session_id fk, player_id fk, banker_id fk, added_at, pk(session_id, player_id))
 ledger_entries(id uuid pk, banker_id fk, session_id fk, player_id fk,
                kind 'buy_in'|'cash_out'|'payment_in'|'payment_out',
-               amount_minor bigint check > 0, note text null,
+               amount_minor bigint check (> 0, or = 0 for cash_out), note text null,
                voids_entry_id uuid null unique fk -> ledger_entries.id,
                created_at, revision bigint)
 session_events(id uuid pk, session_id fk, banker_id fk, kind 'created'|'renamed'|'closed'|'reopened'|'share_enabled'|'share_rotated'|'share_disabled',
@@ -47,6 +47,7 @@ Every row carries `banker_id`, and every query filters by the signed-in banker. 
 ### Ledger semantics
 
 - The ledger is append-only. Nothing is updated or deleted.
+- Every amount is positive except a `cash_out`, which may be zero when a player lost everything. A zero cash-out never creates a payment.
 - A correction is a void: a new row of the same kind with `voids_entry_id` pointing at the original, written with the same amount. The unique index on `voids_entry_id` stops a double void under concurrency. Editing an amount is a void plus a new entry in one transaction, and the API returns both.
 - Live (effective) entries are the rows that are not voids and are not voided.
 - Chips: `buy_in` gives a player chips, `cash_out` records chips returned. Money: `payment_in` is cash the player handed the banker, `payment_out` is cash the banker handed the player. The app records these and never moves money.
@@ -73,7 +74,7 @@ Cumulative, per player and per currency: sum of `result` over closed sessions on
 
 ## Concurrency and idempotency
 
-- Every mutating request carries an `op_id` (UUID v4) chosen by the client when the draft is created. The server stores `(banker_id, op_id)` with a hash of the canonical request body and the response, in the same transaction as the write. A replay with the same body returns the stored response. The same key with a different body returns `409 idempotency_mismatch`.
+- Every mutating request carries an `op_id` (UUID v4) chosen by the client when the draft is created. Once submitted, the request body is frozen with that `op_id`. If the reply is lost, the client replays the same request: a stored success completes the draft; a validation rejection returns the draft to editing with a fresh `op_id`; an uncertain write can be discarded only after the server shows it was never applied or the banker accepts that it may exist. The server stores `(banker_id, op_id)` with a hash of the canonical request body and the response, in the same transaction as the write. A replay with the same body returns the stored response. The same key with a different body returns `409 idempotency_mismatch`.
 - Every write to a session first locks its row with `SELECT ... FOR UPDATE`, checks status, writes, and increments `revision`. Writes to one session serialize; different sessions do not contend.
 - Close carries `expected_revision`. Ledger writes do not, because appends do not lose updates.
 
@@ -183,7 +184,7 @@ game_sessions  + location text null, game text null        -- free text with sug
                + started_at timestamptz null, ended_at timestamptz null, check ended_at >= started_at
 ledger_entries + kind 'expense'                             -- tips and meals, outside chips and settlement
                + method 'cash'|'venmo'|'zelle' null         -- required for payment_in and payment_out, null otherwise (check constraint)
-               + occurred_at timestamptz not null default now()
+               + occurred_at timestamptz null              -- null means the time is unknown
 session_events + kinds 'timer_started', 'timing_corrected', 'details_changed' with old and new values in detail
 ```
 
@@ -196,14 +197,16 @@ session_events + kinds 'timer_started', 'timing_corrected', 'details_changed' wi
 
 ### Session timer
 
-- `started_at` is set by Start timer, or automatically by the first buy-in when unset. `ended_at` is set by Close when unset. Reopen does not clear `ended_at`; the banker restarts timing explicitly if play resumes.
+- `started_at` is set by Start timer, or automatically by the first buy-in when unset and that buy-in has a known `occurred_at` (it takes that time). A buy-in with an unknown time leaves an unset timer unset, shown as "Start time unknown" until the banker sets it through Correct times. `ended_at` is set by Close when unset. Reopen does not clear `ended_at`; the banker restarts timing explicitly if play resumes.
 - `PATCH /api/sessions/:id/timing {op_id, started_at, ended_at|null}` corrects times and writes a `timing_corrected` event with old and new values. The session menu shows that history.
 - The client shows `(ended_at ?? server_now) - started_at`. The server returns `server_now` so device clocks do not matter, and the client advances it locally between polls.
 
 ### Per-player playing time
 
 - A player's intervals come from live chip entries ordered by `occurred_at`: a `buy_in` while not playing opens an interval, a `cash_out` closes it. Rebuys while playing do not open a new one. Leaving and re-entering produces two intervals.
-- `occurred_at` defaults to now and may be set on create or through a correction, for entries recorded late. It must be inside the session's timer bounds when they exist.
+- The client stamps `occurred_at` when the banker submits, using a clock checked against the last `server_now`. When the device clock disagrees by more than 2 minutes, or no server time has been seen since the app opened, it sends `null` and the time is unknown. The banker may set or correct it later through a correction.
+- Chip entries (`buy_in`, `cash_out`) with a known time must fall inside the session's timer bounds when they exist. Payments and expenses may fall after the game ends, so a late settlement after reopening is allowed.
+- A player with any chip entry of unknown time has an unavailable duration, never a guessed one.
 - A player's duration is the sum of their intervals. The table's duration is never used for a player.
 
 ### Result display
