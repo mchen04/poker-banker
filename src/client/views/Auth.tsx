@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, deleteDraft, draftKey, flushDraftWrites, requestPersistence, writeDraft, type Banker } from '../data';
+import { api, deleteDraft, draftKey, flushDraftWrites, requestPersistence, writeDraft, type Banker, type DraftCursor } from '../data';
 import { ErrorText } from './common';
 
 export type PendingRecoveryCodes = { banker: Banker; codes: string[] };
 
-export function Auth({ signedIn, pendingCodes, codesVisible, busyChanged }: { signedIn: (banker: Banker) => void; pendingCodes?: PendingRecoveryCodes; codesVisible?: (visible: boolean) => void; busyChanged?: (busy: boolean) => void }) {
+export function Auth({ signedIn, pendingCodes, pendingCursor, codesVisible, busyChanged }: { signedIn: (banker: Banker) => void; pendingCodes?: PendingRecoveryCodes; pendingCursor?: DraftCursor; codesVisible?: (visible: boolean) => void; busyChanged?: (busy: boolean) => void }) {
   const [mode, setMode] = useState<'login' | 'signup' | 'recover'>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -15,11 +15,12 @@ export function Auth({ signedIn, pendingCodes, codesVisible, busyChanged }: { si
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [backupFailed, setBackupFailed] = useState(false);
+  const [codesCursor] = useState<DraftCursor>(pendingCursor ? { ...pendingCursor } : { version: null });
   function setWorking(value: boolean) { setBusy(value); busyChanged?.(value); }
   useEffect(() => () => busyChanged?.(false), [busyChanged]);
   useEffect(() => {
-    if (pendingCodes) { setPending(pendingCodes); setSaved(false); void saveCodes(pendingCodes); }
-  }, [pendingCodes]);
+    if (pendingCodes) { codesCursor.version = pendingCursor?.version ?? null; setPending(pendingCodes); setSaved(false); void saveCodes(pendingCodes); }
+  }, [pendingCodes, pendingCursor]);
   useEffect(() => { codesVisible?.(pending !== null); return () => codesVisible?.(false); }, [pending !== null, codesVisible]);
   async function saveCodes(value: PendingRecoveryCodes, retry = false) {
     setWorking(true); setError('');
@@ -27,7 +28,7 @@ export function Auth({ signedIn, pendingCodes, codesVisible, busyChanged }: { si
     const problems: string[] = [];
     try { localStorage.setItem('pb-pending-codes', key); }
     catch (problem) { problems.push(problem instanceof Error ? problem.message : 'Could not save the recovery-code reminder'); }
-    try { await writeDraft(key, value); if (retry) await flushDraftWrites(); }
+    try { await writeDraft(key, value, codesCursor); if (retry) await flushDraftWrites(); }
     catch (problem) { problems.push(problem instanceof Error ? problem.message : 'Could not save recovery codes on this device'); }
     setBackupFailed(problems.length > 0);
     if (problems.length) setError(`Not saved on this device. Keep this page open and save your recovery codes. ${problems.join(' ')}`);
@@ -38,7 +39,7 @@ export function Auth({ signedIn, pendingCodes, codesVisible, busyChanged }: { si
     setWorking(true); setError('');
     const key = draftKey(pending.banker.id, 'account', 'recovery-codes');
     try {
-      await deleteDraft(key);
+      await deleteDraft(key, undefined, codesCursor);
       if (localStorage.getItem('pb-pending-codes') === key) localStorage.removeItem('pb-pending-codes');
       signedIn(pending.banker);
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not acknowledge your recovery codes'); }
@@ -55,6 +56,7 @@ export function Auth({ signedIn, pendingCodes, codesVisible, busyChanged }: { si
         const result = await api<{ banker: Banker; recovery_codes?: string[] }>(`/api/auth/${mode}`, 'POST', { username, password });
         if (mode === 'signup') {
           const value = { banker: result.banker, codes: result.recovery_codes! };
+          codesCursor.version = null;
           setPending(value);
           void requestPersistence();
           await saveCodes(value);

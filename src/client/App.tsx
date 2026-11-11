@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SessionState } from '../domain/session';
-import { bankerClient, blockBankerWork, clearBankerData, discoverAccount, discardItem, draftKey, outboxUncertain, invalidateBankerWork, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readBankerWork, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, resumeBankerWork, retryItem, storeSnapshot, syncOutbox, verifyBankerWork, type Banker, type BankerWork, type OutboxItem, type SubmittedDraft } from './data';
+import { bankerClient, blockBankerWork, clearBankerData, discoverAccount, discardItem, draftKey, outboxUncertain, invalidateBankerWork, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readBankerWork, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, resumeBankerWork, retryItem, storeSnapshot, syncOutbox, verifyBankerWork, type Banker, type BankerWork, type DraftCursor, type OutboxItem, type SubmittedDraft } from './data';
 import { usePwaUpdate } from './pwa';
 import { Auth, type PendingRecoveryCodes } from './views/Auth';
 import { AddPlayerSheet, CorrectionSheet, MoneySheet, PlayerSheet, SessionView } from './views/Session';
@@ -30,7 +30,7 @@ export function App() {
   const [accountChanged, setAccountChanged] = useState(false);
   const [reloadingAccount, setReloadingAccount] = useState(false);
   const [formBusy, setFormBusy] = useState(false);
-  const [recovery, setRecovery] = useState<{ kind: 'codes'; value: PendingRecoveryCodes } | { kind: 'unresolved'; banker: Banker; error: string } | null>(null);
+  const [recovery, setRecovery] = useState<{ kind: 'codes'; value: PendingRecoveryCodes; cursor: DraftCursor } | { kind: 'unresolved'; banker: Banker; error: string } | null>(null);
   const [authCodesVisible, setAuthCodesVisible] = useState(false);
   const current = useRef(state);
   const chosen = useRef(sessionId);
@@ -107,11 +107,12 @@ export function App() {
   }, [resetAuth]);
   const restoreAccount = useCallback(async (account: Banker, isCurrent: () => boolean) => {
     try {
-      const pending = await readDraft<PendingRecoveryCodes>(draftKey(account.id, 'account', 'recovery-codes'));
+      const cursor: DraftCursor = {};
+      const pending = await readDraft<PendingRecoveryCodes>(draftKey(account.id, 'account', 'recovery-codes'), cursor);
       if (!isCurrent()) return;
       if (pending?.banker.id === account.id) {
         resetAuth({ clearIdentity: false });
-        setRecovery({ kind: 'codes', value: pending }); setChecking(false);
+        setRecovery({ kind: 'codes', value: pending, cursor }); setChecking(false);
       } else signedIn(account);
     } catch (problem) {
       if (!isCurrent()) return;
@@ -249,7 +250,7 @@ export function App() {
     const isCurrent = () => epoch.current === generation && activeBanker.current?.id === account;
     setCheckingForm(true); setError('');
     try {
-      const result = await replaySubmittedDraft<unknown>(form.key, isCurrent);
+      const result = await replaySubmittedDraft<unknown>(form.key, isCurrent, form.cursor);
       if (!isCurrent()) return;
       if (result && typeof result === 'object' && 'session' in result) {
         const saved = result as SessionState;
@@ -333,7 +334,7 @@ export function App() {
   if (checking) return <main className="auth"><DraftSaveStatus /><div className="brand-mark">PB</div><p>Opening your bank…</p></main>;
   if (accountChanged) return <main className="auth"><DraftSaveStatus /><div className="brand-mark">PB</div><h1>Account changed</h1><p>Reload account state to continue. Saved drafts and entries stay with their account.</p><ErrorText text={error} /><button className="primary wide" disabled={reloadingAccount} onClick={() => { void reloadAccount(); }}>{reloadingAccount ? 'Reloading…' : 'Reload account state'}</button></main>;
   if (recovery?.kind === 'unresolved' && !viewerToken) return <main className="auth"><div className="brand-mark">PB</div><h1>Restore your recovery codes</h1><p>Could not check this device for {recovery.banker.username}'s unacknowledged recovery codes. Retry before opening the workspace.</p><ErrorText text={recovery.error} /><ErrorText text={error} /><button className="primary wide" disabled={reloadingAccount} onClick={() => { void reloadAccount(); }}>{reloadingAccount ? 'Restoring…' : 'Retry restoring recovery codes'}</button></main>;
-  if (!banker && !viewerToken) return <>{updateBanner}{!authCodesVisible && recovery?.kind !== 'codes' && <DraftSaveStatus />}<ErrorText text={error} /><Auth signedIn={account => { const generation = epoch.current; void restoreAccount(account, () => epoch.current === generation); }} pendingCodes={recovery?.kind === 'codes' ? recovery.value : undefined} codesVisible={setAuthCodesVisible} busyChanged={setFormBusy} /></>;
+  if (!banker && !viewerToken) return <>{updateBanner}{!authCodesVisible && recovery?.kind !== 'codes' && <DraftSaveStatus />}<ErrorText text={error} /><Auth signedIn={account => { const generation = epoch.current; void restoreAccount(account, () => epoch.current === generation); }} pendingCodes={recovery?.kind === 'codes' ? recovery.value : undefined} pendingCursor={recovery?.kind === 'codes' ? recovery.cursor : undefined} codesVisible={setAuthCodesVisible} busyChanged={setFormBusy} /></>;
   return <ClientContext.Provider value={provider}><div className="app-shell">{!viewerToken && <header className="app-bar"><a className="wordmark" href="/" onClick={event => { event.preventDefault(); setScreen('workspace'); }}>Poker banker</a><nav aria-label="Workspace navigation"><button aria-pressed={screen === 'workspace'} onClick={() => setScreen('workspace')}>Workspace</button><button aria-pressed={screen === 'players'} onClick={() => { setScreen('players'); setSheet(null); }}>Players</button></nav></header>}
     {!sheet && !childDialog && <>{updateBanner}<DraftSaveStatus /></>}
     {!online && <p className="offline-banner" role="status">Offline. Saved totals are read only. New entries wait to sync.</p>}
