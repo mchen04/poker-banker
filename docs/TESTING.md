@@ -4,11 +4,13 @@ Run `scripts/mini.sh pnpm e2e`. Playwright builds the app and starts the local H
 
 The four projects are iPhone WebKit with touch, iPhone WebKit with emulated standalone signals, desktop WebKit, and desktop Chromium. All browsers belong to Playwright. Existing browser caches are used when their revisions match the installed Playwright version.
 
+The disposable e2e server sets `PB_TEST_EDGE_HEADERS=1`. The local server then removes non-cache headers from `304` responses after timing instrumentation, including `X-PB-Banker-ID`, to reproduce Vercel's response behavior. The verification skill launches this same disposable server, so its local recipes exercise stripped-header polling too. Normal `200` responses retain their owner proof. The wrapper is absent from the Vercel function entry and is off for an ordinary `pnpm start:local` launch unless explicitly enabled.
+
 ## What the emulation proves
 
 The journeys exercise authentication, recovery and session revocation, account isolation, session-scoped persistent drafts, roster history, money and corrections, closing and cumulative results, sharing, polling, offline replay, IndexedDB forward migration, payment methods, timer persistence, result displays, reporting and the waiting-worker update path.
 
-The cross-tab late-acknowledgement regression blocks service workers so Playwright can hold a real HTTP response after its database write commits. All update, offline and other journeys keep workers enabled. It proves sign-out does not recreate cleared private storage when that response arrives later.
+Fault-injection and unchanged-poll checks block service workers when Playwright needs direct network observation. The cross-tab late-acknowledgement regression holds a real response after its database write commits and verifies that sign-out cancels the request without restoring cleared private storage. Update and offline journeys keep workers enabled.
 
 The standalone project sets `navigator.standalone` and the standalone display-mode media query before the page loads. The update journey dispatches hidden and visible document states, checks the waiting banner and activates a rebuilt worker on the same local server. It verifies retained authentication, drafts, session data and the new worker version.
 

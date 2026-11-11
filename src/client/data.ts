@@ -8,6 +8,12 @@ export class ApiError extends Error {
 export class AccountChangedError extends ApiError {
   constructor(public bankerId: string) { super('Account changed. Reload account state to continue.', 409, 'account_changed'); }
 }
+export class UnverifiedResponseError extends Error {
+  constructor(public responseStatus: number) {
+    super('Response could not be verified. Reconnect and check the saved result.');
+    this.name = 'UnverifiedResponseError';
+  }
+}
 export function isProvenNotApplied(problem: unknown): boolean {
   return problem instanceof ApiError && problem.status >= 400 && problem.status < 500
     && ![401, 403, 408, 415, 429].includes(problem.status)
@@ -129,7 +135,7 @@ async function all<T>(name: string): Promise<T[]> {
   const transaction = db.transaction(name, 'readonly');
   return req(transaction.objectStore(name).getAll()) as Promise<T[]>;
 }
-async function http<T>(path: string, method: string, body: unknown, consume: (response: Response) => Promise<T>, banker?: string, isCurrent = () => true): Promise<T> {
+async function http<T>(path: string, method: string, body: unknown, consume: (response: Response) => Promise<T>, banker?: string, isCurrent = () => true, unchangedPoll = false): Promise<T> {
   const ensureCurrent = () => { if (!isCurrent()) throw new AccountChangedError(banker!); };
   ensureCurrent();
   const controller = new AbortController();
@@ -147,9 +153,20 @@ async function http<T>(path: string, method: string, body: unknown, consume: (re
     });
     ensureCurrent();
     const owner = response.headers.get('X-PB-Banker-ID');
-    if (banker && ((owner && owner !== banker) || (!owner && response.status < 500 && response.status !== 401))) {
+    if (banker && owner && owner !== banker) {
       controller.abort();
       accountChanged(banker);
+    }
+    if (banker) {
+      const unchanged = response.status === 304 && unchangedPoll && method === 'GET' && body === undefined;
+      if (!owner && response.status === 401) {
+        controller.abort();
+        throw new ApiError('Sign in to continue', 401, 'unauthorized');
+      }
+      if ((!owner && !unchanged) || (response.status === 304 && !unchanged) || [204, 205].includes(response.status) || method === 'HEAD') {
+        controller.abort();
+        throw new UnverifiedResponseError(response.status);
+      }
     }
     let result: T;
     try { result = await consume(response); }
@@ -202,7 +219,7 @@ export function bankerClient(banker: string, current = () => true): BankerClient
   return Object.freeze({
     bankerId: banker, isCurrent,
     api: <T>(path: string, method = 'GET', body?: unknown) => publicRequest(path, method) ? api<T>(path, method, body) : http(path, method, body, parse<T>, banker, isCurrent),
-    pollSession: (path: string, revision?: string) => publicRequest(path, 'GET') ? pollSession(path, revision) : http(pollPath(path, revision), 'GET', undefined, consumePoll, banker, isCurrent),
+    pollSession: (path: string, revision?: string) => publicRequest(path, 'GET') ? pollSession(path, revision) : http(pollPath(path, revision), 'GET', undefined, consumePoll, banker, isCurrent, !!revision && !/[?#]/.test(path)),
   });
 }
 function ownerApi<T>(banker: string, request: DraftRequest, isCurrent: () => boolean): Promise<T> {
