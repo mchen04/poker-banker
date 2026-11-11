@@ -43,6 +43,7 @@ export async function signIn(page: Page, username: string, secret = password) {
   await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
 }
 export async function signOut(page: Page) {
+  await page.getByRole('button', { name: 'Players', exact: true }).click();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   const discard = page.getByLabel('Discard unsent entries and drafts', { exact: true });
   if (await discard.isVisible()) await discard.check();
@@ -84,7 +85,7 @@ export async function money(page: Page, player: string, amount: string, options:
   await openMoney(page, player, kind);
   await page.getByLabel('Amount', { exact: true }).fill(amount);
   if (options.paid !== undefined && (kind === 'Buy-in' || kind === 'Cash out')) await page.getByLabel(kind === 'Buy-in' ? 'Paid now' : 'Paid out now', { exact: true }).setChecked(options.paid);
-  if (options.method) await page.getByLabel('Payment method', { exact: true }).selectOption(options.method);
+  if (options.method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: options.method[0]!.toUpperCase() + options.method.slice(1), exact: true }).click();
   if (options.testInfo) await screen(page, options.testInfo, kind === 'Buy-in' ? 'buy-in' : kind === 'Cash out' ? 'cash-out' : kind === 'Record payment' ? 'payment' : 'expense');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -127,4 +128,10 @@ export async function workerReady(page: Page) {
   await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/'))?.active), {
     message: 'The local service worker must activate; inspect browser certificate and registration errors if it does not',
   }).toBe(true);
+}
+
+export async function keepMoneyDraft(page: Page) {
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('button', { name: 'Keep draft and close', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 }

@@ -1,19 +1,26 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { EntryKind, LedgerEntry, PaymentMethod, PlayerState, SessionState } from '../../domain/session';
 import { currencyExponent, parseMoney } from '../../domain/money';
-import { formatRational } from '../../domain/rational';
 import { api, draftKey, enqueue } from '../data';
-import { decimal, duration, entryLabels, ErrorText, methodLabel, money, moneyRate, useClient, useDraft, useFormBusy } from './common';
+import { decimal, duration, entryLabels, ErrorText, methodLabel, money, resultCurrencyDecimal, resultMoney, resultNumber, Sheet, useClient, useDraft, useFormBusy } from './common';
 
 type RosterPlayer = { id: string; display_name: string };
 export type DisplayMode = 'total' | 'hourly' | 'blinds';
 function resultText(player: PlayerState, currency: string, mode: DisplayMode) {
   if (player.state === 'playing') return `Playing, in ${money(player.bought_in_minor, currency)}`;
   if (player.state === 'seated') return 'Seated';
-  if (mode === 'hourly') return player.performance.per_hour ? `${moneyRate(player.performance.per_hour, currency)}/hour` : 'No time recorded';
-  if (mode === 'blinds') return player.performance.big_blinds ? `${formatRational(player.performance.big_blinds)} big blinds` : 'No big blind set';
+  if (mode === 'hourly') {
+    if (!player.performance.per_hour) return 'No time recorded';
+    const text = resultCurrencyDecimal(player.performance.per_hour, currency);
+    return text === 'Even' ? text : `${text}/hour`;
+  }
+  if (mode === 'blinds') {
+    if (!player.performance.big_blinds) return 'No big blind set';
+    const text = resultNumber(player.performance.big_blinds);
+    return text === 'Even' ? text : `${text} big blinds`;
+  }
   const result = BigInt(player.result_minor);
-  return result === 0n ? 'Even' : `${result > 0n ? '+' : ''}${money(player.result_minor, currency)} ${result > 0n ? 'up' : 'down'}`;
+  return result === 0n ? 'Even' : `${resultMoney(player.result_minor, currency)} ${result > 0n ? 'up' : 'down'}`;
 }
 function balanceText(player: PlayerState, currency: string) {
   const balance = BigInt(player.balance_minor);
@@ -25,7 +32,7 @@ export function Timer({ state }: { state: SessionState }) {
   useEffect(() => { loaded.current = performance.now(); setClock(0); }, [state.server_now]);
   useEffect(() => { const timer = window.setInterval(() => setClock(Math.max(0, Math.floor(performance.now() - loaded.current))), 1000); return () => clearInterval(timer); }, []);
   const elapsed = state.timing.elapsed_ms === null ? null : String(BigInt(state.timing.elapsed_ms) + (state.session.ended_at === null ? BigInt(clock) : 0n));
-  return <span data-testid="session-timer" className="timer">{elapsed === null ? 'Timer not started' : `${state.session.ended_at ? 'Finished · ' : 'Playing time · '}${duration(elapsed)}`}</span>;
+  return <span data-testid="session-timer" className="timer">{elapsed === null ? 'Timer not started' : `${state.session.ended_at ? 'Finished · ' : 'Playing time · '}${duration(elapsed, state.session.ended_at === null)}`}</span>;
 }
 export function SessionView({ state, viewer = false }: { state: SessionState; viewer?: boolean }) {
   const { open } = useClient();
@@ -42,13 +49,13 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
       [state.totals.on_table_minor !== null ? 'On table' : 'Off by', state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0'],
       ['Owed to bank', state.totals.owed_to_banker_minor], ['Bank owes', state.totals.owed_by_banker_minor],
     ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{money(value!, currency)}</strong></div>)}</section>
-    <div className="section-heading"><h2>Players <span className="muted">{state.players.length}</span></h2>{!viewer && <div className="segments display-modes" aria-label="Result display"><button aria-pressed={mode === 'total'} onClick={() => display('total')}>Total</button><button aria-pressed={mode === 'hourly'} onClick={() => display('hourly')}>Per hour</button><button aria-pressed={mode === 'blinds'} onClick={() => display('blinds')}>Big blinds</button></div>}</div>
+    <div className="section-heading"><h2>Players <span className="muted">{state.players.length}</span></h2>{!viewer && <div className="segments display-modes" aria-label="Result display"><button aria-pressed={mode === 'total'} onClick={() => display('total')}>Total</button><button aria-pressed={mode === 'hourly'} onClick={() => display('hourly')}>Per hour</button><button aria-pressed={mode === 'blinds'} onClick={() => display('blinds')}>BB</button></div>}</div>
     <section className="players" aria-label="Session players">{state.players.length === 0 && <div className="empty"><h3>A seat for everyone</h3><p>Add your players, then record the first buy-in.</p></div>}{state.players.map(player => {
       const content = <><span className="player-main"><strong>{player.display_name}</strong><span data-testid={`result-${player.id}`}>{resultText(player, currency, mode)}</span></span><span className="player-detail"><span>In {money(player.bought_in_minor, currency)}{player.buy_in_count > 1 ? `, ${player.buy_in_count - 1} rebuy${player.buy_in_count > 2 ? 's' : ''}` : ''}, Out {money(player.cashed_out_minor, currency)}</span><span>{balanceText(player, currency)}</span></span></>;
       return viewer ? <div key={player.id} data-testid={`player-${player.id}`} className="player-row">{content}</div> : <button key={player.id} data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>;
     })}</section>
     <Activity state={state} />
-    {!viewer && settings.status === 'open' && <div className="bottom-bar"><button onClick={() => open({ kind: 'add' })}>Add player</button><button className="primary" disabled={!state.players.length} onClick={() => open({ kind: 'money', player: state.players.find(player => player.state !== 'cashed_out')?.id ?? state.players[0]!.id })}>Buy-in</button></div>}
+    {!viewer && settings.status === 'open' && <div className="bottom-bar" data-testid="session-bottom-bar"><button onClick={() => open({ kind: 'add' })}>Add player</button><button className="primary" disabled={!state.players.length} onClick={() => open({ kind: 'money', player: state.players.find(player => player.state !== 'cashed_out')?.id ?? state.players[0]!.id })}>Buy-in</button></div>}
   </>;
 }
 function StartTimer() {
@@ -70,22 +77,44 @@ export function PlayerSheet({ playerId }: { playerId: string }) {
   const player = state!.players.find(player => player.id === playerId)!;
   return <><p className="player-summary">{balanceText(player, state!.session.currency)} · {duration(player.duration_ms)}</p>{state!.session.status === 'open' && <div className="action-grid"><button className="primary" onClick={() => open({ kind: 'money', player: playerId })}>Buy-in</button><button onClick={() => open({ kind: 'cash_out', player: playerId })}>Cash out</button><button onClick={() => open({ kind: 'payment_in', player: playerId })}>Record payment</button><button onClick={() => open({ kind: 'expense', player: playerId })}>Tips and meals</button></div>}<Activity state={state!} onlyPlayer={playerId} /></>;
 }
+function latestEntry(entries: LedgerEntry[]) {
+  return entries.reduce<LedgerEntry | undefined>((latest, entry) => !latest || BigInt(entry.revision) > BigInt(latest.revision) ? entry : latest, undefined);
+}
+function PaymentMethods({ label = 'Payment method', value, change }: { label?: string; value: PaymentMethod; change: (value: PaymentMethod) => void }) {
+  return <fieldset className="payment-methods"><legend>{label}</legend><div>{(['cash', 'venmo', 'zelle'] as const).map(method => <button key={method} type="button" aria-pressed={value === method} onClick={() => change(method)}>{methodLabel(method)}</button>)}</div></fieldset>;
+}
 type MoneyDraft = { op_id: string; amount: string; paid_now: boolean; method: PaymentMethod; occurred_at: string; note: string; kind: EntryKind };
-export function MoneySheet({ playerId, kind: initialKind }: { playerId: string; kind: EntryKind }) {
+export function MoneySheet({ title, playerId, kind: initialKind }: { title: string; playerId: string; kind: EntryKind }) {
   const { banker, state, notify, open } = useClient();
   const currency = state!.session.currency;
-  const lastMethod = state!.entries.find(entry => entry.method && !entry.voids_entry_id && !state!.entries.some(row => row.voids_entry_id === entry.id))?.method ?? 'cash';
+  const effective = state!.entries.filter(entry => !entry.voids_entry_id && !state!.entries.some(row => row.voids_entry_id === entry.id));
+  const lastMethod = latestEntry(effective.filter(entry => entry.method))?.method ?? 'cash';
   const key = draftKey(banker!.id, state!.session.id, initialKind, playerId);
   const draft = useDraft<MoneyDraft>(key, { op_id: crypto.randomUUID(), amount: '', paid_now: initialKind === 'buy_in', method: lastMethod, occurred_at: '', note: '', kind: initialKind });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+  const amountInput = useRef<HTMLInputElement>(null);
+  const cancelPanel = useRef<HTMLElement>(null);
+  useEffect(() => { if (canceling) cancelPanel.current?.focus(); else amountInput.current?.focus(); }, [canceling]);
   useFormBusy(saving);
   const submitting = useRef(false);
   const payment = draft.value.kind === 'payment_in' || draft.value.kind === 'payment_out';
   const chip = draft.value.kind === 'buy_in' || draft.value.kind === 'cash_out';
-  const lastBuy = state!.entries.find(entry => entry.kind === 'buy_in' && !entry.voids_entry_id && !state!.entries.some(row => row.voids_entry_id === entry.id) && entry.player_id === playerId)?.amount_minor;
+  const lastBuy = latestEntry(effective.filter(entry => entry.kind === 'buy_in' && entry.player_id === playerId))?.amount_minor;
   const defaultAmount = String(20n * 10n ** BigInt(currencyExponent(currency)));
   function quick(value: string) { draft.update({ ...draft.value, amount: decimal(value, currency) }); }
+  function cancel() {
+    if (saving) return;
+    if (draft.value.amount.trim() || draft.value.note.trim() || draft.value.occurred_at) setCanceling(true);
+    else open(null);
+  }
+  async function discard() {
+    if (saving) return;
+    setSaving(true); setError('');
+    try { await draft.clear(); open(null); }
+    catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not discard the draft'); setSaving(false); }
+  }
   async function submit(event: FormEvent) {
     event.preventDefault(); if (submitting.current || !draft.ready) return;
     submitting.current = true; setSaving(true); setError('');
@@ -101,11 +130,11 @@ export function MoneySheet({ playerId, kind: initialKind }: { playerId: string; 
       notify('Not saved yet'); open(null);
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not save entry'); submitting.current = false; setSaving(false); }
   }
-  return <form onSubmit={submit}><label>Player<select aria-label="Player" value={playerId} onChange={event => open({ kind: initialKind === 'buy_in' ? 'money' : initialKind, player: event.target.value })}>{state!.players.map(player => <option key={player.id} value={player.id}>{player.display_name}</option>)}</select></label><p className="hint">{currency}</p>{payment && <label>Payment direction<select aria-label="Payment direction" value={draft.value.kind} onChange={event => draft.update({ ...draft.value, kind: event.target.value as EntryKind })}><option value="payment_in">Player pays bank</option><option value="payment_out">Bank pays player</option></select></label>}<label>Amount<input data-testid="money-amount" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.value.amount} onChange={event => draft.update({ ...draft.value, amount: event.target.value })} disabled={!draft.ready} required /></label><div className="quick-amounts">{lastBuy && <button type="button" onClick={() => quick(lastBuy)}>Last buy-in {money(lastBuy, currency)}</button>}<button type="button" onClick={() => quick(defaultAmount)}>Session default {money(defaultAmount, currency)}</button><button type="button" onClick={() => { try { quick(String(parseMoney(draft.value.amount || decimal(defaultAmount, currency), currency) * 2n)); } catch { setError('Enter an exact amount first'); } }}>Double</button></div>
+  return <Sheet title={title} leadingClose closeLabel="Cancel" className="money-sheet" close={cancel}>{canceling ? <section className="cancel-draft" role="alertdialog" aria-label="Keep or discard this draft" tabIndex={-1} ref={cancelPanel}><h3>Discard this typed amount?</h3><p>Your typed amount has not been saved to the ledger.</p><button type="button" className="wide" onClick={() => open(null)}>Keep draft and close</button><button type="button" className="danger wide" onClick={() => { void discard(); }}>Discard draft</button><button type="button" className="primary wide" onClick={() => setCanceling(false)}>Keep editing</button><ErrorText text={error || draft.error} /></section> : <form className="money-form" onSubmit={submit}><div className="money-fields"><label>Player<select aria-label="Player" value={playerId} onChange={event => open({ kind: initialKind === 'buy_in' ? 'money' : initialKind, player: event.target.value })}>{state!.players.map(player => <option key={player.id} value={player.id}>{player.display_name}</option>)}</select></label><p className="hint">{currency}</p>{payment && <label>Payment direction<select aria-label="Payment direction" value={draft.value.kind} onChange={event => draft.update({ ...draft.value, kind: event.target.value as EntryKind })}><option value="payment_in">Player pays bank</option><option value="payment_out">Bank pays player</option></select></label>}<label>Amount<input ref={amountInput} data-testid="money-amount" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.value.amount} onChange={event => draft.update({ ...draft.value, amount: event.target.value })} disabled={!draft.ready} required /></label><div className="quick-amounts">{lastBuy && <button type="button" onClick={() => quick(lastBuy)}>Last buy-in {money(lastBuy, currency)}</button>}<button type="button" onClick={() => quick(defaultAmount)}>Session default {money(defaultAmount, currency)}</button><button type="button" onClick={() => { try { quick(String(parseMoney(draft.value.amount || decimal(defaultAmount, currency), currency) * 2n)); } catch { setError('Enter an exact amount first'); } }}>Double</button></div>
     {chip && <label className="check"><input type="checkbox" checked={draft.value.paid_now} onChange={event => draft.update({ ...draft.value, paid_now: event.target.checked })} />{draft.value.kind === 'buy_in' ? 'Paid now' : 'Paid out now'}</label>}
-    {(payment || (chip && draft.value.paid_now)) && <label>Payment method<select aria-label="Payment method" value={draft.value.method} onChange={event => draft.update({ ...draft.value, method: event.target.value as PaymentMethod })}><option value="cash">Cash</option><option value="venmo">Venmo</option><option value="zelle">Zelle</option></select></label>}
+    {(payment || (chip && draft.value.paid_now)) && <PaymentMethods value={draft.value.method} change={method => draft.update({ ...draft.value, method })} />}
     {initialKind === 'expense' && <label>Expense detail<input placeholder="Tip or meal" value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}
-    <details><summary>Record an earlier time or note</summary><label>Entry time<input type="datetime-local" step="1" value={draft.value.occurred_at} onChange={event => draft.update({ ...draft.value, occurred_at: event.target.value })} /></label>{initialKind !== 'expense' && <label>Note<input value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}</details><ErrorText text={error || draft.error} /><p className="hint">Only confirmed entries change the totals.</p><button className="primary wide" disabled={saving || !draft.ready}>{saving ? 'Saving…' : 'Save entry'}</button></form>;
+    <details><summary>Record an earlier time or note</summary><label>Entry time<input type="datetime-local" step="1" value={draft.value.occurred_at} onChange={event => draft.update({ ...draft.value, occurred_at: event.target.value })} /></label>{initialKind !== 'expense' && <label>Note<input value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}</details><ErrorText text={error || draft.error} /><p className="hint">Only confirmed entries change the totals.</p></div><footer className="money-actions"><button className="primary wide" disabled={saving || !draft.ready}>{saving ? 'Saving…' : 'Save entry'}</button></footer></form>}</Sheet>;
 }
 export function AddPlayerSheet() {
   const { banker, state, mutate, open } = useClient();
@@ -153,5 +182,5 @@ export function CorrectionSheet({ entryId }: { entryId: string }) {
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not correct entry'); setBusy(false); }
   }
   if (!draft.ready) return draft.error ? <ErrorText text={draft.error} /> : <p>Restoring draft…</p>;
-  return <form onSubmit={event => { event.preventDefault(); void save(true); }}><p>{entryLabels[entry.kind]} · {money(entry.amount_minor, state!.session.currency)}{entry.method ? ` · ${methodLabel(entry.method)}` : ''}</p><p>The original stays in the ledger, marked Voided, with a replacement alongside it.</p><label>Replacement amount<input inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} required /></label>{payment && <label>Replacement method<select aria-label="Replacement method" value={method} onChange={event => setMethod(event.target.value as PaymentMethod)}><option value="cash">Cash</option><option value="venmo">Venmo</option><option value="zelle">Zelle</option></select></label>}<label>Entry time<input type="datetime-local" step="1" value={time} onChange={event => setTime(event.target.value)} /></label><ErrorText text={error} /><button className="primary wide" disabled={busy}>Save correction</button><button className="danger wide" type="button" disabled={busy} onClick={() => { void save(false); }}>Void entry</button></form>;
+  return <form onSubmit={event => { event.preventDefault(); void save(true); }}><p>{entryLabels[entry.kind]} · {money(entry.amount_minor, state!.session.currency)}{entry.method ? ` · ${methodLabel(entry.method)}` : ''}</p><p>The original stays in the ledger, marked Voided, with a replacement alongside it.</p><label>Replacement amount<input inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} required /></label>{payment && <PaymentMethods label="Replacement method" value={method} change={setMethod} />}<label>Entry time<input type="datetime-local" step="1" value={time} onChange={event => setTime(event.target.value)} /></label><ErrorText text={error} /><button className="primary wide" disabled={busy}>Save correction</button><button className="danger wide" type="button" disabled={busy} onClick={() => { void save(false); }}>Void entry</button></form>;
 }

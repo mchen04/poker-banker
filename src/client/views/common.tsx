@@ -26,15 +26,22 @@ export function useClient() {
   return value;
 }
 export function money(value: string, currency: string) { return formatMoney(BigInt(value), currency); }
+export function resultMoney(value: string, currency: string) {
+  const amount = BigInt(value);
+  return amount === 0n ? 'Even' : `${amount > 0n ? '+' : ''}${money(value, currency)}`;
+}
+export function resultCurrencyDecimal(value: Rational, currency: string) {
+  return resultMoney(formatRational(value, 0).replace('−', '-'), currency);
+}
+export function resultNumber(value: Rational) {
+  const text = formatRational(value);
+  return /^0(?:\.0+)?$/.test(text) ? 'Even' : `${text.startsWith('−') ? '' : '+'}${text}`;
+}
 export function decimal(value: string, currency: string) {
   const exponent = currencyExponent(currency);
   const amount = BigInt(value);
   const scale = 10n ** BigInt(exponent);
   return `${amount / scale}${exponent ? `.${String(amount % scale).padStart(exponent, '0')}` : ''}`;
-}
-export function moneyRate(value: Rational, currency: string) {
-  const rounded = formatRational(value, 0).replace('−', '-');
-  return money(rounded, currency);
 }
 export function currencyDecimal(value: Rational, currency: string, squareRoot = false) {
   const exponent = currencyExponent(currency);
@@ -44,13 +51,14 @@ export function currencyDecimal(value: Rational, currency: string, squareRoot = 
   const symbol = new Intl.NumberFormat('en-US', { style: 'currency', currency }).formatToParts(0n).find(part => part.type === 'currency')?.value ?? currency;
   return `${text.startsWith('−') ? '−' : ''}${symbol}${text.replace('−', '')}`;
 }
-export function duration(value: string | null) {
+export function duration(value: string | null, showSeconds = false) {
   if (value === null) return 'No time recorded';
   const seconds = BigInt(value) / 1000n;
   const hours = seconds / 3600n;
   const minutes = (seconds % 3600n) / 60n;
   const remainder = seconds % 60n;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+  if (showSeconds) return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+  return hours > 0n ? `${hours} h ${String(minutes).padStart(2, '0')} min` : `${minutes} min`;
 }
 export function sessionLabel(session: { played_on: string; name: string }) {
   return `${new Date(`${session.played_on}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${session.name}`;
@@ -80,7 +88,7 @@ export function useFormBusy(busy: boolean) {
 }
 export function storageFailure(problem: unknown) { window.dispatchEvent(new CustomEvent('pb-storage-error', { detail: problem instanceof Error ? problem.message : 'Local storage is unavailable' })); }
 export function ErrorText({ text }: { text: string }) { return text ? <p role="alert" className="error">{text}</p> : null; }
-export function Sheet({ title, children, close }: { title: string; children: ReactNode; close: () => void }) {
+export function Sheet({ title, children, close, leadingClose = false, closeLabel = 'Done', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const client = useContext(ClientContext);
   const updateBanner = client?.updateBanner;
@@ -117,7 +125,8 @@ export function Sheet({ title, children, close }: { title: string; children: Rea
     document.body.style.overflow = 'hidden';
     return () => { observer.disconnect(); document.removeEventListener('keydown', keyboard); document.body.style.overflow = oldOverflow; previous?.focus(); };
   }, []);
-  return <div className="sheet-backdrop"><div className="sheet" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
-    {updateBanner}<div className="sheet-handle" /><header className="sheet-header"><h2>{title}</h2><button type="button" aria-label="Close sheet" disabled={busy} onClick={close}>Done</button></header><fieldset className="sheet-fields" disabled={busy}>{children}</fieldset>
+  const closeButton = <button type="button" aria-label={leadingClose ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
+  return <div className="sheet-backdrop"><div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
+    {updateBanner}<div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><fieldset className="sheet-fields" disabled={busy}>{children}</fieldset>
   </div></div>;
 }

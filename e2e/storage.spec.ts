@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, call, createAccount, current, money, newSession, openMoney } from './helpers';
+import { addPlayer, call, createAccount, current, keepMoneyDraft, money, newSession, openMoney } from './helpers';
 import type { SessionState } from '../src/domain/session';
 
 test('a version 1 database upgrades forward and preserves both session drafts exactly', async ({ page }) => {
@@ -31,8 +31,8 @@ test('a version 1 database upgrades forward and preserves both session drafts ex
   await page.goto(`/?session=${first.session.id}`);
   await openMoney(page, player.id);
   await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('73.45');
-  await expect(page.getByLabel('Payment method', { exact: true })).toHaveValue('venmo');
-  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await keepMoneyDraft(page);
   await page.getByTestId(`session-tab-${second.session.id}`).click();
   await openMoney(page, player.id);
   await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('91.');
@@ -113,6 +113,7 @@ test('signing out in another tab prevents a late acknowledged write from restori
   try {
     await other.goto(`/?session=${state.session.id}`);
     expect((await current(other)).entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(1);
+    await other.getByRole('button', { name: 'Players', exact: true }).click();
     await other.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(other.getByLabel('Discard unsent entries and drafts', { exact: true })).toBeVisible();
     await other.getByLabel('Discard unsent entries and drafts', { exact: true }).check();

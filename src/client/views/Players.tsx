@@ -4,7 +4,7 @@ import type { Rational } from '../../domain/rational';
 import { formatRational, formatSquareRoot as formatSquareRootForReport } from '../../domain/rational';
 import type { PlayerState, SessionSettings } from '../../domain/session';
 import { api, draftKey } from '../data';
-import { currencyDecimal, duration, ErrorText, money, sessionLabel, Sheet, useClient, useDraft, useFormBusy } from './common';
+import { currencyDecimal, duration, ErrorText, money, resultMoney, resultCurrencyDecimal, resultNumber, sessionLabel, Sheet, useClient, useDraft, useFormBusy } from './common';
 
 type CurrencyResult = { currency: string; result_minor: string };
 type Outstanding = { currency: string; owed_to_banker_minor: string; owed_by_banker_minor: string };
@@ -38,10 +38,10 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
       .then(([details, values]) => { if (active) { setHistory(details); setReport(values); } }).catch(problem => setError(problem.message));
     return () => { active = false; };
   }, [selected, group, filters, refresh]);
-  if (!selected) return <><header className="page-heading"><p className="eyebrow">Your reusable roster</p><h1>Players</h1><p>Finalized results, with currencies kept separate.</p></header><label>Find a player<input type="search" value={search} onChange={event => setSearch(event.target.value)} /></label><ErrorText text={error} /><ul className="roster-list">{players.map(player => <li key={player.id}><button data-testid={`roster-player-${player.id}`} onClick={() => { setSelected(player.id); setHistory(null); setReport(null); }}><strong>{player.display_name}</strong>{player.cumulative.length ? player.cumulative.map(value => <span key={value.currency}>{value.currency} · {money(value.result_minor, value.currency)} finalized</span>) : <span>No finalized results</span>}{player.outstanding.map(value => <small key={value.currency}>Owes bank {money(value.owed_to_banker_minor, value.currency)} · Bank owes {money(value.owed_by_banker_minor, value.currency)}</small>)}</button></li>)}</ul>{!players.length && <div className="empty"><h2>Your roster starts at the table</h2><p>Add a player in a session to save them here.</p></div>}</>;
-  return <><button className="text-button" onClick={() => { setSelected(null); setError(''); }}>Back to players</button><ErrorText text={error} />{!history ? <p>Loading player…</p> : <><header className="page-heading"><p className="eyebrow">Player history</p><h1>{history.player.display_name}</h1><button onClick={() => showDialog('rename')}>Rename player</button></header><section><h2>Finalized results</h2>{history.cumulative.length ? history.cumulative.map(value => <p className="summary-value" key={value.currency}>{value.currency} · {money(value.result_minor, value.currency)}</p>) : <p>No finalized results yet.</p>}{history.outstanding.map(value => <p key={value.currency}>Owes bank {money(value.owed_to_banker_minor, value.currency)} · Bank owes {money(value.owed_by_banker_minor, value.currency)}</p>)}</section>
+  if (!selected) return <><header className="page-heading"><p className="eyebrow">Your reusable roster</p><h1>Players</h1><p>Finalized results, with currencies kept separate.</p></header><label>Find a player<input type="search" value={search} onChange={event => setSearch(event.target.value)} /></label><ErrorText text={error} /><ul className="roster-list">{players.map(player => <li key={player.id}><button data-testid={`roster-player-${player.id}`} onClick={() => { setSelected(player.id); setHistory(null); setReport(null); }}><strong>{player.display_name}</strong>{player.cumulative.length ? player.cumulative.map(value => <span key={value.currency}>{value.currency} · {resultMoney(value.result_minor, value.currency)} finalized</span>) : <span>No finalized results</span>}{player.outstanding.map(value => <small key={value.currency}>Owes bank {money(value.owed_to_banker_minor, value.currency)} · Bank owes {money(value.owed_by_banker_minor, value.currency)}</small>)}</button></li>)}</ul>{!players.length && <div className="empty"><h2>Your roster starts at the table</h2><p>Add a player in a session to save them here.</p></div>}</>;
+  return <><button className="text-button" onClick={() => { setSelected(null); setError(''); }}>Back to players</button><ErrorText text={error} />{!history ? <p>Loading player…</p> : <><header className="page-heading"><p className="eyebrow">Player history</p><h1>{history.player.display_name}</h1><button onClick={() => showDialog('rename')}>Rename player</button></header><section><h2>Finalized results</h2>{history.cumulative.length ? history.cumulative.map(value => <p className="summary-value" key={value.currency}>{value.currency} · {resultMoney(value.result_minor, value.currency)}</p>) : <p>No finalized results yet.</p>}{history.outstanding.map(value => <p key={value.currency}>Owes bank {money(value.owed_to_banker_minor, value.currency)} · Bank owes {money(value.owed_by_banker_minor, value.currency)}</p>)}</section>
     <section className="report"><h2>Cash game report</h2><div className="segments report-groups" aria-label="Report grouping">{(['overall', 'location', 'game', 'weekday', 'month'] as const).map(value => <button key={value} aria-pressed={group === value} onClick={() => setGroup(value)}>{value.charAt(0).toUpperCase() + value.slice(1)}</button>)}</div><button className="text-button" onClick={() => showDialog('filter')}>Filter: {Object.entries(filters).filter(([, value]) => value).length ? Object.entries(filters).filter(([, value]) => value).map(([key, value]) => `${key} ${value}`).join(', ') : 'Off'}</button><p className="hint">Rates use results before tips and meals. Variation describes session rates, not a forecast.</p>{report?.groups.map(bucket => <section className="report-bucket" key={`${bucket.key}/${bucket.currency}`}><h3>{groupTitle(group, bucket.key)} · {bucket.currency}</h3><p className="hint">{bucket.sessions_count} finalized session{bucket.sessions_count === 1 ? '' : 's'}</p><MetricList metrics={bucket.metrics} currency={bucket.currency} /></section>)}{report && !report.groups.length && <p>No finalized sessions match these filters.</p>}</section>
-    <section><h2>Past sessions</h2><ul className="choice-list">{history.sessions.map(item => <li key={item.session.id}><button onClick={() => chooseSession(item.session.id)}>{sessionLabel(item.session)}<small>{item.session.status === 'closed' ? 'Closed' : 'Open'} · {item.player.state === 'cashed_out' ? money(item.player.result_minor, item.session.currency) : item.player.state === 'playing' ? 'Playing' : 'Seated'}</small></button></li>)}</ul></section>
+    <section><h2>Past sessions</h2><ul className="choice-list">{history.sessions.map(item => <li key={item.session.id}><button onClick={() => chooseSession(item.session.id)}>{sessionLabel(item.session)}<small>{item.session.status === 'closed' ? 'Closed' : 'Open'} · {item.player.state === 'cashed_out' ? resultMoney(item.player.result_minor, item.session.currency) : item.player.state === 'playing' ? 'Playing' : 'Seated'}</small></button></li>)}</ul></section>
   </>}{dialog === 'rename' && history && <Sheet title="Rename player" close={() => showDialog(null)}><RenameForm player={history.player} saved={() => { showDialog(null); setRefresh(value => value + 1); notify('Player renamed. History stays with the same player.'); }} /></Sheet>}{dialog === 'filter' && <Sheet title="Report filters" close={() => showDialog(null)}><FilterForm value={filters} apply={value => { setFilters(value); showDialog(null); }} /></Sheet>}</>;
 }
 function groupTitle(group: ReportGrouping, key: string | null) {
@@ -52,31 +52,30 @@ function groupTitle(group: ReportGrouping, key: string | null) {
   return key;
 }
 function MetricList({ metrics, currency }: { metrics: Report['groups'][number]['metrics']; currency: string }) {
-  const fields: { key: keyof typeof metrics; title: string; type: 'money' | 'duration' | 'count' | 'percentage' | 'blinds' | 'sqrtMoney' | 'sqrtBlinds' }[] = [
+  const fields: { key: keyof typeof metrics; title: string; type: 'money' | 'duration' | 'count' | 'blinds' | 'sqrtMoney' | 'sqrtBlinds' }[] = [
     { key: 'profit_loss_minor', title: 'Profit/loss', type: 'money' },
     { key: 'per_hour_minor', title: 'Money per hour', type: 'money' },
     { key: 'per_session_minor', title: 'Money per session', type: 'money' },
     { key: 'duration_ms', title: 'Playing duration', type: 'duration' },
     { key: 'winning_sessions', title: 'Winning sessions', type: 'count' },
-    { key: 'winning_percentage', title: 'Winning percentage', type: 'percentage' },
     { key: 'expenses_minor', title: 'Tips and meals', type: 'money' },
     { key: 'net_after_expenses_minor', title: 'Net after tips and meals', type: 'money' },
     { key: 'big_blinds_per_hour', title: 'Big blinds per hour', type: 'blinds' },
     { key: 'variation_per_hour_minor', title: 'Variation across session rates · money/hour', type: 'sqrtMoney' },
     { key: 'variation_big_blinds_per_hour', title: 'Variation across session rates · big blinds/hour', type: 'sqrtBlinds' },
   ];
-  function display(metric: Metric<Rational | SquareRoot>, type: typeof fields[number]['type']) {
+  function display(metric: Metric<Rational | SquareRoot>, type: typeof fields[number]['type'], key: keyof typeof metrics) {
     if (metric.value === null) return metric.unavailable === 'insufficient_sessions' ? 'Unavailable · needs two sessions' : type === 'blinds' || type === 'sqrtBlinds' ? 'Unavailable · needs time and big blind' : 'No time recorded';
     if ('sqrt_of' in metric.value) return type === 'sqrtMoney' ? currencyDecimal(metric.value.sqrt_of, currency, true) : `${formatSquareRootForReport(metric.value.sqrt_of)} BB/hour`;
-    if (type === 'money') return currencyDecimal(metric.value, currency);
+    if (type === 'money') return key === 'expenses_minor' ? currencyDecimal(metric.value, currency) : resultCurrencyDecimal(metric.value, currency);
     if (type === 'duration') return duration(String(BigInt(metric.value.numerator) / BigInt(metric.value.denominator)));
-    if (type === 'percentage') return `${formatRational(metric.value)}%`;
-    if (type === 'blinds') return `${formatRational(metric.value)} BB/hour`;
+    if (type === 'blinds') { const value = resultNumber(metric.value); return value === 'Even' ? value : `${value} BB/hour`; }
+    if (key === 'winning_sessions' && metrics.winning_percentage.value) return `${formatRational(metric.value, 0)} of ${metric.sessions_used} (${formatRational(metrics.winning_percentage.value).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')}%)`;
     return formatRational(metric.value, 0);
   }
   return <dl className="metric-list">{fields.map(field => {
     const metric = metrics[field.key];
-    return <div key={field.key} data-testid={`report-${field.key}`}><dt>{field.title}<small>{metric.sessions_used} session{metric.sessions_used === 1 ? '' : 's'} used</small></dt><dd className={metric.value === null ? 'unavailable' : undefined}>{display(metric, field.type)}</dd></div>;
+    return <div key={field.key} data-testid={`report-${field.key}`}><dt>{field.title}<small>{metric.sessions_used} session{metric.sessions_used === 1 ? '' : 's'} used</small></dt><dd className={metric.value === null ? 'unavailable' : undefined}>{display(metric, field.type, field.key)}</dd></div>;
   })}</dl>;
 }
 function FilterForm({ value, apply }: { value: ReportFilters; apply: (value: ReportFilters) => void }) {

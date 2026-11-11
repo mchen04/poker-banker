@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, call, closeSession, createAccount, current, fixtureSession, menu, money, newSession, openMoney, share, signIn, signOut, workerReady } from './helpers';
+import { addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newSession, openMoney, share, signIn, signOut, workerReady } from './helpers';
 import type { SessionState } from '../src/domain/session';
 
 test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
@@ -69,7 +69,7 @@ test('same-day session tabs and month history restore separate drafts after relo
   const justin = await addPlayer(page, 'Justin', testInfo);
   await openMoney(page, justin.id);
   await page.getByLabel('Amount', { exact: true }).fill('12.');
-  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
+  await keepMoneyDraft(page);
   const second = await newSession(page, 'Late game');
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
   await page.getByLabel('Search players', { exact: true }).fill('Justin');
@@ -81,11 +81,11 @@ test('same-day session tabs and month history restore separate drafts after relo
   await page.reload();
   await openMoney(page, justin.id);
   await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('34.');
-  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
+  await keepMoneyDraft(page);
   await page.getByTestId(`session-tab-${first.session.id}`).click();
   await openMoney(page, justin.id);
   await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('12.');
-  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
+  await keepMoneyDraft(page);
   await page.getByRole('button', { name: 'History', exact: true }).click();
   await page.getByLabel('Search sessions', { exact: true }).fill('Late');
   await screen(page, testInfo, 'history');
@@ -169,7 +169,7 @@ test('payment methods persist through reload, later settlement and visible corre
     state = await current(page);
     const payment = state.entries.find(entry => entry.kind === 'payment_in' && entry.method === 'zelle')!;
     await page.getByTestId(`entry-${payment.id}`).getByRole('button').click();
-    await page.getByLabel('Replacement method', { exact: true }).selectOption('cash');
+    await page.getByRole('group', { name: 'Replacement method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
     await page.getByRole('button', { name: 'Save correction', exact: true }).click();
     await expect(page.getByTestId(`entry-${payment.id}`)).toContainText('Zelle');
     await expect(page.getByTestId(`entry-${payment.id}`)).toContainText('Voided');
@@ -214,7 +214,7 @@ test('server timer survives reload and another device, freezes at close, display
     const before = await current(page);
     await page.getByRole('button', { name: 'Per hour', exact: true }).click();
     await expect(page.getByTestId(`result-${player.id}`)).toContainText('/hour');
-    await page.getByRole('button', { name: 'Big blinds', exact: true }).click();
+    await page.getByRole('button', { name: 'BB', exact: true }).click();
     await expect(page.getByTestId(`result-${player.id}`)).toContainText('No big blind set');
     await page.getByRole('button', { name: 'Total', exact: true }).click();
     await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$10.00 up');
@@ -224,7 +224,7 @@ test('server timer survives reload and another device, freezes at close, display
     await page.waitForTimeout(650);
     await expect(page.getByLabel('Big blind', { exact: true })).toBeFocused();
     await page.getByRole('button', { name: 'Save settings', exact: true }).click();
-    await page.getByRole('button', { name: 'Big blinds', exact: true }).click();
+    await page.getByRole('button', { name: 'BB', exact: true }).click();
     await expect(page.getByTestId(`result-${player.id}`)).toContainText('5.00 big blinds');
     await menu(page, 'Correct times');
     await page.getByLabel('Started at', { exact: true }).fill(new Date(Date.parse(started!) - 3600000).toISOString().slice(0, 19));
@@ -254,13 +254,13 @@ test('two-session player reports show hand-computed results in every grouping an
   for (const [group, heading] of [['Overall', 'Overall'], ['Location', 'Home'], ['Game', 'NLH'], ['Weekday', 'Tuesday'], ['Month', 'November 2026']]) {
     await page.getByRole('button', { name: group, exact: true }).click();
     await expect(page.getByRole('heading', { name: `${heading} · USD`, exact: true })).toBeVisible();
-    await expect(page.getByTestId('report-profit_loss_minor')).toContainText('$40.00');
-    await expect(page.getByTestId('report-per_hour_minor')).toContainText('$13.33');
-    await expect(page.getByTestId('report-per_session_minor')).toContainText('$20.00');
-    await expect(page.getByTestId('report-duration_ms')).toContainText('03:00:00');
-    await expect(page.getByTestId('report-winning_percentage')).toContainText('50.00');
+    await expect(page.getByTestId('report-profit_loss_minor').locator('dd')).toHaveText('+$40.00');
+    await expect(page.getByTestId('report-per_hour_minor').locator('dd')).toHaveText('+$13.33');
+    await expect(page.getByTestId('report-per_session_minor').locator('dd')).toHaveText('+$20.00');
+    await expect(page.getByTestId('report-duration_ms')).toContainText('3 h 00 min');
+    await expect(page.getByTestId('report-winning_sessions').locator('dd')).toHaveText('1 of 2 (50%)');
     await expect(page.getByTestId('report-expenses_minor')).toContainText('$8.00');
-    await expect(page.getByTestId('report-net_after_expenses_minor')).toContainText('$32.00');
+    await expect(page.getByTestId('report-net_after_expenses_minor').locator('dd')).toHaveText('+$32.00');
     await expect(page.getByTestId('report-big_blinds_per_hour')).toContainText('3.33');
     await expect(page.getByTestId('report-variation_per_hour_minor')).toContainText('$35.36');
     await expect(page.getByTestId('report-variation_big_blinds_per_hour')).toContainText('24.75');
