@@ -237,3 +237,20 @@ it.each(['save', 'discard', 'submit'] as const)('refuses recovered %s after anot
   expect((await other.listSubmittedDrafts(owner))[0]?.request).toEqual(request);
   expect(fetch).not.toHaveBeenCalled();
 });
+
+it('exposes the chosen existing player as an editable selection rather than an ignored search string', async () => {
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, 'add-player');
+  const value = { op_id: 'fresh', search: 'Justin' };
+  const request = { path: `/api/sessions/${session}/players`, method: 'POST', body: { op_id: value.op_id, player_id: 'justin' } };
+  await data.writeDraft(key, value);
+  await data.prepareDraftSubmission(key, value, request);
+  await expect(data.replaySubmittedDraft(key)).rejects.toMatchObject({ code: 'idempotency_mismatch' });
+  const recovery = (await data.listRecoveredDrafts(owner))[0]!;
+  expect(recovery.value).toMatchObject({ player_id: 'justin' });
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/auth/me' ? { banker: { id: owner, username: owner } } : { ok: true }, { headers: { 'X-PB-Banker-ID': owner } })));
+  await data.editRecoveredDraft(recovery, { ...(recovery.value as object), player_id: 'alex' }, 'submit');
+  const sent = vi.mocked(fetch).mock.calls.find(([path]) => path !== '/api/auth/me')!;
+  expect(JSON.parse(String(sent[1]?.body))).toMatchObject({ player_id: 'alex' });
+  expect(JSON.parse(String(sent[1]?.body))).not.toHaveProperty('new_player_name');
+});
