@@ -854,3 +854,60 @@ it('keeps newer typing visible when a pending discard finishes and asks the bank
     await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
   } finally { harness.close(); }
 });
+
+it.each([false, true])('does not silently adopt another tab after a completed save reads back later data (newerTyping=%s)', async newerTyping => {
+  const bus = new EventTarget();
+  vi.stubGlobal('window', { setTimeout, clearTimeout, dispatchEvent: bus.dispatchEvent.bind(bus), addEventListener: bus.addEventListener.bind(bus), removeEventListener: bus.removeEventListener.bind(bus) });
+  const storage = sharedStorage();
+  const editing = await freshTab();
+  const other = await freshTab();
+  let pauseNextRead = false;
+  let arrived!: () => void;
+  let release!: () => void;
+  let completed!: () => void;
+  const started = new Promise<void>(resolve => { arrived = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const finished = new Promise<void>(resolve => { completed = resolve; });
+  const viewData: Tab = { ...editing, async readDraft<T>(draftKey: string, cursor?: import('../src/client/data').DraftCursor) {
+    const paused = pauseNextRead;
+    if (paused) { pauseNextRead = false; arrived(); await held; }
+    const value = await editing.readDraft<T>(draftKey, cursor);
+    if (paused) completed();
+    return value;
+  } };
+  const harness = draftForm(viewData, key, original);
+  let form = harness.render();
+  try {
+    await vi.waitFor(() => { form = harness.render(); expect(form.ready).toBe(true); });
+    form.update(original);
+    await vi.waitFor(() => expect(storage.draft(key)).toEqual(original));
+    await editing.flushDraftWrites();
+    await editing.readDraft(key);
+    form = harness.render();
+    pauseNextRead = true;
+    form.update({ ...original, amount: '11' });
+    await started;
+    if (newerTyping) {
+      form = harness.render();
+      form.update({ ...original, amount: '60' });
+      await vi.waitFor(() => expect((storage.draft(key) as typeof original).amount).toBe('60'));
+      await editing.readDraft(key);
+      form = harness.render();
+    }
+    const cursor: import('../src/client/data').DraftCursor = {};
+    await other.readDraft(key, cursor);
+    await other.writeDraft(key, newer, cursor);
+    release();
+    await finished;
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+    form = harness.render();
+    if (newerTyping) expect(form.value.amount).toBe('60');
+    else {
+      expect(form.value.amount).toBe('25');
+      expect(form.error).toContain('edited in another tab');
+    }
+    expect(storage.draft(key)).toEqual(newer);
+    expect(editing.draftSaveFailed(key)).toBe(false);
+    expect(editing.hasPendingLocalWrites()).toBe(false);
+  } finally { release(); harness.close(); }
+});
