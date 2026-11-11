@@ -34,10 +34,10 @@ Preconditions:
 import { typeInput } from '../e2e/input';
 import { randomUUID } from 'node:crypto';
 import { expect } from '@playwright/test';
-import { addPlayer, call, current, keepMoneyDraft, menu, newSession, openMoney } from '../e2e/helpers';
+import { addPlayer, call, current, keepMoneyDraft, menu, newSession, openMoney, storedDraft } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
-export default async function ({ page, runId, step, checkState }: RecipeContext) {
+export default async function ({ page, banker, runId, step, checkState }: RecipeContext) {
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   const tag = `${runId.slice(-8)}-${randomUUID().slice(0, 6)}`;
@@ -85,6 +85,7 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
   await page.getByRole('dialog').getByRole('button', { name, exact: true }).click();
   await openMoney(page, player.id);
   await typeInput(page.getByTestId('money-amount'), '34.');
+  await expect.poll(async () => (await storedDraft<{ amount: string }>(page, `${banker.id}/${second.session.id}/buy_in/${player.id}`))?.amount).toBe('34.');
   await page.reload();
   await openMoney(page, player.id);
   await expect(page.getByTestId('money-amount')).toHaveValue('34.');
