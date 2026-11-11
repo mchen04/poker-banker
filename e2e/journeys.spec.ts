@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, call, closeSession, createAccount, current, fixtureSession, menu, money, newSession, openMoney, share, signIn, signOut } from './helpers';
+import { addPlayer, call, closeSession, createAccount, current, fixtureSession, menu, money, newSession, openMoney, share, signIn, signOut, workerReady } from './helpers';
 import type { SessionState } from '../src/domain/session';
 
 test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
@@ -100,6 +100,10 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   const player = await addPlayer(page, 'Justin');
   await money(page, player.id, '100', { testInfo });
   await money(page, player.id, '50');
+  await screen(page, testInfo, 'workspace');
+  await page.getByTestId(`player-${player.id}`).click();
+  await screen(page, testInfo, 'player-sheet');
+  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
   await expect(page.getByTestId(`result-${player.id}`)).toContainText('Playing, in $150.00');
   await money(page, player.id, '180', { kind: 'Cash out', testInfo });
   await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$30.00 up');
@@ -275,7 +279,7 @@ test('offline queue excludes unconfirmed totals, survives reload, saves once and
   const state = await newSession(page, 'Offline');
   const player = await addPlayer(page, 'Justin');
   const viewerLink = await share(page);
-  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await workerReady(page);
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
   const viewerContext = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
   try {

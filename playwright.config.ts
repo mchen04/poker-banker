@@ -15,6 +15,6 @@ export default defineConfig({
     { name: 'iphone-webkit', use: { ...devices['iPhone 15'], browserName: 'webkit' } },
     { name: 'iphone-standalone', use: { ...devices['iPhone 15'], browserName: 'webkit' } },
     { name: 'desktop-webkit', use: { browserName: 'webkit', viewport: { width: 1440, height: 1000 } } },
-    { name: 'desktop-chromium', use: { browserName: 'chromium', viewport: { width: 1440, height: 1000 } } },
+    { name: 'desktop-chromium', use: { browserName: 'chromium', launchOptions: { args: ['--ignore-certificate-errors'] }, viewport: { width: 1440, height: 1000 } } },
   ],
 });

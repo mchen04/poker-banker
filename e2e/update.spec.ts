@@ -1,5 +1,5 @@
 import { test, expect, screen } from './fixtures';
-import { addPlayer, createAccount, current, newSession, openMoney } from './helpers';
+import { addPlayer, createAccount, current, newSession, openMoney, workerReady } from './helpers';
 import { buildRelease } from './global-setup';
 import type { Page } from '@playwright/test';
 
@@ -24,7 +24,7 @@ test('waiting release update after hidden and visible preserves auth, drafts and
   const user = await createAccount(page);
   const state = await newSession(page, 'Survives update');
   const player = await addPlayer(page, 'Justin');
-  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await workerReady(page);
   await expect.poll(() => version(page)).toBe(releaseA);
   await openMoney(page, player.id);
   await page.getByLabel('Amount', { exact: true }).fill('37.');
@@ -35,8 +35,8 @@ test('waiting release update after hidden and visible preserves auth, drafts and
     document.dispatchEvent(new Event('visibilitychange'));
   });
   buildRelease(releaseB);
-  await page.evaluate(async () => { const registration = await navigator.serviceWorker.ready; await registration.update(); });
-  await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.ready).waiting)).toBe(true);
+  await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration('/'); if (!registration) throw new Error('Local service worker registration disappeared'); await registration.update(); });
+  await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/'))?.waiting)).toBe(true);
   expect(await version(page)).toBe(releaseA);
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
@@ -45,7 +45,7 @@ test('waiting release update after hidden and visible preserves auth, drafts and
   });
   await expect(page.getByText('Update ready', { exact: true })).toBeVisible();
   await screen(page, testInfo, 'update-ready');
-  await page.getByTestId('update-reload').click();
+  await Promise.all([page.waitForEvent('domcontentloaded'), page.getByTestId('update-reload').click()]);
   await expect.poll(() => version(page)).toBe(releaseB);
   await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
   await expect(page.getByRole('heading', { name: 'Survives update', exact: true })).toBeVisible();

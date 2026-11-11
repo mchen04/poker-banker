@@ -122,3 +122,9 @@ export async function fixtureSession(page: Page, player: string | undefined, opt
   if (options.expense) state = await call<SessionState>(page, `/sessions/${state.session.id}/entries`, 'POST', { op_id: randomUUID(), player_id: playerId, kind: 'expense', amount_minor: options.expense, occurred_at: `${options.day}T01:30:00Z` });
   return call<SessionState>(page, `/sessions/${state.session.id}/close`, 'POST', { op_id: randomUUID(), expected_revision: state.revision, accept_discrepancy_minor: state.totals.discrepancy_minor });
 }
+
+export async function workerReady(page: Page) {
+  await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/'))?.active), {
+    message: 'The local service worker must activate; inspect browser certificate and registration errors if it does not',
+  }).toBe(true);
+}
