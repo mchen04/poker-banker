@@ -33,7 +33,7 @@ export type OutboxItem = {
 export type DraftRequest = { path: string; method: string; body: Record<string, unknown> };
 export type SubmittedDraft = { key: string; form: string; request: DraftRequest };
 type DraftValue = Record<string, unknown> & { __submitted?: DraftRequest };
-type DraftRecord = { key: string; value: unknown; banker_id: string; updated_at: number; kind?: 'acknowledged_operation'; replay_id?: string };
+type DraftRecord = { key: string; value: unknown; next_value?: unknown; banker_id: string; updated_at: number; kind?: 'acknowledged_operation'; replay_id?: string };
 const acknowledgedKey = (key: string, request: DraftRequest) => `${key.split('/')[0]}/_operations/confirmed/${String(request.body.op_id)}`;
 type SnapshotRecord = { key: string; banker_id: string; state: SessionState };
 let database: Promise<IDBDatabase> | undefined;
@@ -243,7 +243,6 @@ function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
   const banker = key.split('/')[0]!;
   activeClears.get(banker)?.abort();
   return draftWrite(key, async () => {
-    if (draftIntents.get(key) !== intent) return;
     try {
       const db = await storage();
       const transaction = db.transaction('drafts', 'readwrite');
@@ -251,7 +250,13 @@ function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
       const store = transaction.objectStore('drafts');
       const existing = await req(store.get(key)) as DraftRecord | undefined;
       if ((existing?.value as DraftValue | undefined)?.__submitted && intent.error !== undefined) { await done; throw new Error('Not saved on this device. Check the submitted form before saving this draft.'); }
-      if (!(existing?.value as DraftValue | undefined)?.__submitted) store.put({ key, banker_id: banker, value: intent.value, updated_at: Date.now() } satisfies DraftRecord);
+      if ((existing?.value as DraftValue | undefined)?.__submitted) store.put({ ...existing!, next_value: intent.value, updated_at: Date.now() } satisfies DraftRecord);
+      else {
+        const stored = existing?.value as DraftValue | undefined;
+        const incoming = intent.value as DraftValue | undefined;
+        const value = stored?.op_id && incoming?.op_id && stored.op_id !== incoming.op_id ? { ...incoming, op_id: stored.op_id } : intent.value;
+        store.put({ key, banker_id: banker, value, updated_at: Date.now() } satisfies DraftRecord);
+      }
       await done;
       if (draftIntents.get(key) === intent) draftIntents.delete(key);
       changed();
@@ -303,6 +308,13 @@ export async function prepareDraftSubmission<T extends object>(key: string, valu
   const acknowledged = await req(store.get(acknowledgedKey(key, request))) as DraftRecord | undefined;
   if (!current()) { await done; throw new Error('Account changed. Sign in to check this form.'); }
   const priorRequest = (acknowledged?.value as { request: DraftRequest } | undefined)?.request;
+  const stored = existing?.value as DraftValue | undefined;
+  if (!previous && stored?.op_id && stored.op_id !== request.body.op_id) {
+    const fresh = { ...value, op_id: stored.op_id };
+    store.put({ key, banker_id: banker, value: fresh, updated_at: Date.now() } satisfies DraftRecord);
+    await done; changed();
+    return { request, first: false, value: fresh, previouslyConfirmed: true };
+  }
   if (!previous && priorRequest && JSON.stringify(priorRequest) !== JSON.stringify(request)) {
     const fresh = { ...value, op_id: crypto.randomUUID() };
     store.put({ key, banker_id: banker, value: fresh, updated_at: Date.now() } satisfies DraftRecord);
@@ -338,16 +350,17 @@ async function finishDraftSubmission(key: string, request: DraftRequest, replayI
   const existing = await req(store.get(key)) as DraftRecord | undefined;
   const previous = (existing?.value as DraftValue | undefined)?.__submitted;
   const matched = isCurrent() && existing?.banker_id === key.split('/')[0] && existing?.replay_id === replayId && !!previous && JSON.stringify(previous) === JSON.stringify(request);
+  const editable = existing?.next_value !== undefined ? { ...(existing.next_value as DraftValue), op_id: crypto.randomUUID() } : replacement;
   if (matched) {
     if (acknowledge) store.put({ key: acknowledgedKey(key, request), banker_id: key.split('/')[0]!, kind: 'acknowledged_operation', value: { request }, updated_at: Date.now() } satisfies DraftRecord);
-    if (replacement) store.put({ ...existing, value: replacement, updated_at: Date.now() });
+    if (editable) store.put({ key, banker_id: key.split('/')[0]!, value: editable, updated_at: Date.now() } satisfies DraftRecord);
     else store.delete(key);
   }
   await done;
   const intent = draftIntents.get(key);
   const retained = intent?.value as DraftValue | undefined;
   if (matched && isCurrent() && intent && retained && !retained.__submitted && retained.op_id === request.body.op_id && (replacement || acknowledge)) {
-    draftIntents.set(key, { ...intent, value: { ...retained, op_id: replacement ? (replacement as DraftValue).op_id : crypto.randomUUID() }, revision: ++draftRevision });
+    draftIntents.set(key, { ...intent, value: { ...retained, op_id: editable ? (editable as DraftValue).op_id : crypto.randomUUID() }, revision: ++draftRevision });
   }
   changed();
   return matched;

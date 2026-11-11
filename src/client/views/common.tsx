@@ -71,6 +71,7 @@ export function useDraft<T extends object>(key: string, initial: T) {
   const client = useContext(ClientContext);
   type Value = T & { __submitted?: DraftRequest };
   const [value, setValue] = useState<Value>(initial);
+  const latestValue = useRef<Value>(initial);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
   const initialValue = useRef(initial);
@@ -86,24 +87,47 @@ export function useDraft<T extends object>(key: string, initial: T) {
   const owner = scope.current;
   const current = () => scope.current === owner && owner.active && (!client || (client.banker?.id === key.split('/')[0] && client.isCurrent?.() !== false));
   const capture = () => { const version = owner.version; return () => current() && owner.version === version; };
+  function adopt(next: Value) { latestValue.current = next; submitted.current = next.__submitted; setValue(next); }
   useEffect(() => {
     owner.active = true;
     const isCurrent = capture();
     setReady(false); setError('');
-    void readDraft<Value>(key).then(saved => { if (isCurrent()) { const next = saved ?? initialValue.current; submitted.current = (next as Value).__submitted; setValue(next); setReady(true); } }).catch(problem => { if (isCurrent()) { const message = problem instanceof Error ? problem.message : 'Could not restore the draft'; setError(message); storageFailure(problem); } });
+    void readDraft<Value>(key).then(saved => { if (isCurrent()) { adopt(saved ?? initialValue.current); setReady(true); } }).catch(problem => { if (isCurrent()) { const message = problem instanceof Error ? problem.message : 'Could not restore the draft'; setError(message); storageFailure(problem); } });
     return () => { owner.active = false; owner.version++; };
   }, [key]);
   useEffect(() => {
-    const refresh = () => { if (current()) setError(draftSaveFailed(key) ? 'Not saved on this device' : ''); };
+    const refresh = () => {
+      if (!current()) return;
+      setError(draftSaveFailed(key) ? 'Not saved on this device' : '');
+      if (!submitted.current || inFlight.current || draftSaveFailed(key)) return;
+      const isCurrent = capture();
+      const previous = latestValue.current;
+      void readDraft<Value>(key).then(saved => {
+        if (!isCurrent() || latestValue.current !== previous || inFlight.current || draftSaveFailed(key)) return;
+        if (saved) adopt(saved);
+        else freshValue(isCurrent);
+      }).catch(problem => { if (isCurrent()) storageFailure(problem); });
+    };
     refresh(); window.addEventListener('pb-data', refresh);
     return () => window.removeEventListener('pb-data', refresh);
   }, [key]);
-  function update(next: T) { if (!current() || submitted.current) return; const isCurrent = capture(); setValue(next); void writeDraft(key, next).then(() => { if (isCurrent()) setError(''); }).catch(problem => { if (isCurrent()) { setError('Not saved on this device'); storageFailure(problem); } }); }
+  function update(next: T) {
+    if (!current() || submitted.current) return;
+    const isCurrent = capture();
+    adopt(next);
+    void writeDraft(key, next).then(async () => {
+      if (!isCurrent() || latestValue.current !== next) return;
+      const saved = await readDraft<Value>(key);
+      if (!isCurrent() || latestValue.current !== next || draftSaveFailed(key)) return;
+      setError('');
+      if (saved) adopt(saved);
+    }).catch(problem => { if (isCurrent()) { setError('Not saved on this device'); storageFailure(problem); } });
+  }
   function freshValue(isCurrent: () => boolean) {
     if (!isCurrent()) return;
     submitted.current = undefined;
     const fresh = { ...initialValue.current, ...('op_id' in initialValue.current ? { op_id: crypto.randomUUID() } : {}) };
-    setValue(fresh);
+    adopt(fresh);
   }
   async function clear() { const isCurrent = capture(); if (!isCurrent()) return; try { await deleteDraft(key, isCurrent); freshValue(isCurrent); } catch (problem) { if (isCurrent()) storageFailure(problem); throw problem; } }
   async function perform<R>(request: DraftRequest, first: boolean): Promise<R> {
@@ -117,9 +141,8 @@ export function useDraft<T extends object>(key: string, initial: T) {
       if (first) {
         const prepared = await prepareDraftSubmission(key, value, request, isCurrent);
         ensureCurrent();
-        if (prepared.previouslyConfirmed) { submitted.current = undefined; setValue(prepared.value); throw new Error('The previous form was saved. Review this new draft and save again.'); }
-        submitted.current = prepared.request;
-        setValue(prepared.value);
+        if (prepared.previouslyConfirmed) { adopt(prepared.value); throw new Error('This form changed in another tab. Review this draft and save again.'); }
+        adopt(prepared.value);
       }
       let result: R;
       try { result = await replaySubmittedDraft<R>(key, isCurrent); }
@@ -128,15 +151,14 @@ export function useDraft<T extends object>(key: string, initial: T) {
         const restored = await readDraft<Value>(key);
         ensureCurrent();
         if (restored && !restored.__submitted) {
-          submitted.current = undefined;
-          setValue(restored);
+          adopt(restored);
         }
         throw problem;
       }
       ensureCurrent();
       const retained = await readDraft<Value>(key);
       ensureCurrent();
-      if (retained) { submitted.current = retained.__submitted; setValue(retained); }
+      if (retained) adopt(retained);
       else freshValue(isCurrent);
       if (result && typeof result === 'object' && 'session' in result) client?.update(result as unknown as SessionState);
       return result;
@@ -156,7 +178,7 @@ export function DraftRecovery<T>({ recover, recovered, pending = false }: { reco
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useFormBusy(busy || pending);
-  return <><p className="warning">This form may already have been saved. Check the saved result before editing it or starting another.</p><ErrorText text={error} /><button className="primary wide" disabled={busy || pending} onClick={() => { if (busy || pending) return; setBusy(true); setError(''); void recover().then(recovered).catch(problem => { setError(problem instanceof Error ? problem.message : 'Could not check the saved result'); setBusy(false); }); }}>{busy ? 'Checking saved result…' : 'Check saved result'}</button></>;
+  return <><p className="warning">This form was submitted here or in another tab and may already have been saved. Check the saved result before editing it or starting another.</p><ErrorText text={error} /><button className="primary wide" disabled={busy || pending} onClick={() => { if (busy || pending) return; setBusy(true); setError(''); void recover().then(recovered).catch(problem => { setError(problem instanceof Error ? problem.message : 'Could not check the saved result'); setBusy(false); }); }}>{busy ? 'Checking saved result…' : 'Check saved result'}</button></>;
 }
 export function useFormBusy(busy: boolean) {
   const setBusy = useClient().setFormBusy;
