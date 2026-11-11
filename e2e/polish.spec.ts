@@ -10,6 +10,11 @@ test('money cancellation, last buy-in, method selection and compact controls pre
   await money(page, player.id, '60', { method: 'venmo' });
   await openMoney(page, player.id);
   const amount = page.getByLabel('Amount', { exact: true });
+  await amount.focus();
+  const focus = await amount.evaluate(input => { const style = getComputedStyle(input); return { width: style.outlineWidth, offset: style.outlineOffset, outline: style.outlineColor, border: style.borderTopColor, shadow: style.boxShadow }; });
+  expect(focus).toMatchObject({ width: '2px', offset: '-2px', shadow: 'none' });
+  expect(focus.outline).toBe(focus.border);
+  await screen(page, info, 'focused-amount');
   await page.getByRole('button', { name: 'Last buy-in $60.00', exact: true }).click();
   await expect(amount).toHaveValue('60.00');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -57,4 +62,22 @@ test('money cancellation, last buy-in, method selection and compact controls pre
   await page.getByRole('button', { name: 'Players', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Account', exact: true })).toBeVisible();
   await screen(page, info, 'account');
+  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  await newSession(page, 'A long early session name that keeps its complete selected border');
+  await newSession(page, 'A long later session name that keeps its complete selected border');
+  const targetTab = page.getByRole('tab').last();
+  const targetId = (await targetTab.getAttribute('data-testid'))!;
+  const targetLabel = (await targetTab.textContent())!;
+  await page.getByRole('tab').first().click();
+  await page.getByRole('button', { name: 'History', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: new RegExp(targetLabel) }).click();
+  const activeTab = page.getByTestId(targetId);
+  await expect(activeTab).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => activeTab.evaluate(button => {
+    const parent = button.parentElement!;
+    const strip = parent.getBoundingClientRect();
+    const tab = button.getBoundingClientRect();
+    return tab.left >= strip.left && tab.right <= strip.left + parent.clientWidth;
+  })).toBe(true);
+  await screen(page, info, 'selected-session-border');
 });
