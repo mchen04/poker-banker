@@ -66,12 +66,14 @@ it('does not accept a missing-proof data response or settle it', async () => {
   expect(client.isCurrent()).toBe(true);
 });
 
-it.each(['api GET', 'api POST', 'api HEAD', 'poll without revision', 'poll with empty revision'])('rejects an unexpected 304 for %s without accepting data or work', async kind => {
+it.each(['api GET', 'api POST', 'api HEAD', 'poll without revision', 'poll with empty revision', 'poll with query', 'poll with fragment'])('rejects an unexpected 304 for %s without accepting data or work', async kind => {
   const { client } = setup(new Response(null, { status: 304 }));
   let problem: unknown;
   try {
     if (kind === 'poll without revision') await client.pollSession('/api/sessions/game');
     else if (kind === 'poll with empty revision') await client.pollSession('/api/sessions/game', '');
+    else if (kind === 'poll with query') await client.pollSession('/api/sessions/game?other=1', '7');
+    else if (kind === 'poll with fragment') await client.pollSession('/api/sessions/game#fragment', '7');
     else await client.api('/api/sessions/game', kind.slice(4));
   } catch (failure) { problem = failure; }
   expect(problem).toMatchObject({ name: 'UnverifiedResponseError', responseStatus: 304 });
@@ -92,7 +94,7 @@ it('never parses a HEAD response as data even with a matching owner', async () =
   expect(client.isCurrent()).toBe(true);
 });
 
-it.each([200, 204, 304, 413, 504])('still blocks an explicitly foreign owner on %s', async status => {
+it.each([200, 204, 304, 401, 413, 504])('still blocks an explicitly foreign owner on %s', async status => {
   const { client } = setup(new Response(status === 200 ? '{}' : null, { status, headers: { 'X-PB-Banker-ID': 'another-owner' } }));
   await expect(client.pollSession('/api/sessions/game', '7')).rejects.toMatchObject({ status: 409, code: 'account_changed' });
   expect(client.isCurrent()).toBe(false);

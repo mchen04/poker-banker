@@ -124,18 +124,16 @@ it.each(['sessions', 'poll', 'unchanged poll', 'roster', 'report', 'suggestions'
 });
 
 it.each([
-  ['API success', 'missing owner'], ['poll success', 'foreign owner'],
-  ['unchanged poll', 'missing owner'], ['API rejection', 'foreign owner'],
+  ['poll success', 'foreign owner'], ['API rejection', 'foreign owner'],
   ['API server failure', 'foreign owner 500'],
 ] as const)('rejects a delivered %s with %s before accepting private data', async (kind, fault) => {
   const { a, b, stateA, stateB, requests, client, useCookie } = await setup(fault);
   const path = `/api/sessions/${stateB.session.id}`;
   const pending = kind === 'poll success' ? client.pollSession(path)
-    : kind === 'unchanged poll' ? client.pollSession(path, stateB.revision)
-      : client.api(kind === 'API rejection' ? `/api/sessions/${stateA.session.id}` : '/api/sessions');
+    : client.api(kind === 'API rejection' ? `/api/sessions/${stateA.session.id}` : '/api/sessions');
   await expect(pending).rejects.toMatchObject({ status: 409, code: 'account_changed', bankerId: a.id });
   expect(requests).toHaveLength(1);
-  expect(requests[0]).toMatchObject({ expected: a.id, status: kind === 'unchanged poll' ? 304 : kind === 'API rejection' ? 404 : kind === 'API server failure' ? 500 : 200 });
+  expect(requests[0]).toMatchObject({ expected: a.id, status: kind === 'API rejection' ? 404 : kind === 'API server failure' ? 500 : 200 });
   await expect(client.api('/api/sessions')).rejects.toMatchObject({ code: 'account_changed' });
   const constructedWhileBlocked = data.bankerClient(a.id);
   expect(constructedWhileBlocked.isCurrent()).toBe(false);
@@ -159,6 +157,34 @@ it.each([
   expect((await resumed.api<{ sessions: { id: string }[] }>('/api/sessions')).sessions.map(session => session.id)).toEqual([stateA.session.id]);
 });
 
+it('rejects missing-proof private data without accepting it or changing the displayed owner', async () => {
+  const { a, requests, client } = await setup('missing owner');
+  let problem: unknown;
+  try { await client.api('/api/sessions'); } catch (failure) { problem = failure; }
+  expect(problem).toMatchObject({ name: 'UnverifiedResponseError', responseStatus: 200 });
+  expect(data.isProvenNotApplied(problem)).toBe(false);
+  expect(requests).toEqual([{ path: '/api/sessions', expected: a.id, status: 200 }]);
+  expect(client.isCurrent()).toBe(true);
+});
+
+it('accepts a stripped unchanged response after the real server checks the expected banker', async () => {
+  const { a, stateA, requests, client, useCookie } = await setup();
+  useCookie(a.cookie);
+  const boundFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+    const response = await boundFetch(path, init);
+    if (response.status !== 304) return response;
+    expect(response.headers.get('X-PB-Banker-ID')).toBe(a.id);
+    const headers = new Headers(response.headers);
+    headers.delete('X-PB-Banker-ID');
+    return new Response(null, { status: 304, headers });
+  });
+  expect(await client.pollSession(`/api/sessions/${stateA.session.id}`, stateA.revision)).toBeUndefined();
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({ expected: a.id, status: 304 });
+  expect(client.isCurrent()).toBe(true);
+});
+
 it('keeps public viewer reads and explicit account discovery neutral while private raw requests fail closed', async () => {
   const { b, stateB, requests } = await setup();
   await expect(data.api('/api/sessions')).rejects.toThrow('account-bound');
@@ -176,11 +202,11 @@ it('keeps public viewer reads and explicit account discovery neutral while priva
   expect(requests.map(request => request.expected)).toEqual([null, null, null]);
 });
 
-it('keeps a missing-owner 503 uncertain with its original error and permits a verified retry', async () => {
+it('keeps a missing-owner 503 unverified and permits a verified retry', async () => {
   const { a, stateA, requests, client, useCookie } = await setup('missing owner 503');
   let problem: unknown;
   try { await client.api('/api/sessions'); } catch (failure) { problem = failure; }
-  expect(problem).toMatchObject({ status: 503, code: 'unavailable', message: 'Temporary transport failure' });
+  expect(problem).toMatchObject({ name: 'UnverifiedResponseError', responseStatus: 503 });
   expect(data.isProvenNotApplied(problem)).toBe(false);
   expect(client.isCurrent()).toBe(true);
   expect(requests).toEqual([{ path: '/api/sessions', expected: a.id, status: 503 }]);

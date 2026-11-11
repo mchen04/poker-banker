@@ -113,41 +113,43 @@ test('a previously uncertain outbox replay confirmed as rejected becomes safely 
   expect((await localRecords(page)).outbox).toHaveLength(0);
 });
 
-test('a 503 delivered after commit keeps the form frozen until an identical replay confirms one saved session', async ({ page }) => {
-  await createAccount(page);
-  const bodies: string[] = [];
-  let unavailable = true;
-  await page.route('**/api/sessions', async route => {
-    if (route.request().method() !== 'POST') { await route.continue(); return; }
-    bodies.push(route.request().postData()!);
-    const response = await route.fetch();
-    expect(response.status()).toBe(200);
-    if (unavailable) await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'unavailable', message: 'Service temporarily unavailable' } }) });
-    else await route.fulfill({ response });
+for (const status of [431, 503]) {
+  test(`an unverified ${status} after commit keeps the form frozen until an identical replay confirms one saved session`, async ({ page }) => {
+    await createAccount(page);
+    const bodies: string[] = [];
+    let unavailable = true;
+    await page.route('**/api/sessions', async route => {
+      if (route.request().method() !== 'POST') { await route.continue(); return; }
+      bodies.push(route.request().postData()!);
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      if (unavailable) await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error: { code: 'invalid_request', message: 'Untrusted platform rejection' } }) });
+      else await route.fulfill({ response });
+    });
+    await page.getByRole('button', { name: 'New session', exact: true }).click();
+    await page.getByLabel('Session name', { exact: true }).fill('Committed during delivery failure');
+    await page.getByLabel('Location', { exact: true }).fill('Preserved uncertain location');
+    await page.getByRole('button', { name: 'Create session', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
+    const submitted = (await localRecords(page)).drafts.find(draft => draft.value.__submitted)!;
+    expect(submitted.value.__submitted).toBeDefined();
+    await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
+    await expect(page.getByRole('alert')).toHaveText('Response could not be verified. Reconnect and check the saved result.');
+    await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
+    await expect(page.getByLabel('Session name', { exact: true })).toHaveCount(0);
+    const retained = (await localRecords(page)).drafts.find(draft => draft.key === submitted.key)!;
+    expect(retained.value).toEqual(submitted.value);
+    await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toBeVisible();
+    expect(bodies).toHaveLength(2);
+    expect(new Set(bodies).size).toBe(1);
+    expect((await call<{ sessions: { name: string }[] }>(page, '/sessions')).sessions.map(session => session.name)).toEqual(['Committed during delivery failure']);
+    unavailable = false;
+    await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Committed during delivery failure', exact: true })).toBeVisible();
+    expect(bodies).toHaveLength(3);
+    expect(new Set(bodies).size).toBe(1);
+    await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toHaveCount(0);
+    expect((await localRecords(page)).drafts.some(draft => draft.value.__submitted)).toBe(false);
+    expect((await call<{ sessions: { name: string }[] }>(page, '/sessions')).sessions).toHaveLength(1);
   });
-  await page.getByRole('button', { name: 'New session', exact: true }).click();
-  await page.getByLabel('Session name', { exact: true }).fill('Committed during delivery failure');
-  await page.getByLabel('Location', { exact: true }).fill('Preserved uncertain location');
-  await page.getByRole('button', { name: 'Create session', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
-  const submitted = (await localRecords(page)).drafts.find(draft => draft.value.__submitted)!;
-  expect(submitted.value.__submitted).toBeDefined();
-  await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
-  await expect(page.getByRole('alert')).toHaveText('Service temporarily unavailable');
-  await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
-  await expect(page.getByLabel('Session name', { exact: true })).toHaveCount(0);
-  const retained = (await localRecords(page)).drafts.find(draft => draft.key === submitted.key)!;
-  expect(retained.value).toEqual(submitted.value);
-  await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toBeVisible();
-  expect(bodies).toHaveLength(2);
-  expect(new Set(bodies).size).toBe(1);
-  expect((await call<{ sessions: { name: string }[] }>(page, '/sessions')).sessions.map(session => session.name)).toEqual(['Committed during delivery failure']);
-  unavailable = false;
-  await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Committed during delivery failure', exact: true })).toBeVisible();
-  expect(bodies).toHaveLength(3);
-  expect(new Set(bodies).size).toBe(1);
-  await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toHaveCount(0);
-  expect((await localRecords(page)).drafts.some(draft => draft.value.__submitted)).toBe(false);
-  expect((await call<{ sessions: { name: string }[] }>(page, '/sessions')).sessions).toHaveLength(1);
-});
+}

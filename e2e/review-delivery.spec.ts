@@ -3,40 +3,42 @@ import { addPlayer, call, createAccount, current, newSession, openMoney } from '
 
 test.use({ serviceWorkers: 'block' });
 
-test('a response lost after commit remains uncertain and replays the original operation once', async ({ page }) => {
-  await createAccount(page);
-  const session = await newSession(page, 'Lost acknowledgement');
-  const player = await addPlayer(page, 'Justin');
-  const bodies: string[] = [];
-  let committed!: () => void;
-  const firstCommit = new Promise<void>(resolve => { committed = resolve; });
-  await page.route(`**/api/sessions/${session.session.id}/entries`, async route => {
-    bodies.push(route.request().postData()!);
-    const response = await route.fetch();
-    expect(response.status()).toBe(200);
-    await route.abort('failed');
-    committed();
+for (const failure of ['connection', 413] as const) {
+  test(`a ${failure} failure after commit remains uncertain and replays the original operation once`, async ({ page }) => {
+    await createAccount(page);
+    const session = await newSession(page, 'Lost acknowledgement');
+    const player = await addPlayer(page, 'Justin');
+    const bodies: string[] = [];
+    let committed!: () => void;
+    const firstCommit = new Promise<void>(resolve => { committed = resolve; });
+    await page.route(`**/api/sessions/${session.session.id}/entries`, async route => {
+      bodies.push(route.request().postData()!);
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      if (failure === 'connection') await route.abort('failed');
+      else await route.fulfill({ status: failure, contentType: 'application/json', body: JSON.stringify({ error: { code: 'invalid_request', message: 'Untrusted platform rejection' } }) });
+      committed();
+    });
+    await openMoney(page, player.id);
+    await page.getByLabel('Amount', { exact: true }).fill('100');
+    await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+    await firstCommit;
+    await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeVisible();
+    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(1);
+    page.once('dialog', dialog => { expect(dialog.message()).toContain('may already exist on the server'); void dialog.dismiss(); });
+    await page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeVisible();
+    await page.unroute(`**/api/sessions/${session.session.id}/entries`);
+    await page.route(`**/api/sessions/${session.session.id}/entries`, async route => { bodies.push(route.request().postData()!); await route.continue(); });
+    await page.getByRole('button', { name: 'Check saved entry', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toHaveCount(0);
+    expect(bodies.length).toBeGreaterThan(1);
+    expect(new Set(bodies).size).toBe(1);
+    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(1);
   });
-  await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('100');
-  await page.getByRole('button', { name: 'Save entry', exact: true }).click();
-  await firstCommit;
-  await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeVisible();
-  expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(1);
-  page.once('dialog', dialog => { expect(dialog.message()).toContain('may already exist on the server'); void dialog.dismiss(); });
-  await page.getByRole('button', { name: 'Discard', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeVisible();
-  await page.reload();
-  await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toBeVisible();
-  await page.unroute(`**/api/sessions/${session.session.id}/entries`);
-  await page.route(`**/api/sessions/${session.session.id}/entries`, async route => { bodies.push(route.request().postData()!); await route.continue(); });
-  await page.getByRole('button', { name: 'Check saved entry', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Check saved entry', exact: true })).toHaveCount(0);
-  expect(bodies.length).toBeGreaterThan(1);
-  expect(new Set(bodies).size).toBe(1);
-  expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(1);
-});
-
+}
 
 test('a migrated version-one attempted operation cannot be silently discarded', async ({ page }) => {
   const account = await createAccount(page);
