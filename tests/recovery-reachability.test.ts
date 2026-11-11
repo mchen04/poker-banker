@@ -222,3 +222,18 @@ it('blocks stale continued typing until the banker explicitly reviews the adopte
     expect((await other.readDraft<typeof original>(key))?.amount).toBe('80.00');
   } finally { harness.close(); }
 });
+
+it.each(['save', 'discard', 'submit'] as const)('refuses recovered %s after another tab freezes the same unchanged value', async action => {
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, 'reopen');
+  const value = { op_id: 'fresh', reason: 'Recovered reason', __operation_conflict: 'Review', __recovery_request: { path: `/api/sessions/${session}/reopen`, method: 'POST', body: { op_id: 'old', reason: 'Recovered reason' } } };
+  await data.writeDraft(key, value);
+  const recovery = (await data.listRecoveredDrafts(owner))[0]!;
+  vi.resetModules();
+  const other = await import('../src/client/data');
+  const request = { path: `/api/sessions/${session}/reopen`, method: 'POST', body: { op_id: value.op_id, reason: value.reason } };
+  await other.prepareDraftSubmission(key, value, request);
+  await expect(data.editRecoveredDraft(recovery, recovery.value, action)).rejects.toThrow(/submitted|saved result/i);
+  expect((await other.listSubmittedDrafts(owner))[0]?.request).toEqual(request);
+  expect(fetch).not.toHaveBeenCalled();
+});
