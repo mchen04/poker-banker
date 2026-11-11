@@ -5,6 +5,7 @@ export default defineConfig(({ command }) => {
   const release = process.env.RELEASE_VERSION?.trim();
   if (command === 'build' && !release) throw new Error('RELEASE_VERSION is required. Use pnpm build to stamp the worker');
   return {
+    envDir: false,
     plugins: [react(), {
       name: 'release-meta',
       transformIndexHtml: () => [{ tag: 'meta', attrs: { name: 'pb-release', content: release ?? 'development' }, injectTo: 'head' }],

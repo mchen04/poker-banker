@@ -27,7 +27,13 @@ app.get('*', async (c, next) => {
   c.header('Cache-Control', 'no-store');
   return c.notFound();
 });
-const server = serve({ ...tls, fetch: app.fetch, port: Number(process.env.PORT || 3000), hostname: '127.0.0.1' }, info => {
+const fetch = process.env.PB_BENCHMARK_TIMING === '1' ? async (request: Request) => {
+  const started = performance.now();
+  const response = await app.fetch(request);
+  response.headers.set('Server-Timing', `app;dur=${(performance.now() - started).toFixed(3)}`);
+  return response;
+} : app.fetch;
+const server = serve({ ...tls, fetch, port: Number(process.env.PORT || 3000), hostname: '127.0.0.1' }, info => {
   console.log(`Poker banker ready at ${tlsKey ? 'https' : 'http'}://127.0.0.1:${info.port}`);
 });
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { server.close(() => { void pool.end().then(() => process.exit(0)); }); });
