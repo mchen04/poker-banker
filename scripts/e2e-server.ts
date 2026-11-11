@@ -22,7 +22,7 @@ async function initialize() {
   if (requested) return;
   child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('../src/server/local.ts', import.meta.url))], {
     stdio: ['ignore', 'inherit', 'inherit'],
-    env: { ...process.env, DATABASE_URL: database.pool.options.connectionString, LOCAL_TLS_KEY: key, LOCAL_TLS_CERT: cert, APP_ORIGIN: `https://127.0.0.1:${process.env.PORT || 3000}` },
+    env: { ...process.env, PB_TEST_EDGE_HEADERS: '1', DATABASE_URL: database.pool.options.connectionString, LOCAL_TLS_KEY: key, LOCAL_TLS_CERT: cert, APP_ORIGIN: `https://127.0.0.1:${process.env.PORT || 3000}` },
   });
   child.on('error', error => { console.error(error.message); void stop(1); });
   child.on('exit', code => { if (!requested) void stop(code ?? 1); });

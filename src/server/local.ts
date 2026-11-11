@@ -5,6 +5,7 @@ import { compress } from 'hono/compress';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { createApp } from './app.js';
 import { createPool } from './db.js';
+import { emulateEdgeHeaders } from './local-edge.js';
 
 const tlsKey = process.env.LOCAL_TLS_KEY;
 const tlsCert = process.env.LOCAL_TLS_CERT;
@@ -29,12 +30,13 @@ app.get('*', async (c, next) => {
   c.header('Cache-Control', 'no-store');
   return c.notFound();
 });
-const fetch = process.env.PB_BENCHMARK_TIMING === '1' ? async (request: Request) => {
+const fetchApp = process.env.PB_BENCHMARK_TIMING === '1' ? async (request: Request) => {
   const started = performance.now();
   const response = await app.fetch(request);
   response.headers.set('Server-Timing', `app;dur=${(performance.now() - started).toFixed(3)}`);
   return response;
 } : app.fetch;
+const fetch = process.env.PB_TEST_EDGE_HEADERS === '1' ? async (request: Request) => emulateEdgeHeaders(await fetchApp(request)) : fetchApp;
 const server = serve({ ...tls, fetch, port: Number(process.env.PORT || 3000), hostname: '127.0.0.1' }, info => {
   console.log(`Poker banker ready at ${tlsKey ? 'https' : 'http'}://127.0.0.1:${info.port}`);
 });
