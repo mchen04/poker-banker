@@ -4,6 +4,8 @@ Run `scripts/mini.sh pnpm e2e`. Playwright builds the app and starts the local H
 
 The four projects are iPhone WebKit with touch, iPhone WebKit with emulated standalone signals, desktop WebKit, and desktop Chromium. All browsers belong to Playwright. Existing browser caches are used when their revisions match the installed Playwright version.
 
+Player-search helpers tap the field, clear it and type through physical key events. A captured WebKit bulk fill completed without reaching React's change handler while the same input stayed empty. The consecutive-player journey checks the keyboard path against saved player names; retries and timeouts stay unchanged.
+
 The disposable e2e server sets `PB_TEST_EDGE_HEADERS=1`. The local server then removes non-cache headers from `304` responses after timing instrumentation, including `X-PB-Banker-ID`, to reproduce Vercel's response behavior. The verification skill launches this same disposable server, so its local recipes exercise stripped-header polling too. Normal `200` responses retain their owner proof. The wrapper is absent from the Vercel function entry and is off for an ordinary `pnpm start:local` launch unless explicitly enabled.
 
 ## What the emulation proves

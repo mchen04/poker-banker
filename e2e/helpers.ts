@@ -69,7 +69,10 @@ export async function current(page: Page, id?: string) {
 }
 export async function addPlayer(page: Page, name: string, testInfo?: TestInfo) {
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
-  await page.getByLabel('Search players', { exact: true }).fill(name);
+  const search = page.getByLabel('Search players', { exact: true });
+  await search.click();
+  await search.fill('');
+  await search.pressSequentially(name);
   if (testInfo) await screen(page, testInfo, 'add-player');
   await page.getByRole('button', { name: `Add '${name}' as new`, exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
