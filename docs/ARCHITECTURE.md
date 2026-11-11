@@ -32,7 +32,7 @@ game_sessions(id uuid pk, banker_id fk, name text, played_on date, currency char
 session_players(session_id fk, player_id fk, banker_id fk, added_at, pk(session_id, player_id))
 ledger_entries(id uuid pk, banker_id fk, session_id fk, player_id fk,
                kind 'buy_in'|'cash_out'|'payment_in'|'payment_out',
-               amount_minor bigint check > 0, note text null,
+               amount_minor bigint check (> 0, or = 0 for cash_out), note text null,
                voids_entry_id uuid null unique fk -> ledger_entries.id,
                created_at, revision bigint)
 session_events(id uuid pk, session_id fk, banker_id fk, kind 'created'|'renamed'|'closed'|'reopened'|'share_enabled'|'share_rotated'|'share_disabled',
@@ -47,6 +47,7 @@ Every row carries `banker_id`, and every query filters by the signed-in banker. 
 ### Ledger semantics
 
 - The ledger is append-only. Nothing is updated or deleted.
+- Every amount is positive except a `cash_out`, which may be zero when a player lost everything. A zero cash-out never creates a payment.
 - A correction is a void: a new row of the same kind with `voids_entry_id` pointing at the original, written with the same amount. The unique index on `voids_entry_id` stops a double void under concurrency. Editing an amount is a void plus a new entry in one transaction, and the API returns both.
 - Live (effective) entries are the rows that are not voids and are not voided.
 - Chips: `buy_in` gives a player chips, `cash_out` records chips returned. Money: `payment_in` is cash the player handed the banker, `payment_out` is cash the banker handed the player. The app records these and never moves money.
@@ -73,7 +74,7 @@ Cumulative, per player and per currency: sum of `result` over closed sessions on
 
 ## Concurrency and idempotency
 
-- Every mutating request carries an `op_id` (UUID v4) chosen by the client when the draft is created. The server stores `(banker_id, op_id)` with a hash of the canonical request body and the response, in the same transaction as the write. A replay with the same body returns the stored response. The same key with a different body returns `409 idempotency_mismatch`.
+- Every mutating request carries an `op_id` (UUID v4) chosen by the client when the draft is created. Once submitted, the request body is frozen with that `op_id`. If the reply is lost, the client replays the same request: a stored success completes the draft; a validation rejection returns the draft to editing with a fresh `op_id`; an uncertain write can be discarded only after the server shows it was never applied or the banker accepts that it may exist. The server stores `(banker_id, op_id)` with a hash of the canonical request body and the response, in the same transaction as the write. A replay with the same body returns the stored response. The same key with a different body returns `409 idempotency_mismatch`.
 - Every write to a session first locks its row with `SELECT ... FOR UPDATE`, checks status, writes, and increments `revision`. Writes to one session serialize; different sessions do not contend.
 - Close carries `expected_revision`. Ledger writes do not, because appends do not lose updates.
 
@@ -170,3 +171,63 @@ One workspace, phone-first, readable vertical scrolling, no horizontal tables.
 1. Create the Neon project and set `DATABASE_URL` and `DATABASE_URL_UNPOOLED` in Vercel's encrypted project env. Sessions are random tokens checked against the database, so no signing secret exists.
 2. Run `pnpm db:migrate` against the unpooled URL. Migrations are forward-only, numbered SQL files, each in a transaction, recorded in `schema_migrations`, and safe to rerun.
 3. Deploy the build that needs the new schema. Each migration must also work with the previous release, so a migration lands before its code.
+
+## Justin's feedback additions
+
+Added after the spec gained the "Justin's feedback" section. Nothing has been deployed yet, so these changes amend migration `0001` directly instead of adding a compatibility migration.
+
+### Schema changes
+
+```
+game_sessions  + location text null, game text null        -- free text with suggestions from past sessions, used for report groupings
+               + big_blind_minor bigint null check > 0      -- in the session currency
+               + started_at timestamptz null, ended_at timestamptz null, check ended_at >= started_at
+ledger_entries + kind 'expense'                             -- tips and meals, outside chips and settlement
+               + method 'cash'|'venmo'|'zelle' null         -- required for payment_in and payment_out, null otherwise (check constraint)
+               + occurred_at timestamptz null              -- null means the time is unknown
+session_events + kinds 'timer_started', 'timing_corrected', 'details_changed' with old and new values in detail
+```
+
+### Payment method
+
+- Paid now on a buy-in or rebuy shows a compact Cash, Venmo, Zelle selector. The default is the method last used in that session, else Cash. The server writes `buy_in` plus `payment_in` with the method.
+- Recording a later payment (unpaid to paid) is a `payment_in` or `payment_out` with a required method. An unpaid buy-in has no payment row, so it is never shown as received.
+- Changing a method is a correction: void the payment and write a replacement with the new method. The void endpoint accepts `replacement_method` alongside `replacement_amount_minor`. Activity shows both rows.
+- The method is a label of how money arrived. Nothing initiates a transfer.
+
+### Session timer
+
+- `started_at` is set by Start timer, or automatically by the first buy-in when unset and that buy-in has a known `occurred_at` (it takes that time). A buy-in with an unknown time leaves an unset timer unset, shown as "Start time unknown" until the banker sets it through Correct times. `ended_at` is set by Close when unset. Reopen does not clear `ended_at`; the banker restarts timing explicitly if play resumes.
+- `PATCH /api/sessions/:id/timing {op_id, started_at, ended_at|null}` corrects times and writes a `timing_corrected` event with old and new values. The session menu shows that history.
+- The client shows `(ended_at ?? server_now) - started_at`. The server returns `server_now` so device clocks do not matter, and the client advances it locally between polls.
+
+### Per-player playing time
+
+- A player's intervals come from live chip entries ordered by `occurred_at`: a `buy_in` while not playing opens an interval, a `cash_out` closes it. Rebuys while playing do not open a new one. Leaving and re-entering produces two intervals.
+- The client stamps `occurred_at` when the banker submits, using a clock checked against the last `server_now`. When the device clock disagrees by more than 2 minutes, or no server time has been seen since the app opened, it sends `null` and the time is unknown. The banker may set or correct it later through a correction.
+- Chip entries (`buy_in`, `cash_out`) with a known time must fall inside the session's timer bounds when they exist. Payments and expenses may fall after the game ends, so a late settlement after reopening is allowed.
+- A player with any chip entry of unknown time has an unavailable duration, never a guessed one.
+- A player's duration is the sum of their intervals. The table's duration is never used for a player.
+
+### Result display
+
+- A per-device toggle with Total, Per hour and Big blinds, stored in `localStorage`. It changes display only.
+- Per hour is `result_minor * 3_600_000 / duration_ms`, computed with integers and rounded half-even at display. Without a positive duration it shows "No time recorded".
+- Big blinds is `result_minor / big_blind_minor` to two decimals. Without a blind it shows "No big blind set".
+- Labels keep net result, gross cash-out and outstanding payments distinct.
+
+### Player reports
+
+`GET /api/players/:id/report?group=overall|location|game|weekday|month&location=&game=&weekday=&month=&from=&to=` returns, per group and per currency, over that banker's closed sessions where the player has entries:
+
+- Profit/loss: sum of results.
+- Per hour: total result divided by total valid playing time, over sessions with a valid duration (weighted, not an average of rates).
+- Per session: total result divided by session count.
+- Duration: total valid playing time.
+- Winning sessions: count with result above zero over all sessions, with percentage. Break-even counts in the denominator.
+- Tips and meals: sum of `expense` entries, shown with net after tips and meals. Rates use the result before tips and meals, and the report labels this.
+- Big blinds per hour: sum over sessions of `result / big_blind` divided by their hours, using only sessions with both a blind and a duration.
+- Variation: sample standard deviation of session-level hourly rates in money and in big blinds, labeled "Variation across session rates". Unavailable below two valid sessions.
+- Each metric reports how many sessions it used, so missing timing or blinds is visible.
+
+Only one player's results are summed, never the whole table. Weekday and month come from `played_on`. Groupings and filters are exact matches on stored values. Reports live on the player detail screen with a segmented control for the five groupings and a Filter sheet, inside the same workspace.

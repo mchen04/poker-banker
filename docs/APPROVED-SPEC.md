@@ -2,8 +2,8 @@
 title: Justin's home poker banker
 project: Poker app specification
 status: approved
-next: Build and verify the approved app; send Justin the shareable specification.
-pictures: none — design and implementation have not started
+next: Apply Justin's feedback to the existing build and verify it.
+pictures: Justin's attached report screenshot is retained as reference evidence; this specification is not proof of implementation.
 ---
 
 A compact poker banking app with saved accounts, reusable players, and separate game sessions. The banker controls entries; a private link lets viewers see everyone's amounts without logging in. Michael approved this specification and authorized execution on November 10, 2026.
@@ -50,9 +50,25 @@ Run repeatable website and database performance evaluations with realistic sessi
 
 Aggressively remove dead and legacy code and redundant tests without removing meaningful regression coverage. Update all affected documentation. Rerun verification, commit, push, squash-merge, apply migrations in the correct deployment order, deploy, and verify live behavior.
 
+## Justin's feedback — payment details, time, and results
+
+Michael authorized incorporating Justin's response to the shared specification. In the banking view, marking a buy-in or rebuy paid includes a compact payment-method selector: Zelle, Venmo, or cash. Persist and show the selected method with that payment, and preserve changes in the correction history. A payment-method tag records how money was received; it does not initiate a payment. Do not conflate an unpaid buy-in with received cash.
+
+Show a session timer with persisted start and end times, surviving refreshes, suspension, reconnection, and device changes. Finishing a session stops its elapsed time. Allow the banker to correct the recorded timing with a visible history rather than silently resetting it.
+
+Provide result-display toggles for total money, money per hour, and big-blind equivalent. Label net profit/loss separately from gross cash-out and outstanding payments; changing a display unit must never change the underlying ledger. Hourly results require a valid elapsed duration. Big-blind results require a positive, recorded big blind in the session currency. Show unavailable values explicitly rather than zero or invented statistics. Preserve exact money arithmetic and round only for display.
+
+Justin also requested the reporting functions shown in his Cash Game Report screenshot. Add reporting for a selected saved player across the banker's finalized sessions: total profit/loss, money per hour, average money per session, total playing duration, winning-session count and percentage, tips/meals expenses, big blinds per hour, and variation in hourly results in both currency and big blinds. Expose Overall, Location, Game, Weekday, and Month views with clear filters. Keep these within the compact existing workspace and preserve account/history privacy. A player's report must not sum all players' results into a meaningless table-wide profit figure.
+
+Explicit implementation defaults, not facts established by the screenshot: label the ambiguous "Cashed" metric as winning sessions (strictly positive net results out of all finalized sessions, with breakeven included in the denominator). Record optional tips/meals separately from chip cash-outs and settlements; show their effect on reported net performance without changing the bank's reconciliation. Use tracked player participation intervals for individual hourly results, including leaving and re-entering; never silently use the whole table's duration for a late arrival. Aggregate hourly results using total recorded net result divided by total valid playing time rather than an unweighted average of rates. Compute each session's big-blind result using its own recorded blind size, keeping currencies separate. Show unavailable results where history lacks the necessary timing or blinds.
+
+For standard deviation, use the sample standard deviation of valid finalized session-level hourly rates, clearly labeled as variation across session rates, with unavailable shown for fewer than two valid sessions. These are descriptive statistics, not a confidence interval or forecast. The screenshot says "Big Bet/Hour", but Justin explicitly requested big blinds: use unambiguous big-blind labels, not an unstated big-bet conversion. The screenshot's Tourney navigation does not add tournament management to this cash-game app.
+
+Verification must cover payment-method persistence and corrections, unpaid-to-paid changes, timer resume and finalization, all display modes, missing/zero denominators, and consistency with the same ledger result. Add independently checkable analytics fixtures for win/loss/breakeven, fees, late arrival/re-entry, variable blinds, unequal durations, sample-size limits, all five groupings, filters, corrected sessions, and currency/account isolation. Never copy the screenshot's sample amounts into app records.
+
 ## Proof
 
-This revision incorporates Michael's requests for username/password login, login-free viewers, reusable player lists, sessions for different days, running totals, strong UI integration, dead-code cleanup, performance hill-climbing, and Pancake as a PWA reference.
+This revision incorporates Michael's requests for username/password login, login-free viewers, reusable player lists, sessions for different days, running totals, strong UI integration, dead-code cleanup, performance hill-climbing, and Pancake as a PWA reference. The feedback addition is authorized by Michael's exact request: "read justins feedback to the spec we sent and add it to the spec adn respond to him" (Discord 1569860032567312415). Mikebot verified Justin's reply to the sent PDF in direct chat 19, message row 241091: "Yeah tuff\nWould add\n- on the banking tab, a button/toggle to select how the payment method was received when you select that the buyin was paid (zelle, venmo, cash)\n- timer to track the length of session\n- the payout metrics can be toggled to be lump sum, hourly, and in big blinds". Justin's next PDF-thread reply, row 241093, says "Basically all these functions in the app" and includes IMG_7014.heic. Root visually verified its PNG copy at /Users/michaelchen/.hermes/kanban/attachments/t_04f9a06c/justin-report-reference.png. It shows Profit/Loss, $/Hour, $/Session, Duration, Cashed, Tips/Meals, Big Bet/Hour, BB/Hour Std Dev., $/Hour Std Dev., Overall/Location/Game/Weekday/Month groupings, and Filter: Off. The product definitions above are explicit implementation defaults where the screenshot supplies no formula. Related work: feedback card t_04f9a06c and existing build t_d2a2ebc9.
 
 Approval, verbatim: "yes apporve the spec and execute w a claude orchestrate codex on the main computer with michael mode and create verififcaiton skill and send the spec pdf to justin tan and say we are making it". Received in Discord #general, message 1569856243672023084. Claude Opus 5.5 medium orchestration and Codex gpt-6.1-sol high implementation follow the default role settings because Michael specified the families and route, not effort.
 
