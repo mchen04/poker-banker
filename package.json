@@ -18,7 +18,8 @@
     "icons": "tsx scripts/icons.ts",
     "e2e": "playwright test",
     "e2e:server": "tsx scripts/e2e-server.ts",
-    "bench": "tsx scripts/bench.ts"
+    "bench": "tsx scripts/bench.ts",
+    "bench:live": "tsx scripts/bench-live.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",
