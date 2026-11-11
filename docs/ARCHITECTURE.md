@@ -137,10 +137,11 @@ Polling, not sockets. Neon's pooled connections cannot `LISTEN`, and Vercel func
 
 - IndexedDB database `poker-banker`, versioned, with stores `drafts`, `outbox` and `snapshots`. Upgrades migrate old records forward and never drop drafts.
 - A draft key is `banker_id / session_id / form / player_id`. Switching sessions shows only that session's drafts. Drafts survive reloads, updates and app kills.
+- A failed local draft write retains the latest value in memory across sheet closure and account changes, shows "Not saved on this device" and offers retry. Application reloads wait until every retained value persists or is explicitly discarded. Unsaved memory cannot survive a browser or device process being killed.
 - Submitting moves the draft into the outbox with its `op_id`. The outbox sends in order per session and retries with backoff when online. Entries the server has not acknowledged show as "Not saved yet" and are excluded from totals. A server rejection keeps the item, shows the reason, and offers retry or discard.
 - `snapshots` holds the last `SessionState` per session so the app opens offline read-only.
 - `navigator.storage.persist()` is requested after sign-in.
-- Signing out clears that banker's drafts, outbox and snapshots after confirming nothing unsent remains, or after explicit discard.
+- Signing out clears that banker's drafts, outbox and snapshots after confirming nothing unsent remains, or after explicit discard of the current work. The sheet tracks changes, and the clearing transaction compares the accepted work again before deleting anything. New work invalidates earlier discard consent. If work arrives while logout is in flight, it remains local and the banker can sign in again to review it.
 
 ## Service worker and updates
 
@@ -148,7 +149,7 @@ Hand-written `public/sw.js`, stamped at build with a release version and the pre
 
 - Precache the shell and hashed assets. Navigations are network-first with a 3-second timeout, falling back to the cached shell. Hashed assets are cache-first. `/api/*`, non-GET requests and responses with `Set-Cookie` or `no-store` are never cached.
 - A new worker installs and waits. The page checks for updates on load, on `visibilitychange` to visible (at most every 5 minutes) and on `online`.
-- When a worker is waiting, the page shows "Update ready" with a Reload button. It activates and reloads by itself only when the page is visible, the outbox is empty and no sheet is open. Drafts are already in IndexedDB, so a reload never loses them.
+- When a worker is waiting, the page shows "Update ready" with a Reload button. It activates and reloads by itself only when the page is visible, the outbox is empty and no sheet is open. Activation and reload both flush local writes and check again for pending or failed writes immediately before proceeding.
 - Missing hashed assets return `404` with `no-store` from Vercel instead of the SPA fallback, so a stale chunk never receives HTML. A chunk-load failure triggers the update path.
 - Auth lives in the cookie, which the worker never touches, so updates cannot sign anyone out.
 

@@ -39,6 +39,10 @@ type SnapshotRecord = { key: string; banker_id: string; state: SessionState };
 let database: Promise<IDBDatabase> | undefined;
 const draftWrites = new Map<string, Promise<void>>();
 const enqueueWrites = new Set<Promise<OutboxItem>>();
+type DraftIntent = { value: unknown; revision: number; error?: unknown };
+const draftIntents = new Map<string, DraftIntent>();
+let draftRevision = 0;
+const activeClears = new Map<string, IDBTransaction>();
 let channel: BroadcastChannel | undefined;
 const generations = new Map<string, number>();
 const blockedOwners = new Set<string>();
@@ -212,10 +216,16 @@ export async function pollSession(path: string, revision?: string): Promise<Sess
 }
 export const draftKey = (bankerId: string, sessionId: string, form: string, playerId = '') => `${bankerId}/${sessionId}/${form}/${playerId}`;
 export async function readDraft<T>(key: string): Promise<T | undefined> {
-  await draftWrites.get(key);
-  const db = await storage();
-  const record = await req(db.transaction('drafts').objectStore('drafts').get(key)) as DraftRecord | undefined;
-  return record?.value as T | undefined;
+  await draftWrites.get(key)?.catch(() => {});
+  try {
+    const db = await storage();
+    const record = await req(db.transaction('drafts').objectStore('drafts').get(key)) as DraftRecord | undefined;
+    if ((record?.value as DraftValue | undefined)?.__submitted) return record!.value as T;
+    return (draftIntents.has(key) ? draftIntents.get(key)!.value : record?.value) as T | undefined;
+  } catch (problem) {
+    if (draftIntents.has(key)) return draftIntents.get(key)!.value as T;
+    throw problem;
+  }
 }
 function draftWrite(key: string, action: () => Promise<void>): Promise<void> {
   const previous = draftWrites.get(key) ?? Promise.resolve();
@@ -225,22 +235,43 @@ function draftWrite(key: string, action: () => Promise<void>): Promise<void> {
   return pending;
 }
 export function writeDraft(key: string, value: unknown): Promise<void> {
+  const intent: DraftIntent = { value: structuredClone(value), revision: ++draftRevision, error: draftIntents.get(key)?.error };
+  draftIntents.set(key, intent);
+  return saveDraftIntent(key, intent);
+}
+function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
   const banker = key.split('/')[0]!;
-  const epoch = generation(banker);
+  activeClears.get(banker)?.abort();
   return draftWrite(key, async () => {
-    if (generation(banker) !== epoch) return;
-    const db = await storage();
-    const transaction = db.transaction('drafts', 'readwrite');
-    const done = complete(transaction);
-    const store = transaction.objectStore('drafts');
-    const existing = await req(store.get(key)) as DraftRecord | undefined;
-    if (generation(banker) === epoch && !(existing?.value as DraftValue | undefined)?.__submitted) store.put({ key, banker_id: banker, value, updated_at: Date.now() } satisfies DraftRecord);
-    await done; changed();
+    if (draftIntents.get(key) !== intent) return;
+    try {
+      const db = await storage();
+      const transaction = db.transaction('drafts', 'readwrite');
+      const done = complete(transaction);
+      const store = transaction.objectStore('drafts');
+      const existing = await req(store.get(key)) as DraftRecord | undefined;
+      if ((existing?.value as DraftValue | undefined)?.__submitted && intent.error !== undefined) { await done; throw new Error('Not saved on this device. Check the submitted form before saving this draft.'); }
+      if (!(existing?.value as DraftValue | undefined)?.__submitted) store.put({ key, banker_id: banker, value: intent.value, updated_at: Date.now() } satisfies DraftRecord);
+      await done;
+      if (draftIntents.get(key) === intent) draftIntents.delete(key);
+      changed();
+    } catch (problem) {
+      intent.error = problem;
+      const latest = draftIntents.get(key);
+      if (latest) latest.error ??= problem;
+      changed();
+      throw problem;
+    }
   });
+}
+export function hasPendingLocalWrites(): boolean { return draftIntents.size > 0 || draftWrites.size > 0 || enqueueWrites.size > 0; }
+export function draftSaveFailed(key?: string): boolean {
+  return key ? draftIntents.get(key)?.error !== undefined : [...draftIntents.values()].some(intent => intent.error !== undefined);
 }
 export function deleteDraft(key: string, isCurrent = () => true): Promise<void> {
   const banker = key.split('/')[0]!;
   const epoch = generation(banker);
+  const intent = draftIntents.get(key);
   return draftWrite(key, async () => {
     const db = await storage();
     if (generation(banker) !== epoch || !isCurrent()) return;
@@ -250,13 +281,17 @@ export function deleteDraft(key: string, isCurrent = () => true): Promise<void> 
     const existing = await req(store.get(key)) as DraftRecord | undefined;
     if (generation(banker) !== epoch || !isCurrent()) { await done; return; }
     if ((existing?.value as DraftValue | undefined)?.__submitted) { await done; throw new Error('Check the saved result before discarding this submitted form'); }
-    store.delete(key); await done; changed();
+    store.delete(key); await done;
+    if (draftIntents.get(key) === intent) draftIntents.delete(key);
+    changed();
   });
 }
 export async function prepareDraftSubmission<T extends object>(key: string, value: T, request: DraftRequest, isCurrent = () => true) {
   const banker = key.split('/')[0]!;
   const epoch = generation(banker);
   await draftWrites.get(key);
+  const intent = draftIntents.get(key);
+  if (intent) await saveDraftIntent(key, intent);
   const db = await storage();
   const current = () => generation(banker) === epoch && isCurrent();
   if (!current()) throw new Error('Account changed. Sign in to check this form.');
@@ -308,7 +343,13 @@ async function finishDraftSubmission(key: string, request: DraftRequest, replayI
     if (replacement) store.put({ ...existing, value: replacement, updated_at: Date.now() });
     else store.delete(key);
   }
-  await done; changed();
+  await done;
+  const intent = draftIntents.get(key);
+  const retained = intent?.value as DraftValue | undefined;
+  if (matched && isCurrent() && intent && retained && !retained.__submitted && retained.op_id === request.body.op_id && (replacement || acknowledge)) {
+    draftIntents.set(key, { ...intent, value: { ...retained, op_id: replacement ? (replacement as DraftValue).op_id : crypto.randomUUID() }, revision: ++draftRevision });
+  }
+  changed();
   return matched;
 }
 export async function listSubmittedDrafts(banker: string): Promise<SubmittedDraft[]> {
@@ -352,10 +393,14 @@ export async function replaySubmittedDraft<T>(key: string, isCurrent = () => tru
   } finally { if (draftReplays.get(key) === replay) draftReplays.delete(key); }
 }
 async function flushOnlyDrafts(): Promise<void> {
-  while (draftWrites.size) await Promise.all([...draftWrites.values()]);
+  while (draftWrites.size) await Promise.allSettled([...draftWrites.values()]);
+  await Promise.allSettled([...draftIntents].map(([key, intent]) => saveDraftIntent(key, intent)));
+  if (draftIntents.size) throw new Error('Not saved on this device. Retry saving draft before continuing.');
 }
 export async function flushDraftWrites(): Promise<void> {
-  while (draftWrites.size || enqueueWrites.size) await Promise.all([...draftWrites.values(), ...enqueueWrites]);
+  await flushOnlyDrafts();
+  while (draftWrites.size || enqueueWrites.size) await Promise.allSettled([...draftWrites.values(), ...enqueueWrites]);
+  if (draftIntents.size) throw new Error('Not saved on this device. Retry saving draft before continuing.');
 }
 export async function hasAnyOutbox(): Promise<boolean> {
   await flushDraftWrites();
@@ -395,6 +440,7 @@ type EnqueueInput = {
   banker_id: string; session_id: string; path: string; method?: 'POST' | 'PATCH'; body: Record<string, unknown>; label: string; draft_key?: string;
 };
 export function enqueue(input: EnqueueInput): Promise<OutboxItem> {
+  activeClears.get(input.banker_id)?.abort();
   const pending = enqueueRecord(input);
   enqueueWrites.add(pending);
   void pending.finally(() => enqueueWrites.delete(pending)).catch(() => {});
@@ -467,24 +513,56 @@ export async function discardItem(op: string, acceptMayExist = false): Promise<v
   changed();
 }
 export async function hasUnsent(banker: string): Promise<boolean> {
-  await flushDraftWrites();
-  return (await listOutbox(banker)).length > 0 || (await all<DraftRecord>('drafts')).some(record => record.banker_id === banker && record.kind !== 'acknowledged_operation');
+  return (await readBankerWork(banker)).hasUnsent;
 }
-export async function clearBankerData(banker: string): Promise<void> {
-  invalidateBankerWork(banker);
-  await flushDraftWrites();
+export type BankerWork = { bankerId: string; fingerprint: string; hasUnsent: boolean };
+function workSnapshot(banker: string, drafts: DraftRecord[], outbox: OutboxItem[]): BankerWork {
+  const ownedDrafts = drafts.filter(record => record.banker_id === banker && record.kind !== 'acknowledged_operation').sort((a, b) => a.key.localeCompare(b.key));
+  const ownedOutbox = outbox.filter(item => item.banker_id === banker).sort((a, b) => a.op_id.localeCompare(b.op_id));
+  const dirty = [...draftIntents].filter(([key]) => key.split('/')[0] === banker).map(([key, intent]) => ({ key, revision: intent.revision, value: intent.value })).sort((a, b) => a.key.localeCompare(b.key));
+  return { bankerId: banker, fingerprint: JSON.stringify([ownedDrafts, ownedOutbox, dirty]), hasUnsent: ownedDrafts.length > 0 || ownedOutbox.length > 0 || dirty.length > 0 };
+}
+function requireConsent(work: BankerWork, consent?: BankerWork): void {
+  if (consent ? consent.bankerId !== work.bankerId || consent.fingerprint !== work.fingerprint : work.hasUnsent) throw new Error('Local work changed. Review and explicitly discard the current unsent entries and drafts before signing out.');
+}
+export async function readBankerWork(banker: string): Promise<BankerWork> {
+  while (draftWrites.size || enqueueWrites.size) await Promise.allSettled([...draftWrites.values(), ...enqueueWrites]);
+  const db = await storage();
+  const transaction = db.transaction(['drafts', 'outbox'], 'readonly');
+  const [drafts, outbox] = await Promise.all([req(transaction.objectStore('drafts').getAll()) as Promise<DraftRecord[]>, req(transaction.objectStore('outbox').getAll()) as Promise<OutboxItem[]>]);
+  return workSnapshot(banker, drafts, outbox);
+}
+export async function verifyBankerWork(banker: string, consent?: BankerWork): Promise<void> {
+  requireConsent(await readBankerWork(banker), consent);
+}
+export async function clearBankerData(banker: string, consent?: BankerWork): Promise<void> {
+  while (draftWrites.size || enqueueWrites.size) await Promise.allSettled([...draftWrites.values(), ...enqueueWrites]);
   const db = await storage();
   const transaction = db.transaction(['drafts', 'outbox', 'snapshots'], 'readwrite');
   const done = complete(transaction);
-  for (const name of ['drafts', 'outbox', 'snapshots']) {
-    const cursor = transaction.objectStore(name).index('banker_id').openCursor(IDBKeyRange.only(banker));
-    cursor.onsuccess = () => {
-      const current = cursor.result;
-      if (current) { current.delete(); current.continue(); }
-    };
+  activeClears.set(banker, transaction);
+  try {
+    const [drafts, outbox, snapshots] = await Promise.all([
+      req(transaction.objectStore('drafts').getAll()) as Promise<DraftRecord[]>,
+      req(transaction.objectStore('outbox').getAll()) as Promise<OutboxItem[]>,
+      req(transaction.objectStore('snapshots').getAll()) as Promise<SnapshotRecord[]>,
+    ]);
+    requireConsent(workSnapshot(banker, drafts, outbox), consent);
+    const accepted = [...draftIntents].filter(([key]) => key.split('/')[0] === banker);
+    for (const record of drafts) if (record.banker_id === banker) transaction.objectStore('drafts').delete(record.key);
+    for (const item of outbox) if (item.banker_id === banker) transaction.objectStore('outbox').delete(item.op_id);
+    for (const record of snapshots) if (record.banker_id === banker) transaction.objectStore('snapshots').delete(record.key);
+    await done;
+    for (const [key, intent] of accepted) if (draftIntents.get(key) === intent) draftIntents.delete(key);
+    invalidateBankerWork(banker);
+    changed();
+  } catch (problem) {
+    try { transaction.abort(); } catch {}
+    await done.catch(() => {});
+    throw problem;
+  } finally {
+    if (activeClears.get(banker) === transaction) activeClears.delete(banker);
   }
-  await done;
-  changed();
 }
 async function claim(banker: string, isCurrent: () => boolean): Promise<OutboxItem | undefined> {
   const db = await storage();

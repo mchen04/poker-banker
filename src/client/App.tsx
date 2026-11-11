@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SessionState } from '../domain/session';
-import { bankerClient, blockBankerWork, clearBankerData, discoverAccount, discardItem, outboxUncertain, flushDraftWrites, hasUnsent, invalidateBankerWork, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, resumeBankerWork, retryItem, storeSnapshot, syncOutbox, type Banker, type OutboxItem, type SubmittedDraft } from './data';
+import { bankerClient, blockBankerWork, clearBankerData, discoverAccount, discardItem, outboxUncertain, invalidateBankerWork, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readBankerWork, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, resumeBankerWork, retryItem, storeSnapshot, syncOutbox, verifyBankerWork, type Banker, type BankerWork, type OutboxItem, type SubmittedDraft } from './data';
 import { usePwaUpdate } from './pwa';
 import { Auth } from './views/Auth';
 import { AddPlayerSheet, CorrectionSheet, MoneySheet, PlayerSheet, SessionView } from './views/Session';
 import { CloseSheet, HistorySheet, MenuSheet, ReopenSheet, SessionForm, ShareSheet, TimingSheet, type SessionSummary } from './views/Settings';
 import { PlayersScreen } from './views/Players';
-import { ClientContext, ErrorText, money, sessionLabel, Sheet, storageFailure, type SheetState } from './views/common';
+import { ClientContext, DraftSaveStatus, ErrorText, money, sessionLabel, Sheet, storageFailure, type SheetState } from './views/common';
 
 const viewerToken = location.pathname.startsWith('/v/') ? location.pathname.split('/')[2] : null;
 export function App() {
@@ -48,8 +48,9 @@ export function App() {
   useEffect(() => {
     function connection() { setOnline(navigator.onLine); }
     function storageError(event: Event) { setError((event as CustomEvent<string>).detail || 'Local storage is unavailable. Keep this page open until your entry is saved.'); }
-    window.addEventListener('online', connection); window.addEventListener('offline', connection); window.addEventListener('pb-storage-error', storageError);
-    return () => { epoch.current++; window.removeEventListener('online', connection); window.removeEventListener('offline', connection); window.removeEventListener('pb-storage-error', storageError); };
+    function storageSaved() { setError(previous => /not saved on this device|quota|local storage/i.test(previous) ? '' : previous); }
+    window.addEventListener('online', connection); window.addEventListener('offline', connection); window.addEventListener('pb-storage-error', storageError); window.addEventListener('pb-storage-saved', storageSaved);
+    return () => { epoch.current++; window.removeEventListener('online', connection); window.removeEventListener('offline', connection); window.removeEventListener('pb-storage-error', storageError); window.removeEventListener('pb-storage-saved', storageSaved); };
   }, []);
   const resetAuth = useCallback((options: { clearIdentity?: boolean } = {}) => {
     const previousBanker = activeBanker.current?.id;
@@ -239,18 +240,22 @@ export function App() {
     } catch (problem) { if (isCurrent()) setError(problem instanceof Error ? problem.message : 'Could not check the saved form'); }
     finally { if (isCurrent()) setCheckingForm(false); }
   }
-  async function signOut() {
+  async function signOut(consent?: BankerWork) {
     if (!client || !sameAccount()) return;
     const account = client.bankerId;
-    setLoggingOut(true); const generation = ++epoch.current; invalidateBankerWork(account); stopSync.current?.();
-    const logoutClient = bankerClient(account);
-    const isCurrent = () => epoch.current === generation && activeBanker.current?.id === account && logoutClient.isCurrent();
+    const startingEpoch = epoch.current;
+    setLoggingOut(true); setError('');
+    let loggedOut = false;
     try {
-      await flushDraftWrites();
-      if (!isCurrent()) return;
+      await verifyBankerWork(account, consent);
+      if (epoch.current !== startingEpoch || activeBanker.current?.id !== account || !client.isCurrent()) return;
+      const generation = ++epoch.current; invalidateBankerWork(account); stopSync.current?.();
+      const logoutClient = bankerClient(account);
+      const isCurrent = () => epoch.current === generation && activeBanker.current?.id === account && logoutClient.isCurrent();
       await logoutClient.api('/api/auth/logout', 'POST', {});
+      loggedOut = true;
       if (!isCurrent()) return;
-      await clearBankerData(account);
+      await clearBankerData(account, consent);
       if (epoch.current !== generation || activeBanker.current?.id !== account) return;
       let stored: Banker | null = null;
       try { stored = JSON.parse(localStorage.getItem('pb-banker') ?? 'null') as Banker | null; } catch {}
@@ -258,7 +263,12 @@ export function App() {
       if (localStorage.getItem('pb-pending-codes')?.startsWith(`${account}/`)) localStorage.removeItem('pb-pending-codes');
       localStorage.removeItem(`pb-session-${account}`);
       resetAuth({ clearIdentity: false });
-    } catch (problem) { if (isCurrent()) setError(problem instanceof Error ? problem.message : 'Could not sign out. Reconnect and try again.'); }
+    } catch (problem) {
+      if (activeBanker.current?.id === account) {
+        if (loggedOut) resetAuth({ clearIdentity: false });
+        setError(loggedOut ? 'Signed out. New local work was retained. Sign in again to review your saved drafts and entries.' : problem instanceof Error ? problem.message : 'Could not sign out. Reconnect and try again.');
+      }
+    }
     finally { setLoggingOut(false); }
   }
   async function reloadAccount() {
@@ -304,11 +314,11 @@ export function App() {
   const recentClosed = new Set(sessions.filter(session => session.status === 'closed').slice(0, 5).map(session => session.id));
   const tabSessions = sessions.filter(session => session.status === 'open' || session.id === sessionId || recentClosed.has(session.id));
   const provider = { banker: viewerToken ? null : banker, client, state, online, pending, open: boundOpen, update: boundUpdate, notify: boundNotify, mutate: boundMutate, updateBanner, formBusy: formBusy || loggingOut, setFormBusy, isCurrent: sameAccount };
-  if (checking) return <main className="auth"><div className="brand-mark">PB</div><p>Opening your bank…</p></main>;
-  if (accountChanged) return <main className="auth"><div className="brand-mark">PB</div><h1>Account changed</h1><p>Reload account state to continue. Saved drafts and entries stay with their account.</p><ErrorText text={error} /><button className="primary wide" disabled={reloadingAccount} onClick={() => { void reloadAccount(); }}>{reloadingAccount ? 'Reloading…' : 'Reload account state'}</button></main>;
-  if (!banker && !viewerToken) return <>{updateBanner}<Auth signedIn={signedIn} /></>;
+  if (checking) return <main className="auth"><DraftSaveStatus /><div className="brand-mark">PB</div><p>Opening your bank…</p></main>;
+  if (accountChanged) return <main className="auth"><DraftSaveStatus /><div className="brand-mark">PB</div><h1>Account changed</h1><p>Reload account state to continue. Saved drafts and entries stay with their account.</p><ErrorText text={error} /><button className="primary wide" disabled={reloadingAccount} onClick={() => { void reloadAccount(); }}>{reloadingAccount ? 'Reloading…' : 'Reload account state'}</button></main>;
+  if (!banker && !viewerToken) return <>{updateBanner}<DraftSaveStatus /><ErrorText text={error} /><Auth signedIn={signedIn} /></>;
   return <ClientContext.Provider value={provider}><div className="app-shell">{!viewerToken && <header className="app-bar"><a className="wordmark" href="/" onClick={event => { event.preventDefault(); setScreen('workspace'); }}>Poker banker</a><nav aria-label="Workspace navigation"><button aria-pressed={screen === 'workspace'} onClick={() => setScreen('workspace')}>Workspace</button><button aria-pressed={screen === 'players'} onClick={() => { setScreen('players'); setSheet(null); }}>Players</button></nav></header>}
-    {!sheet && !childDialog && updateBanner}
+    {!sheet && !childDialog && <>{updateBanner}<DraftSaveStatus /></>}
     {!online && <p className="offline-banner" role="status">Offline. Saved totals are read only. New entries wait to sync.</p>}
     {notice && <div className="notice" role="status" data-testid={notice.startsWith('Saved ') ? 'saved-confirmation' : 'save-status'}>{notice}</div>}<ErrorText text={error} />
     {submittedForms.length > 0 && <section className="outbox" aria-label="Unconfirmed forms"><h2>Unconfirmed forms</h2><p>These forms may already have been saved. Check their saved results before starting another copy.</p><ul>{submittedForms.map(form => <li key={form.key}><button disabled={checkingForm || formBusy} onClick={() => { void checkSubmittedForm(form); }}>Check saved form: {({ 'new-session': 'New session', settings: 'Session settings', reopen: 'Reopen session', timing: 'Correct times', correction: 'Entry correction', 'add-player': 'Add player', rename: 'Rename player' } as Record<string, string>)[form.form] ?? 'Saved form'}</button></li>)}</ul></section>}
@@ -316,9 +326,22 @@ export function App() {
     {sheet && content && (moneySheet ? content : <Sheet key={`${sheet.kind}/${sheet.player ?? ''}/${sheet.entry ?? ''}`} title={title} close={() => setSheet(null)}>{content}</Sheet>)}
   </div></ClientContext.Provider>;
 }
-function SignoutSheet({ banker, busy, signOut }: { banker: Banker; busy: boolean; signOut: () => Promise<void> }) {
-  const [unsent, setUnsent] = useState<boolean | null>(null);
-  const [discard, setDiscard] = useState(false);
-  useEffect(() => { void hasUnsent(banker.id).then(setUnsent); }, [banker.id]);
-  return <><p>Signing out clears this account's local drafts and offline snapshots on this device.</p>{unsent && <><p className="warning">You have unsent work. Some entries or forms may already exist on the server. Discarding local work will not undo saved entries. Check saved results first, or explicitly discard it.</p><label className="check"><input type="checkbox" checked={discard} onChange={event => setDiscard(event.target.checked)} />Discard unsent entries and drafts</label></>}<button className="primary wide" disabled={busy || unsent === null || (unsent && !discard)} onClick={() => { void signOut(); }}>{busy ? 'Signing out…' : 'Confirm sign out'}</button></>;
+function SignoutSheet({ banker, busy, signOut }: { banker: Banker; busy: boolean; signOut: (consent?: BankerWork) => Promise<void> }) {
+  const [work, setWork] = useState<BankerWork | null>(null);
+  const [discard, setDiscard] = useState<BankerWork | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true, revision = 0;
+    const refresh = () => {
+      const reading = ++revision;
+      void readBankerWork(banker.id).then(next => {
+        if (!active || reading !== revision) return;
+        setWork(next); setDiscard(previous => previous?.fingerprint === next.fingerprint ? previous : null); setError('');
+      }).catch(problem => { if (active && reading === revision) { setWork(null); setDiscard(null); setError(problem instanceof Error ? problem.message : 'Could not check local work'); } });
+    };
+    refresh(); window.addEventListener('pb-data', refresh); window.addEventListener('storage', refresh);
+    const timer = window.setInterval(refresh, 500);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('pb-data', refresh); window.removeEventListener('storage', refresh); };
+  }, [banker.id]);
+  return <><p>Signing out clears this account's local drafts and offline snapshots on this device.</p>{work?.hasUnsent && <><p className="warning">You have unsent work. Some entries or forms may already exist on the server. Discarding local work will not undo saved entries. Check saved results first, or explicitly discard it.</p><label className="check"><input type="checkbox" checked={discard !== null} onChange={event => setDiscard(event.target.checked ? work : null)} />Discard unsent entries and drafts</label></>}<ErrorText text={error} /><button className="primary wide" disabled={busy || work === null || (work.hasUnsent && discard === null)} onClick={() => { void signOut(discard ?? undefined); }}>{busy ? 'Signing out…' : 'Confirm sign out'}</button></>;
 }

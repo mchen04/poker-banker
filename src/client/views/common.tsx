@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Banker, BankerClient, OutboxItem } from '../data';
-import { deleteDraft, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftRequest } from '../data';
+import { deleteDraft, draftSaveFailed, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftRequest } from '../data';
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
@@ -93,7 +93,12 @@ export function useDraft<T extends object>(key: string, initial: T) {
     void readDraft<Value>(key).then(saved => { if (isCurrent()) { const next = saved ?? initialValue.current; submitted.current = (next as Value).__submitted; setValue(next); setReady(true); } }).catch(problem => { if (isCurrent()) { const message = problem instanceof Error ? problem.message : 'Could not restore the draft'; setError(message); storageFailure(problem); } });
     return () => { owner.active = false; owner.version++; };
   }, [key]);
-  function update(next: T) { if (!current() || submitted.current) return; const isCurrent = capture(); setValue(next); void writeDraft(key, next).catch(problem => { if (isCurrent()) { setError(problem instanceof Error ? problem.message : 'Could not save draft'); storageFailure(problem); } }); }
+  useEffect(() => {
+    const refresh = () => { if (current()) setError(draftSaveFailed(key) ? 'Not saved on this device' : ''); };
+    refresh(); window.addEventListener('pb-data', refresh);
+    return () => window.removeEventListener('pb-data', refresh);
+  }, [key]);
+  function update(next: T) { if (!current() || submitted.current) return; const isCurrent = capture(); setValue(next); void writeDraft(key, next).then(() => { if (isCurrent()) setError(''); }).catch(problem => { if (isCurrent()) { setError('Not saved on this device'); storageFailure(problem); } }); }
   function freshValue(isCurrent: () => boolean) {
     if (!isCurrent()) return;
     submitted.current = undefined;
@@ -129,7 +134,10 @@ export function useDraft<T extends object>(key: string, initial: T) {
         throw problem;
       }
       ensureCurrent();
-      freshValue(isCurrent);
+      const retained = await readDraft<Value>(key);
+      ensureCurrent();
+      if (retained) { submitted.current = retained.__submitted; setValue(retained); }
+      else freshValue(isCurrent);
       if (result && typeof result === 'object' && 'session' in result) client?.update(result as unknown as SessionState);
       return result;
     } finally { if (inFlight.current === flight) inFlight.current = undefined; }
@@ -155,6 +163,12 @@ export function useFormBusy(busy: boolean) {
   useLayoutEffect(() => { setBusy(busy); return () => setBusy(false); }, [busy, setBusy]);
 }
 export function storageFailure(problem: unknown) { window.dispatchEvent(new CustomEvent('pb-storage-error', { detail: problem instanceof Error ? problem.message : 'Local storage is unavailable' })); }
+export function DraftSaveStatus() {
+  const [failed, setFailed] = useState(draftSaveFailed);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { const refresh = () => setFailed(draftSaveFailed()); window.addEventListener('pb-data', refresh); refresh(); return () => window.removeEventListener('pb-data', refresh); }, []);
+  return failed ? <div className="warning" role="alert"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div> : null;
+}
 export function ErrorText({ text }: { text: string }) { return text ? <p role="alert" className="error">{text}</p> : null; }
 export function Sheet({ title, children, close, leadingClose = false, closeLabel = 'Done', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -195,6 +209,6 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
   }, []);
   const closeButton = <button type="button" aria-label={leadingClose ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
   return <div className="sheet-backdrop"><div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
-    {updateBanner}<div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><fieldset className="sheet-fields" disabled={busy}>{children}</fieldset>
+    {updateBanner}<DraftSaveStatus /><div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><fieldset className="sheet-fields" disabled={busy}>{children}</fieldset>
   </div></div>;
 }
