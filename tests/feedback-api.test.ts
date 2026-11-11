@@ -133,12 +133,12 @@ describe('persisted timers and participation', () => {
     const owner = await account();
     let state = await session(owner);
     expect(state.timing).toEqual({ started_at: null, ended_at: null, elapsed_ms: null });
-    state = await entry(owner, state, 'buy_in', '10000');
+    state = await entry(owner, state, 'buy_in', '10000', state.server_now);
     const start = state.session.started_at;
     expect(start).not.toBeNull();
     expect(state.events[0]!.kind).toBe('timer_started');
-    expect(state.entries[0]!.occurred_at).toBeNull();
-    expect(state.players[0]!.duration_ms).toBeNull();
+    expect(state.entries[0]!.occurred_at).toBe(start);
+    expect(state.players[0]!.duration_ms).not.toBeNull();
     const reload = await ok<SessionState>(await request(owner, `/sessions/${state.session.id}`));
     expect(reload.session.started_at).toBe(start);
     expect(Date.parse(reload.server_now)).toBeGreaterThanOrEqual(Date.parse(start!));

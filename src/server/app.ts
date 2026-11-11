@@ -175,10 +175,12 @@ export function createApp(pool: Database, config: Config = {}) {
     const occurredAt = input.occurred_at ?? null;
     if (input.kind === 'buy_in' || input.kind === 'cash_out') assertOccurredAt(row, occurredAt);
     const revision = await bump(db, banker, id);
-    if (input.kind === 'buy_in' && row.started_at === null) {
-      const timerStart = occurredAt ?? await serverTime(db);
-      await db.query('UPDATE game_sessions SET started_at = $3 WHERE id = $1 AND banker_id = $2', [id, banker, timerStart]);
-      await event(db, banker, id, revision, 'timer_started', { old: { started_at: null, ended_at: row.ended_at }, new: { started_at: timerStart, ended_at: row.ended_at } });
+    if (input.kind === 'buy_in' && row.started_at === null && occurredAt !== null) {
+      const started = await db.query(`UPDATE game_sessions SET started_at = $3 WHERE id = $1 AND banker_id = $2
+        AND NOT EXISTS (SELECT 1 FROM ledger_entries e WHERE e.session_id = $1 AND e.banker_id = $2
+          AND e.kind = 'buy_in' AND e.voids_entry_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM ledger_entries v WHERE v.voids_entry_id = e.id AND v.session_id = $1 AND v.banker_id = $2))`, [id, banker, occurredAt]);
+      if (started.rowCount) await event(db, banker, id, revision, 'timer_started', { old: { started_at: null, ended_at: row.ended_at }, new: { started_at: occurredAt, ended_at: row.ended_at } });
     }
     const payment = input.kind === 'payment_in' || input.kind === 'payment_out';
     await insertEntry(db, banker, id, revision, { ...input, method: payment ? input.method! : null, occurred_at: occurredAt });

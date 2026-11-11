@@ -28,24 +28,25 @@ function balanceText(player: PlayerState, currency: string) {
   const balance = BigInt(player.balance_minor);
   return balance === 0n ? 'Settled' : balance > 0n ? `Owes ${money(player.balance_minor, currency)}` : `Bank owes ${money(String(-balance), currency)}`;
 }
-export function Timer({ state }: { state: SessionState }) {
+function Timer({ state, unknownStart }: { state: SessionState; unknownStart: boolean }) {
   const [clock, setClock] = useState(0);
   const loaded = useRef(performance.now());
   useEffect(() => { loaded.current = performance.now(); setClock(0); }, [state.server_now]);
   useEffect(() => { const timer = window.setInterval(() => setClock(Math.max(0, Math.floor(performance.now() - loaded.current))), 1000); return () => clearInterval(timer); }, []);
   const elapsed = state.timing.elapsed_ms === null ? null : String(BigInt(state.timing.elapsed_ms) + (state.session.ended_at === null ? BigInt(clock) : 0n));
-  return <span data-testid="session-timer" className="timer">{elapsed === null ? 'Timer not started' : `${state.session.ended_at ? 'Finished · ' : 'Playing time · '}${duration(elapsed, state.session.ended_at === null)}`}</span>;
+  return <span data-testid="session-timer" className="timer">{elapsed === null ? unknownStart ? 'Start time unknown' : 'Timer not started' : `${state.session.ended_at ? 'Finished · ' : 'Playing time · '}${duration(elapsed, state.session.ended_at === null)}`}</span>;
 }
 export function SessionView({ state, viewer = false }: { state: SessionState; viewer?: boolean }) {
   const { open } = useClient();
   const [mode, setMode] = useState<DisplayMode>(() => (localStorage.getItem('pb-display') as DisplayMode) || 'total');
   const settings = state.session;
   const currency = settings.currency;
+  const unknownStart = settings.started_at === null && state.players.some(player => player.buy_in_count > 0);
   const status = settings.status === 'open' ? 'Open' : settings.closed_balanced ? 'Closed, balanced' : `Closed, off by ${money(state.totals.discrepancy_minor ?? '0', currency)}`;
   function display(next: DisplayMode) { setMode(next); localStorage.setItem('pb-display', next); }
   return <>
     <header className="session-heading"><div><p className="eyebrow">{new Date(`${settings.played_on}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p><h1>{settings.name}</h1><p className="session-meta">{[settings.location, settings.game, currency, settings.big_blind_minor ? `${money(settings.big_blind_minor, currency)} big blind` : null].filter(Boolean).join(' · ')}</p><p className="status-line">{status}</p></div>{!viewer && <button aria-label="Session menu" onClick={() => open({ kind: 'menu' })}>Menu</button>}</header>
-    <div className="timer-row"><Timer state={state} />{!viewer && settings.started_at === null && settings.status === 'open' && <StartTimer />}</div>
+    <div className="timer-row"><Timer state={state} unknownStart={unknownStart} />{!viewer && (unknownStart ? <button className="text-button" onClick={() => open({ kind: 'timing' })}>Correct times</button> : settings.started_at === null && settings.status === 'open' && <StartTimer />)}</div>
     <section className="totals" aria-label="Session totals" data-testid="totals">{[
       ['In', state.totals.total_in_minor], ['Out', state.totals.total_out_minor],
       [state.totals.on_table_minor !== null ? 'On table' : 'Off by', state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0'],
