@@ -22,6 +22,7 @@ const kinds = [
   { kind: 'share', path: `/api/sessions/${session}/share`, method: 'POST', body: { action: 'rotate' } },
   { kind: 'start', path: `/api/sessions/${session}/start`, method: 'POST', body: {} },
   { kind: 'correction', path: `/api/sessions/${session}/entries/entry/void`, method: 'POST', body: { reason: 'Pure void' } },
+  { kind: 'player-create', path: '/api/players', method: 'POST', body: { display_name: 'Recovered reusable player' } },
   { kind: 'rename', path: '/api/players/player', method: 'PATCH', body: { display_name: 'Recovered name' } },
   { kind: 'legacy-command', path: `/api/sessions/${session}/legacy-command`, method: 'POST', body: { detail: 'Recovered legacy value' } },
 ] as const;

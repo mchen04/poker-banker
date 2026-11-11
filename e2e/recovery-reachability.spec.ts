@@ -43,6 +43,7 @@ for (const group of ['ledger', 'commands'] as const) {
       { label: 'rename', path: `/api/players/${player.id}`, method: 'PATCH', body: { display_name: 'Recovered rename' }, field: 'Player name', value: 'Edited recovered rename' },
       { label: 'close', path: `${base}/close`, body: {} },
       { label: 'reopen', path: `${base}/reopen`, body: { reason: 'Recovered reason' }, field: 'Reason', value: 'Edited recovered reason' },
+      { label: 'player-create', path: '/api/players', body: { display_name: 'Recovered reusable player' }, field: 'Player name', value: 'Edited reusable player' },
       { label: 'legacy-command', path: `${base}/legacy-command`, body: { detail: 'Retained unknown value' }, field: 'detail', value: 'Edited unknown value' },
     ];
     if (group === 'commands') {
