@@ -78,7 +78,7 @@ CREATE TABLE ledger_entries (
   session_id uuid NOT NULL,
   player_id uuid NOT NULL,
   kind text NOT NULL CHECK (kind IN ('buy_in', 'cash_out', 'payment_in', 'payment_out', 'expense')),
-  amount_minor bigint NOT NULL CHECK (amount_minor > 0),
+  amount_minor bigint NOT NULL CHECK (amount_minor > 0 OR (kind = 'cash_out' AND amount_minor = 0)),
   note text CHECK (length(note) <= 500),
   method text CHECK (method IN ('cash', 'venmo', 'zelle')),
   CHECK ((kind IN ('payment_in', 'payment_out') AND method IS NOT NULL) OR

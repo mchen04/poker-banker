@@ -120,10 +120,10 @@ export function MoneySheet({ title, playerId, kind: initialKind }: { title: stri
     submitting.current = true; setSaving(true); setError('');
     try {
       const amount = parseMoney(draft.value.amount, currency);
-      if (amount <= 0n) throw new Error('Enter an amount above zero');
+      if (amount === 0n && draft.value.kind !== 'cash_out') throw new Error('Enter an amount above zero');
       const body: Record<string, unknown> = { op_id: draft.value.op_id, player_id: playerId, kind: draft.value.kind, amount_minor: String(amount) };
       if (chip) body.paid_now = draft.value.paid_now;
-      if (payment || (chip && draft.value.paid_now)) body.method = draft.value.method;
+      if (payment || (chip && draft.value.paid_now && amount > 0n)) body.method = draft.value.method;
       if (draft.value.note) body.note = draft.value.note;
       if (draft.value.occurred_at) body.occurred_at = new Date(draft.value.occurred_at).toISOString();
       await enqueue({ banker_id: banker!.id, session_id: state!.session.id, path: `/api/sessions/${state!.session.id}/entries`, body, label: `${entryLabels[draft.value.kind]} · ${money(String(amount), currency)}`, draft_key: key });
@@ -173,7 +173,9 @@ export function CorrectionSheet({ entryId }: { entryId: string }) {
     try {
       const body: Record<string, unknown> = { op_id: draft.value.op_id };
       if (replacement) {
-        body.replacement_amount_minor = String(parseMoney(amount, state!.session.currency));
+        const parsed = parseMoney(amount, state!.session.currency);
+        if (parsed === 0n && entry.kind !== 'cash_out') throw new Error('Enter an amount above zero');
+        body.replacement_amount_minor = String(parsed);
         if (payment) body.replacement_method = method;
         if (time) body.replacement_occurred_at = new Date(time).toISOString();
       }

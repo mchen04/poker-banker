@@ -180,7 +180,7 @@ export function createApp(pool: Database, config: Config = {}) {
     }
     const payment = input.kind === 'payment_in' || input.kind === 'payment_out';
     await insertEntry(db, banker, id, revision, { ...input, method: payment ? input.method! : null, occurred_at: occurredAt });
-    if ((input.kind === 'buy_in' && input.paid_now !== false) || (input.kind === 'cash_out' && input.paid_now === true)) {
+    if (input.amount_minor !== '0' && ((input.kind === 'buy_in' && input.paid_now !== false) || (input.kind === 'cash_out' && input.paid_now === true))) {
       await insertEntry(db, banker, id, revision, { player_id: input.player_id, kind: input.kind === 'buy_in' ? 'payment_in' : 'payment_out', amount_minor: input.amount_minor, method: input.method!, occurred_at: occurredAt });
     }
     return loadSession(db, banker, id);
@@ -193,6 +193,7 @@ export function createApp(pool: Database, config: Config = {}) {
     const state = await loadSession(db, banker, id);
     const original = state.entries.find(entry => entry.id === entryId) ?? notFound();
     if (original.voids_entry_id || state.entries.some(entry => entry.voids_entry_id === original.id)) conflict('already_voided', 'This entry cannot be voided again');
+    if (input.replacement_amount_minor === '0' && original.kind !== 'cash_out') throw new ApiError(400, 'invalid_request', 'Only a cash-out may be zero');
     const payment = original.kind === 'payment_in' || original.kind === 'payment_out';
     if (input.replacement_method !== undefined && !payment) throw new ApiError(400, 'invalid_request', 'Only a payment has a method');
     const replacing = input.replacement_amount_minor !== undefined || input.replacement_method !== undefined || input.replacement_occurred_at !== undefined;

@@ -13,6 +13,7 @@ export const currency = z.string().regex(/^[A-Z]{3}$/).refine(value => {
   try { currencyExponent(value); return true; } catch { return false; }
 }, 'Unsupported ISO currency');
 export const positiveMinor = z.string().regex(/^[1-9]\d{0,18}$/).refine(value => BigInt(value) <= MAX_MINOR);
+export const nonnegativeMinor = z.union([z.literal('0'), positiveMinor]);
 export const signedMinor = z.string().max(1000).regex(/^(?:0|-?[1-9]\d*)$/);
 export const revision = z.union([z.string().regex(/^(?:0|[1-9]\d{0,18})$/), z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).transform(String)])
   .refine(value => BigInt(value) <= MAX_MINOR);
@@ -33,16 +34,17 @@ export const seatPlayer = z.union([
 export const method = z.enum(['cash', 'venmo', 'zelle']);
 export const entryCreate = z.strictObject({
   op_id: opId, player_id: id, kind: z.enum(['buy_in', 'cash_out', 'payment_in', 'payment_out', 'expense']),
-  amount_minor: positiveMinor, note: z.string().trim().max(500).optional(), paid_now: z.boolean().optional(),
+  amount_minor: nonnegativeMinor, note: z.string().trim().max(500).optional(), paid_now: z.boolean().optional(),
   method: method.optional(), occurred_at: timestamp.optional(),
 }).superRefine((value, context) => {
+  if (value.amount_minor === '0' && value.kind !== 'cash_out') context.addIssue({ code: 'custom', message: 'Only a cash-out may be zero' });
   const payment = value.kind === 'payment_in' || value.kind === 'payment_out';
   const paidChip = (value.kind === 'buy_in' && value.paid_now !== false) || (value.kind === 'cash_out' && value.paid_now === true);
   if (value.paid_now !== undefined && value.kind !== 'buy_in' && value.kind !== 'cash_out') context.addIssue({ code: 'custom', message: 'Paid now applies to chip entries' });
-  if ((payment || paidChip) !== (value.method !== undefined)) context.addIssue({ code: 'custom', message: 'A payment requires a method; other entries have none' });
+  if (((payment || paidChip) && value.amount_minor !== '0' && value.method === undefined) || (!(payment || paidChip) && value.method !== undefined)) context.addIssue({ code: 'custom', message: 'A payment requires a method; other entries have none' });
 });
 export const voidEntry = z.strictObject({
-  op_id: opId, replacement_amount_minor: positiveMinor.optional(),
+  op_id: opId, replacement_amount_minor: nonnegativeMinor.optional(),
   replacement_method: method.optional(), replacement_occurred_at: timestamp.optional(),
 });
 export const reportQuery = z.strictObject({
