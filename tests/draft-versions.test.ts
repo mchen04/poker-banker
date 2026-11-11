@@ -470,3 +470,15 @@ it('does not let a first-write enqueue reservation stay unbound after another ta
   expect(storage.draft(key)).toEqual(newer);
   expect(await a.listOutbox(owner)).toEqual([]);
 });
+
+it.each(['discard', 'enqueue'] as const)('does not %s a saved draft without any observation of it', async operation => {
+  const storage = sharedStorage();
+  const a = await freshTab();
+  const b = await freshTab();
+  await b.writeDraft(key, newer);
+  const before = storage.state();
+  await settle(operation === 'discard' ? a.deleteDraft(key) : a.enqueue(enqueueInput));
+  expect(storage.state()).toEqual(before);
+  expect(storage.draft(key)).toEqual(newer);
+  expect(await a.listOutbox(owner)).toEqual([]);
+});
