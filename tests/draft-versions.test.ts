@@ -1433,7 +1433,8 @@ it.each([false, true])('keeps both a newer saved draft and a mismatched recovere
   expect((storage.draft(key) as typeof edited).amount).toBe(useRecovered ? '50' : '25');
   if (useRecovered) expect((storage.draft(key) as typeof edited).op_id).not.toBe(original.op_id);
   else expect(storage.draft(key)).toEqual(newer);
-  expect(await editing.listRecoveredDrafts(owner)).toEqual([]);
+  if (useRecovered) expect(await editing.listRecoveredDrafts(owner)).toEqual([expect.objectContaining({ key, value: expect.objectContaining({ amount: '50', __recovery_request: expect.objectContaining({ path: request.path }) }), request_error: expect.stringMatching(/currency/i) })]);
+  else expect(await editing.listRecoveredDrafts(owner)).toEqual([]);
   expect(await editing.listOutbox(owner)).toEqual([]);
   expect(server.writes()).toBe(1);
   expect(editing.hasPendingLocalWrites()).toBe(false);
