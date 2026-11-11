@@ -986,3 +986,171 @@ it('keeps a newer conflict visible when an old warning is dismissed and scopes n
   expect(editing.draftConflictNotice(key)).toBeUndefined();
   expect(editing.draftConflictNotices(owner)).toEqual([]);
 });
+
+function operationServer() {
+  const applied = new Map<string, { body: string; state: object }>();
+  let writes = 0;
+  let drop = false;
+  const fetch = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === '/api/auth/me') return Response.json({ banker: { id: owner, username: owner } }, { headers: { 'X-PB-Banker-ID': owner } });
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const op = String(body.op_id);
+    const previous = applied.get(op);
+    if (previous && previous.body !== JSON.stringify(body)) return Response.json({ error: { code: 'idempotency_mismatch', message: 'This operation already has different content' } }, { status: 409, headers: { 'X-PB-Banker-ID': owner } });
+    const state = previous?.state ?? { session: { id: 'session' }, revision: String(++writes), server_now: '2026-11-11T00:00:00Z' };
+    if (!previous) applied.set(op, { body: JSON.stringify(body), state });
+    if (drop) { drop = false; throw new TypeError('Response lost after commit'); }
+    return Response.json(state, { headers: { 'X-PB-Banker-ID': owner } });
+  });
+  vi.stubGlobal('fetch', fetch);
+  return { fetch, applied, writes: () => writes, loseNextReply: () => { drop = true; } };
+}
+function outboxEvents() {
+  const bus = new EventTarget();
+  vi.stubGlobal('window', { setTimeout, clearTimeout, setInterval, clearInterval, dispatchEvent: bus.dispatchEvent.bind(bus), addEventListener: bus.addEventListener.bind(bus), removeEventListener: bus.removeEventListener.bind(bus) });
+  vi.stubGlobal('navigator', { onLine: true });
+}
+async function drainApplied(tab: Tab) {
+  const stop = tab.syncOutbox(owner, () => {}, () => {});
+  try { await vi.waitFor(async () => expect(await tab.listOutbox(owner)).toEqual([])); }
+  finally { stop(); }
+}
+
+it.each([false, true])('recovers a quota-retained value with a fresh operation before review after another tab saved its former operation (lostReply=%s)', async lostReply => {
+  outboxEvents();
+  const storage = sharedStorage();
+  const server = operationServer();
+  const editing = await freshTab();
+  await editing.writeDraft(key, original);
+  await editing.readDraft(key);
+  storage.quota(true);
+  await expect(editing.writeDraft(key, edited)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+  storage.quota(false);
+  const other = await freshTab();
+  const otherCursor: import('../src/client/data').DraftCursor = {};
+  await other.readDraft(key, otherCursor);
+  await other.enqueue({ ...enqueueInput, draft_cursor: otherCursor, draft_value: original });
+  if (lostReply) {
+    server.loseNextReply();
+    const stop = other.syncOutbox(owner, () => {}, () => {});
+    try { await vi.waitFor(async () => expect((await other.listOutbox(owner))[0]).toMatchObject({ status: 'uncertain', delivery: 'uncertain', body: request.body })); }
+    finally { stop(); }
+  } else await drainApplied(other);
+  const originalItems = await other.listOutbox(owner);
+  const cursor: import('../src/client/data').DraftCursor = {};
+  const recovered = await editing.readDraft<typeof edited>(key, cursor);
+  expect(recovered?.amount).toBe('50');
+  expect(recovered?.op_id).not.toBe(original.op_id);
+  expect(editing.draftConflictNotice(key)?.message).toMatch(/review/i);
+  expect(await editing.listOutbox(owner)).toEqual(originalItems);
+  await editing.flushDraftWrites();
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+  expect(editing.draftSaveFailed(key)).toBe(false);
+  const saved = await editing.readDraft<typeof edited>(key, cursor);
+  expect(saved).toEqual(recovered);
+  if (lostReply) {
+    expect((await other.listOutbox(owner))[0]).toMatchObject({ status: 'uncertain', delivery: 'uncertain', body: request.body });
+    await expect(other.discardItem(original.op_id)).rejects.toThrow(/may already exist/i);
+    await other.retryItem(original.op_id);
+    await drainApplied(other);
+    expect(server.writes()).toBe(1);
+  }
+  await editing.enqueue({ ...enqueueInput, body: { op_id: saved!.op_id, amount_minor: '5000' }, draft_cursor: cursor, draft_value: saved });
+  await drainApplied(editing);
+  expect(server.writes()).toBe(2);
+  expect(server.applied.get(original.op_id)?.body).toBe(JSON.stringify(request.body));
+  expect(await editing.listOutbox(owner)).toEqual([]);
+  expect(storage.draft(key)).toBeUndefined();
+});
+
+it('returns a frozen idempotency conflict to review without declaring the original operation not applied', async () => {
+  outboxEvents();
+  const storage = sharedStorage();
+  const server = operationServer();
+  await fetch(request.path, { method: request.method, body: JSON.stringify(request.body) });
+  const editing = await freshTab();
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await editing.readDraft(key, cursor);
+  await editing.writeDraft(key, edited, cursor);
+  const differentRequest = { ...request, body: { ...request.body, amount_minor: '5000' } };
+  await editing.prepareDraftSubmission(key, edited, differentRequest, () => true, cursor);
+  let failure: unknown;
+  try { await editing.replaySubmittedDraft(key, () => true, cursor); } catch (problem) { failure = problem; }
+  expect(failure).toMatchObject({ code: 'idempotency_mismatch', status: 409 });
+  expect(editing.isProvenNotApplied(failure)).toBe(false);
+  const recovered = storage.draft(key) as typeof edited & { __submitted?: DraftRequest };
+  expect(recovered.amount).toBe('50');
+  expect(recovered.op_id).not.toBe(original.op_id);
+  expect(recovered.__submitted).toBeUndefined();
+  expect(editing.draftConflictNotice(key)?.message).toMatch(/review/i);
+  expect(await editing.listSubmittedDrafts(owner)).toEqual([]);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+  expect(editing.draftSaveFailed(key)).toBe(false);
+  await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
+  expect(server.writes()).toBe(1);
+  expect(server.applied.get(original.op_id)?.body).toBe(JSON.stringify(request.body));
+});
+
+it('keeps an earlier uncertain request while refusing a different body with its claimed operation before delivery', async () => {
+  outboxEvents();
+  const storage = sharedStorage();
+  const server = operationServer();
+  const first = await freshTab();
+  await first.writeDraft(key, original);
+  await first.enqueue(enqueueInput);
+  server.loseNextReply();
+  const stop = first.syncOutbox(owner, () => {}, () => {});
+  try { await vi.waitFor(async () => expect((await first.listOutbox(owner))[0]).toMatchObject({ status: 'uncertain', delivery: 'uncertain' })); }
+  finally { stop(); }
+  const originalItem = (await first.listOutbox(owner))[0];
+  const editing = await freshTab();
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await editing.readDraft(key, cursor);
+  await editing.writeDraft(key, edited, cursor);
+  let conflict: unknown;
+  try { conflict = await editing.enqueue({ ...enqueueInput, body: { ...request.body, amount_minor: '5000' }, draft_cursor: cursor, draft_value: edited }); }
+  catch (problem) { conflict = problem; }
+  expect(conflict).toMatchObject({ draft_conflict: true, value: { amount: '50' } });
+  expect((conflict as { value: typeof edited }).value.op_id).not.toBe(original.op_id);
+  expect((storage.draft(key) as typeof edited).amount).toBe('50');
+  expect(await editing.listOutbox(owner)).toEqual([originalItem]);
+  expect(server.writes()).toBe(1);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+  expect(editing.draftSaveFailed(key)).toBe(false);
+  await expect(first.discardItem(original.op_id)).rejects.toThrow(/may already exist/i);
+});
+
+it.each([undefined, 'different-banker'])('does not release a frozen operation when its mismatch response has an unverified owner (%s)', async responseOwner => {
+  outboxEvents();
+  const storage = sharedStorage();
+  const editing = await freshTab();
+  await editing.writeDraft(key, original);
+  await editing.prepareDraftSubmission(key, original, request);
+  const before = storage.state();
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+    if (path === '/api/auth/me') return Response.json({ banker: { id: owner, username: owner } }, { headers: { 'X-PB-Banker-ID': owner } });
+    return Response.json({ error: { code: 'idempotency_mismatch', message: 'This operation already has different content' } }, { status: 409, headers: responseOwner ? { 'X-PB-Banker-ID': responseOwner } : {} });
+  }));
+  await expect(editing.replaySubmittedDraft(key)).rejects.toBeInstanceOf(Error);
+  expect(storage.state().get('outbox')).toEqual(before.get('outbox'));
+  expect(storage.state().get('snapshots')).toEqual(before.get('snapshots'));
+  expect(storage.draft(key)).toEqual(before.get('drafts')!.get(key)!.value);
+  expect((storage.draft(key) as { __submitted?: DraftRequest }).__submitted).toEqual(request);
+  expect(editing.draftConflictNotice(key)).toBeUndefined();
+});
+
+it('replays an unchanged frozen request with its original operation and records only one server write', async () => {
+  outboxEvents();
+  const storage = sharedStorage();
+  const server = operationServer();
+  await fetch(request.path, { method: request.method, body: JSON.stringify(request.body) });
+  const editing = await freshTab();
+  await editing.writeDraft(key, original);
+  await editing.prepareDraftSubmission(key, original, request);
+  await editing.replaySubmittedDraft(key);
+  expect(server.writes()).toBe(1);
+  expect(server.applied.get(original.op_id)?.body).toBe(JSON.stringify(request.body));
+  expect(storage.draft(key)).toBeUndefined();
+  expect(await editing.listSubmittedDrafts(owner)).toEqual([]);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+});
