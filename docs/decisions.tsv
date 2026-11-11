@@ -14,3 +14,5 @@ ts	phase	decision	why	evidence	result
 2026-11-10T23:58:54Z	build	round one accepted after rerunning its checks on the mini	54 of 54 tests passed in my own run, and the locking and idempotency code reads correctly	commit e8d7939	54/54 pass
 2026-11-10T23:58:54Z	design	fold Justin's feedback into the first migration instead of adding a second one	nothing is deployed, so a compatibility step would protect no data	docs/ARCHITECTURE.md	decided
 2026-11-10T23:58:54Z	design	per-player hours come from each player's own buy-in and cash-out times	the spec forbids using the whole table's duration for a late arrival	docs/ARCHITECTURE.md	decided
+2026-11-11T00:20:05Z	setup	created the poker-banker Neon project in the approved Google account, Ohio region	checked the account email in Neon's menu before creating; Ohio pairs with Vercel's Cleveland region	Neon project green-forest-50649883	connected, Postgres 18.6, empty
+2026-11-11T00:20:05Z	setup	copied connection strings by clipboard into the ignored env file and cleared the clipboard	keeps the secret out of logs, screenshots and commits	.env.production.local (ignored)	done
