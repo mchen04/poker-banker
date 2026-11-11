@@ -361,3 +361,25 @@ it('keeps retained-edit readback options when another tab freezes during operati
   expect(fixture.state().get('drafts')!.get(key)!.next_value).toMatchObject({ amount: 'Alex' });
   expect(fetch).not.toHaveBeenCalled();
 });
+
+it('permits submission after multiple earlier keystroke writes finish in the same tab', async () => {
+  const fixture = storage() as unknown as { holdNextWrite: () => { started: Promise<void>; release: () => void } };
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, 'new', 'new-session');
+  const cursor: import('../src/client/data').DraftCursor = {};
+  const initial = { op_id: 'fresh', name: 'Game', played_on: '2026-11-11' };
+  const intermediate = { ...initial, played_on: '' };
+  const final = { ...initial, played_on: '2026-11-10' };
+  await data.writeDraft(key, initial, cursor);
+  const held = fixture.holdNextWrite();
+  const firstWrite = data.writeDraft(key, intermediate, cursor);
+  await held.started;
+  const lastWrite = data.writeDraft(key, final, cursor);
+  const preparing = data.prepareDraftSubmission(key, final, { path: '/api/sessions', method: 'POST', body: { ...final, currency: 'USD' } }, () => true, cursor);
+  held.release();
+  await Promise.all([firstWrite, lastWrite]);
+  const prepared = await preparing;
+  expect(prepared.previouslyConfirmed).toBe(false);
+  expect(prepared.value).toMatchObject({ ...final, __submitted: { body: { ...final, currency: 'USD' } } });
+  expect(fetch).not.toHaveBeenCalled();
+});
