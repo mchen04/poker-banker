@@ -200,3 +200,38 @@ The comparison supports exactly one metric, `api.players`, and five pairs. `--or
 Protected browser measurements use Playwright `route.fetch`/fulfill to scope the header safely and refuse redirects on WebKit, so they include proxy overhead and should not be compared to native-transport browser baselines. Without bypass the browser keeps native transport. The API-only paired comparison uses the controller directly and does not use that browser proxy. Browser service workers are blocked for deterministic request coverage. No header value, cookie, viewer token or response error body is persisted in diagnostics.
 
 Local proof uses two owned loopback origins backed by the same disposable PostgreSQL, with `localhost` to `127.0.0.1` cookie remapping. Actual CLI seed-only/reuse and five-pair alternating/ABBA comparisons pass with matching body hashes and zero mutations on reuse; actual WebKit document, asset and API requests carry the synthetic bypass, while foreign-origin requests do not. Tests reject redirected credentials, invisible/mismatched bankers, unsafe state files and malformed reuse before network access. Targeted mini receipt: `evidence/round-12/final-targeted-mini.log` (47/47). These are local harness checks, not deployed measurements.
+
+## Live baseline and players comparison
+
+Live baseline, `pnpm bench:live --label baseline` from the mini against https://poker-banker.vercel.app (function in cle1, Neon in AWS us-east-2), five repetitions, 10,982 controller requests, zero errors. Values are HTTP round trips from California including the response body; unchanged `?since` (94.8 ms median) and history (91.0 ms) set a transport floor of roughly 90 ms.
+
+| Metric | Median ms | p95 ms | Range ms |
+| --- | ---: | ---: | --- |
+| api.history | 90.98 | 94.30 | 87.15–94.30 |
+| api.since | 94.78 | 97.34 | 93.74–97.34 |
+| api.session | 108.49 | 119.41 | 100.51–119.41 |
+| api.report.overall | 110.71 | 121.38 | 106.54–121.38 |
+| api.report.location | 111.50 | 115.35 | 107.03–115.35 |
+| api.report.game | 109.98 | 121.53 | 104.55–121.53 |
+| api.report.weekday | 106.02 | 122.36 | 103.15–122.36 |
+| api.report.month | 111.99 | 129.16 | 102.98–129.16 |
+| api.players | 551.99 | 574.00 | 404.90–574.00 |
+| api.write10 (50 writes) | 219.30 | 439.65 | 115.81–5161.86 |
+| entry.confirm | 185.00 | 198.00 | 165.00–198.00 |
+| viewer.delay.1 | 1782 | 1831 | 1765–1831 |
+| viewer.delay.10 (50 renders) | 1082 | 1932 | 214–2213 |
+| viewer.delay.25 (125 renders) | 1246 | 2115 | 198–2182 |
+
+After subtracting the floor, only `api.players` missed its goal. Ten concurrent writes reached p95 440 ms with one 5.2 s outlier; server time is not observable through the public API, so its cause is unverified.
+
+Live A/B of the Round 12 players aggregation: side A was the deployed production build at main 15eeea3 and side B the same project with this change, both production builds against the same Neon database and one reused seed, reached through deployment URLs with the automation bypass. `pnpm bench:live:compare --metrics api.players --samples 3 --order alternating`, five pairs, 30 samples, zero errors, 34 requests, zero mutations, identical response body hash on both sides.
+
+| Pair | Order | A median ms | B median ms |
+| ---: | --- | ---: | ---: |
+| 1 | A,B | 506.06 | 158.41 |
+| 2 | B,A | 507.89 | 155.60 |
+| 3 | A,B | 405.61 | 136.23 |
+| 4 | B,A | 408.59 | 139.76 |
+| 5 | A,B | 447.38 | 135.59 |
+
+Overall median 447.38 → 139.76 ms (−307.6 ms, −68.8%); MAD 41.78 ms before, 4.18 ms after. Every pair improves and the improvement exceeds both MADs, so the change is kept. Evidence: `evidence/bench/live/players-ab/` on the test machine.
