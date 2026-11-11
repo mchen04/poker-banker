@@ -80,7 +80,7 @@ test('a conflict after closing the form shows a non-storage notice that can be d
     await other.evaluate(async () => { await (window as unknown as { __releaseDraftLock?: () => Promise<void> }).__releaseDraftLock?.(); });
     const notice = page.getByTestId('draft-conflict-notice');
     await expect(notice).toBeVisible();
-    await expect(notice).toContainText('A conflicting edit was not kept');
+    await expect(notice).toContainText('This draft was edited in another tab. Review the latest draft and submit again.');
     await expect(page.getByRole('button', { name: 'Retry saving draft', exact: true })).toHaveCount(0);
     await expect(page.getByText('Not saved on this device.', { exact: false })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Not saved yet', exact: true })).toHaveCount(0);
