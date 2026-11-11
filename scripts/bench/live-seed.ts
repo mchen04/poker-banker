@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { mkdir, open, realpath, lstat } from 'node:fs/promises';
+import { resolve, relative, dirname, join, sep } from 'node:path';
+import { constants } from 'node:fs';
+import { z } from 'zod';
+import { LiveClient, liveOrigin } from './live-client';
 import type { SessionState, PaymentMethod } from '../../src/domain/session';
 import type { BenchmarkClient } from './types';
 
@@ -17,7 +22,7 @@ export function liveHistoryPlan(count = 300, now = Date.now()) {
 }
 export async function publicCall<T>(client: BenchmarkClient, path: string, method = 'GET', body?: unknown): Promise<T> {
   const result = await client.request(path, { method, body });
-  assert.equal(result.status, 200, `Public benchmark request ${method} ${path} failed with ${result.status}: ${JSON.stringify(result.body)}`);
+  assert.equal(result.status, 200, `Public benchmark request ${method} failed with status ${result.status}`);
   return result.body as T;
 }
 export async function seedLiveBenchmark(client: BenchmarkClient, options: { sessions?: number; concurrency?: number; progress?: (completed: number) => void } = {}): Promise<LiveFixture> {
@@ -75,4 +80,64 @@ export async function seedLiveBenchmark(client: BenchmarkClient, options: { sess
 
   assert(state.session.share_token);
   return { bankerId: account.banker.id, username, playerIds, playerId: playerIds[0]!, sessionId: state.session.id, token: state.session.share_token, counts: { ...counts, open_players: state.players.length, open_entries: state.entries.length } };
+}
+
+const fixtureSchema = z.object({ bankerId: z.uuid(), username: z.string().regex(/^pbbench-[a-z0-9]{23}$/), playerIds: z.array(z.uuid()).length(40), sessionId: z.uuid(), playerId: z.uuid(), token: z.string().min(1), counts: z.object({ closed_sessions: z.number().int().min(1).max(300), main_player_report_sessions: z.number().int().nonnegative() }).catchall(z.number().int().nonnegative()) });
+const seedStateSchema = z.object({ format: z.literal('poker-banker-live-seed-v1'), baseURL: z.string(), sessionCookie: z.string().min(1), fixture: fixtureSchema }).strict();
+export type LiveSeedState = z.infer<typeof seedStateSchema>;
+async function statePath(path: string, writing: boolean) {
+  const cache = resolve('.cache');
+  const target = resolve(path);
+  const inside = (root: string, candidate: string) => { const part = relative(root, candidate); return part !== '' && !part.startsWith('..') && !part.startsWith('/'); };
+  assert(inside(cache, target), 'Owned live seed state must be beneath .cache');
+  if (writing) {
+    const directories = [cache, ...relative(cache, dirname(target)).split(sep).filter(Boolean).map((_, index, parts) => join(cache, ...parts.slice(0, index + 1)))];
+    for (const directory of directories) {
+      try { await mkdir(directory); } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error; }
+      const info = await lstat(directory);
+      assert(info.isDirectory() && !info.isSymbolicLink(), 'Owned seed state cannot use symlink directories');
+    }
+  }
+  const root = await realpath(cache), parent = await realpath(dirname(target));
+  assert(root === cache && (parent === root || inside(root, parent)), 'Owned seed state cannot use symlink directories');
+  return target;
+}
+export async function prepareLiveSeedState(path: string) {
+  const target = await statePath(path, true);
+  try { await lstat(target); } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  throw new Error('Owned live seed state destination already exists');
+}
+export async function writeLiveSeedState(path: string, client: LiveClient, fixture: LiveFixture) {
+  const target = await statePath(path, true);
+  const parsed = seedStateSchema.safeParse({ format: 'poker-banker-live-seed-v1', baseURL: client.baseURL, sessionCookie: await client.sessionCookie(), fixture });
+  assert(parsed.success, 'Invalid owned live seed state');
+  const file = await open(target, 'wx', 0o600);
+  try { await file.writeFile(JSON.stringify(parsed.data)); } finally { await file.close(); }
+}
+export async function readLiveSeedState(path: string): Promise<LiveSeedState> {
+  const target = await statePath(path, false);
+  const info = await lstat(target);
+  assert(info.isFile() && !info.isSymbolicLink() && (info.mode & 0o777) === 0o600, 'Owned seed state must be a regular 0600 file');
+  const file = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    let value: unknown;
+    try { value = JSON.parse(await file.readFile('utf8')); } catch { throw new Error('Invalid owned live seed state'); }
+    const parsed = seedStateSchema.safeParse(value);
+    assert(parsed.success, 'Invalid owned live seed state');
+    liveOrigin(parsed.data.baseURL);
+    assert(parsed.data.fixture.playerIds.includes(parsed.data.fixture.playerId), 'Invalid owned seed player');
+    return parsed.data;
+  } finally { await file.close(); }
+}
+export async function reuseLiveSeed(client: LiveClient, state: LiveSeedState) {
+  client.ownSecret(state.fixture.token);
+  await client.restoreSession(state.sessionCookie);
+  const me = await client.request('/api/auth/me');
+  assert(me.status === 200 && (me.body as { banker?: { id?: string } })?.banker?.id === state.fixture.bankerId, 'Stored benchmark banker is not visible or does not match the selected target');
+  const session = await client.request(`/api/sessions/${state.fixture.sessionId}`);
+  assert(session.status === 200 && (session.body as SessionState)?.session?.id === state.fixture.sessionId, 'Stored benchmark fixture is not visible or does not match the selected banker');
+  return state.fixture;
 }
