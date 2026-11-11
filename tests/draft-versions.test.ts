@@ -512,6 +512,11 @@ function draftForm(tab: Tab, formKey: string, initial: typeof original) {
   const slots: unknown[] = [];
   const effects: (() => unknown)[] = [];
   const cleanup: (() => void)[] = [];
+  function registerEffect(effect: () => unknown, dependencies: unknown[]) {
+    const index = position++;
+    const previous = slots[index] as unknown[] | undefined;
+    if (!previous || dependencies.some((value, item) => value !== previous[item])) { slots[index] = dependencies; effects.push(effect); }
+  }
   const hooks = {
     createContext: () => null, useContext: () => null,
     useRef(value: unknown) { const index = position++; return slots[index] ??= { current: value }; },
@@ -520,12 +525,8 @@ function draftForm(tab: Tab, formKey: string, initial: typeof original) {
       if (!(index in slots)) slots[index] = typeof value === 'function' ? value() : value;
       return [slots[index], (next: unknown) => { slots[index] = typeof next === 'function' ? next(slots[index]) : next; }];
     },
-    useEffect(effect: () => unknown, dependencies: unknown[]) {
-      const index = position++;
-      const previous = slots[index] as unknown[] | undefined;
-      if (!previous || dependencies.some((value, item) => value !== previous[item])) { slots[index] = dependencies; effects.push(effect); }
-    },
-    useLayoutEffect() {},
+    useEffect: registerEffect,
+    useLayoutEffect: registerEffect,
   };
   const exports: Record<string, unknown> = {};
   runInNewContext(source, {
@@ -942,6 +943,7 @@ it.each([false, true])('shows a closed form rejection after reopening without ap
       expect(current.value.amount).toBe(advanced ? '30' : '25');
       expect(current.error).toContain('edited in another tab');
     });
+    expect(editing.draftConflictNotice(key)).toBeUndefined();
     expect(editing.hasPendingLocalWrites()).toBe(false);
     expect(editing.draftSaveFailed(key)).toBe(false);
     await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
@@ -957,4 +959,30 @@ it.each([false, true])('shows a closed form rejection after reopening without ap
     expect(editing.hasPendingLocalWrites()).toBe(false);
     expect(editing.draftSaveFailed(key)).toBe(false);
   } finally { reopened.close(); }
+});
+
+it('keeps a newer conflict visible when an old warning is dismissed and scopes notices to their banker', async () => {
+  sharedStorage();
+  const editing = await freshTab();
+  const other = await freshTab();
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await editing.readDraft(key, cursor);
+  await editing.writeDraft(key, original, cursor);
+  await other.writeDraft(key, newer);
+  const first = await editing.writeDraft(key, edited, cursor).then(() => undefined, problem => problem);
+  expect(first).toBeInstanceOf(editing.DraftConflictError);
+  expect(editing.draftConflictNotice(key)).toBe(first);
+  await editing.readDraft(key, cursor);
+  await other.writeDraft(key, { ...newer, amount: '30' });
+  const second = await editing.writeDraft(key, { ...edited, amount: '60' }, cursor).then(() => undefined, problem => problem);
+  expect(second).toBeInstanceOf(editing.DraftConflictError);
+  editing.dismissDraftConflict(first);
+  expect(editing.draftConflictNotice(key)).toBe(second);
+  expect(editing.draftConflictNotices(owner)).toEqual([second]);
+  expect(editing.draftConflictNotices('another-banker')).toEqual([]);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+  expect(editing.draftSaveFailed(key)).toBe(false);
+  editing.dismissDraftConflict(second);
+  expect(editing.draftConflictNotice(key)).toBeUndefined();
+  expect(editing.draftConflictNotices(owner)).toEqual([]);
 });
