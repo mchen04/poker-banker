@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { addPlayer, createAccount, current, newSession, openMoney } from './helpers';
+import { addPlayer, call, createAccount, current, newSession, openMoney } from './helpers';
 
 test.use({ serviceWorkers: 'block' });
 
@@ -109,4 +109,64 @@ test('a failed edit recovered after another page saves reviews a fresh operation
     await expect(page.getByRole('button', { name: 'Retry saving draft', exact: true })).toHaveCount(0);
     await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
   } finally { await other.close(); }
+});
+
+test('a mismatched entry and a newer saved draft both remain reviewable and preserve the submitted time', async ({ page, context }) => {
+  const account = await createAccount(page);
+  const session = await newSession(page, 'Review both recovered amounts');
+  const player = await addPlayer(page, 'Two retained versions');
+  const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
+  await openMoney(page, player.id);
+  await page.getByLabel('Amount', { exact: true }).fill('50');
+  await page.getByLabel('Paid now', { exact: true }).uncheck();
+  await expect.poll(() => storedAmount(page, key)).toBe('50');
+  const operation = await page.evaluate(async key => {
+    const opening = indexedDB.open('poker-banker');
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
+    try {
+      return await new Promise<string>((resolve, reject) => { const read = db.transaction('drafts').objectStore('drafts').get(key); read.onsuccess = () => resolve(read.result.value.op_id); read.onerror = () => reject(read.error); });
+    } finally { db.close(); }
+  }, key);
+  await call(page, `/sessions/${session.session.id}/entries`, 'POST', { op_id: operation, player_id: player.id, kind: 'buy_in', amount_minor: '1000', paid_now: false, occurred_at: null });
+  let arrived!: () => void;
+  let release!: () => void;
+  const sent = new Promise<void>(resolve => { arrived = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let submittedTime: unknown;
+  await page.route(`**/api/sessions/${session.session.id}/entries`, async route => {
+    if (route.request().method() !== 'POST' || route.request().postDataJSON().op_id !== operation) { await route.continue(); return; }
+    submittedTime = route.request().postDataJSON().occurred_at;
+    const response = await route.fetch();
+    expect(response.status()).toBe(409);
+    arrived(); await held;
+    await route.fulfill({ response });
+  });
+  const other = await context.newPage();
+  try {
+    await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+    await sent;
+    await other.goto(`/?session=${session.session.id}`);
+    await openMoney(other, player.id);
+    await other.getByLabel('Amount', { exact: true }).fill('25');
+    await expect.poll(() => storedAmount(other, key)).toBe('25');
+    release();
+    const recovery = page.getByTestId('recovered-draft');
+    await recovery.getByText('Review recovered edit', { exact: true }).click();
+    await expect(recovery.locator('dl').nth(0)).toContainText('25');
+    await expect(recovery.locator('dl').nth(1)).toContainText('50');
+    expect(await storedAmount(other, key)).toBe('25');
+    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor)).toEqual(['1000']);
+    await recovery.getByRole('button', { name: 'Use recovered edit', exact: true }).click();
+    await expect(recovery).toHaveCount(0);
+    await openMoney(page, player.id);
+    await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('50');
+    const saved = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === `/api/sessions/${session.session.id}/entries` && request.postDataJSON().op_id !== operation);
+    await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+    const body = (await saved).postDataJSON();
+    expect(body.occurred_at).toBe(submittedTime);
+    expect(body.op_id).not.toBe(operation);
+    await expect(page.getByTestId('saved-confirmation')).toContainText('50.00');
+    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor)).toEqual(['1000', '5000']);
+    await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
+  } finally { release(); await other.close(); }
 });

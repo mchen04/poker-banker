@@ -411,7 +411,8 @@ it('retains the dirty value baseline when a restoring read fails before a later 
   const restoring: import('../src/client/data').DraftCursor = {};
   storage.failNextRead();
   const restored = await a.readDraft<typeof edited>(key, restoring);
-  expect(restored).toEqual(edited);
+  expect(restored?.amount).toBe(edited.amount);
+  expect(restored?.op_id).not.toBe(original.op_id);
   await expect(a.writeDraft(key, { ...restored, amount: '124' }, restoring)).rejects.toBeInstanceOf(a.DraftConflictError);
   expect(storage.draft(key)).toEqual(newer);
 });
@@ -446,7 +447,13 @@ it.each([false, true])('reviews an absent draft before retry without approving a
   expect(recovered?.amount).toBe('50');
   expect(recovered?.op_id).not.toBe(original.op_id);
   if (inserted) {
+    await expect(b.writeDraft(key, newer)).rejects.toBeInstanceOf(b.DraftConflictError);
+    expect(storage.draft(key)).toEqual(recovered);
+    await b.readDraft(key);
     await b.writeDraft(key, newer);
+    const stale = await a.enqueue({ ...enqueueInput, draft_cursor: cursor, draft_value: recovered, body: { op_id: recovered!.op_id, amount_minor: '5000' } });
+    expect(stale).toMatchObject({ draft_conflict: true, value: newer });
+    expect(await a.listOutbox(owner)).toEqual([]);
     await settle(a.flushDraftWrites());
     expect(a.draftSaveFailed(key)).toBe(false);
     expect(a.hasPendingLocalWrites()).toBe(false);
@@ -1293,7 +1300,7 @@ it.each(['path', 'method'] as const)('requires a fresh operation before freezing
   expect(server.applied.get(original.op_id)?.body).toBe(JSON.stringify(request.body));
 });
 
-async function putLegacyDraft(value: unknown) {
+async function putLegacyDraft(value: unknown, recordKey = key, kind?: string) {
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
     const opening = indexedDB.open('poker-banker', 2);
     opening.onsuccess = () => resolve(opening.result);
@@ -1304,7 +1311,7 @@ async function putLegacyDraft(value: unknown) {
     transaction.oncomplete = () => resolve();
     transaction.onabort = transaction.onerror = () => reject(transaction.error);
   });
-  transaction.objectStore('drafts').put({ key, banker_id: owner, value, updated_at: Date.now() });
+  transaction.objectStore('drafts').put({ key: recordKey, banker_id: owner, value, ...(kind ? { kind } : {}), updated_at: Date.now() });
   await done;
 }
 
@@ -1381,4 +1388,124 @@ it('does not revive an applied operation when the first dirty observation and th
   expect(editing.draftSaveFailed(key)).toBe(false);
   expect(editing.hasPendingLocalWrites()).toBe(false);
   expect(server.writes()).toBe(1);
+});
+
+async function mismatchWithNewerDraft() {
+  outboxEvents();
+  const storage = sharedStorage();
+  const server = operationServer();
+  await fetch(request.path, { method: request.method, body: JSON.stringify(request.body) });
+  const send = globalThis.fetch;
+  let arrived!: () => void;
+  let release!: () => void;
+  const sent = new Promise<void>(resolve => { arrived = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+    if (path !== '/api/auth/me') { arrived(); await held; }
+    return send(path, init);
+  }));
+  const editing = await freshTab();
+  await editing.writeDraft(key, edited);
+  await editing.enqueue({ ...enqueueInput, body: { ...request.body, amount_minor: '5000' }, draft_value: edited });
+  const stop = editing.syncOutbox(owner, () => {}, () => {});
+  try {
+    await sent;
+    const other = await freshTab();
+    await other.readDraft(key);
+    await other.writeDraft(key, newer);
+    release();
+    await vi.waitFor(async () => expect(await editing.listOutbox(owner)).toEqual([]));
+    return { editing, other, storage, server };
+  } finally { release(); stop(); }
+}
+
+it.each([false, true])('keeps both a newer saved draft and a mismatched recovered edit until an explicit choice (useRecovered=%s)', async useRecovered => {
+  const { editing, storage, server } = await mismatchWithNewerDraft();
+  expect(storage.draft(key)).toEqual(newer);
+  const recoveries = await editing.listRecoveredDrafts(owner);
+  expect(recoveries).toHaveLength(1);
+  expect(recoveries[0]).toMatchObject({ source_key: key, value: { amount: '50' }, source_value: newer });
+  expect((recoveries[0]!.value as typeof edited).op_id).not.toBe(original.op_id);
+  expect(await editing.listRecoveredDrafts('different-banker')).toEqual([]);
+  expect(await editing.hasUnsent(owner)).toBe(true);
+  await expect(editing.clearBankerData(owner)).rejects.toThrow(/discard/i);
+  await editing.resolveRecoveredDraft(recoveries[0]!, useRecovered);
+  expect((storage.draft(key) as typeof edited).amount).toBe(useRecovered ? '50' : '25');
+  if (useRecovered) expect((storage.draft(key) as typeof edited).op_id).not.toBe(original.op_id);
+  else expect(storage.draft(key)).toEqual(newer);
+  expect(await editing.listRecoveredDrafts(owner)).toEqual([]);
+  expect(await editing.listOutbox(owner)).toEqual([]);
+  expect(server.writes()).toBe(1);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+});
+
+it('rechecks both saved and recovered versions before applying or discarding a recovered edit', async () => {
+  const { editing, other, storage, server } = await mismatchWithNewerDraft();
+  const recovery = (await editing.listRecoveredDrafts(owner))[0]!;
+  await other.writeDraft(key, { ...newer, amount: '30' });
+  const before = storage.state();
+  await expect(editing.resolveRecoveredDraft(recovery, true)).rejects.toBeInstanceOf(editing.DraftConflictError);
+  expect(storage.state()).toEqual(before);
+  await expect(editing.resolveRecoveredDraft(recovery, false)).rejects.toBeInstanceOf(editing.DraftConflictError);
+  expect(storage.state()).toEqual(before);
+  expect((await editing.listRecoveredDrafts(owner))[0]).toMatchObject({ source_value: { amount: '30' }, value: { amount: '50' } });
+  const reviewed = (await editing.listRecoveredDrafts(owner))[0]!;
+  await editing.resolveRecoveredDraft(reviewed, false);
+  expect((storage.draft(key) as typeof newer).amount).toBe('30');
+  expect(await editing.listRecoveredDrafts(owner)).toEqual([]);
+  expect(server.writes()).toBe(1);
+});
+
+it('keeps a chained legacy mismatch editable and reachable instead of leaving an internal operation draft stuck', async () => {
+  outboxEvents();
+  const storage = sharedStorage();
+  const server = operationServer();
+  await fetch(request.path, { method: request.method, body: JSON.stringify({ ...request.body, amount_minor: '2000' }) });
+  const editing = await freshTab();
+  await editing.writeDraft(key, edited);
+  await editing.prepareDraftSubmission(key, edited, { ...request, body: { ...request.body, amount_minor: '5000' } });
+  await putLegacyDraft({ request }, `${owner}/_operations/requests/${original.op_id}`, 'operation_request');
+  await expect(editing.replaySubmittedDraft(key)).rejects.toMatchObject({ code: 'idempotency_mismatch' });
+  const earlier = await editing.listSubmittedDrafts(owner);
+  expect(earlier).toHaveLength(1);
+  expect(earlier[0]!.request).toEqual(request);
+  expect((storage.draft(key) as typeof edited).amount).toBe('50');
+  await expect(editing.replaySubmittedDraft(earlier[0]!.key, () => true, earlier[0]!.cursor)).rejects.toMatchObject({ code: 'idempotency_mismatch' });
+  expect(await editing.listSubmittedDrafts(owner)).toEqual([]);
+  expect((storage.draft(key) as typeof edited).amount).toBe('50');
+  const recovered = await editing.listRecoveredDrafts(owner);
+  expect(recovered).toHaveLength(1);
+  expect(recovered[0]).toMatchObject({ source_key: key, value: { amount_minor: '1000' } });
+  expect((recovered[0]!.value as typeof edited).op_id).not.toBe(original.op_id);
+  expect(storage.draft(earlier[0]!.key)).toBeUndefined();
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+  expect(editing.draftSaveFailed()).toBe(false);
+  expect(server.writes()).toBe(1);
+});
+
+it.each([null, '2026-11-10T10:15:16.123Z'])('keeps the original submitted time when recovering a mismatched entry (%s)', async occurredAt => {
+  outboxEvents();
+  const storage = sharedStorage();
+  const server = operationServer();
+  await fetch(request.path, { method: request.method, body: JSON.stringify(request.body) });
+  const editing = await freshTab();
+  await editing.writeDraft(key, edited);
+  await editing.enqueue({ ...enqueueInput, body: { ...request.body, amount_minor: '5000', occurred_at: occurredAt }, draft_value: edited });
+  await drainApplied(editing);
+  expect(storage.draft(key)).toMatchObject({ amount: '50', __recovered_occurred_at: occurredAt });
+  expect((storage.draft(key) as typeof edited).op_id).not.toBe(original.op_id);
+  expect(server.writes()).toBe(1);
+});
+
+it('treats a reordered request body as the same operation instead of inventing a conflicting save', async () => {
+  outboxEvents();
+  sharedStorage();
+  const server = operationServer();
+  const editing = await freshTab();
+  const first = await editing.enqueue({ ...enqueueInput, draft_key: undefined });
+  const replay = await editing.enqueue({ ...enqueueInput, draft_key: undefined, body: { amount_minor: '1000', op_id: original.op_id } });
+  expect(replay).toEqual(first);
+  await drainApplied(editing);
+  expect(server.writes()).toBe(1);
+  expect(server.fetch).toHaveBeenCalledTimes(1);
 });
