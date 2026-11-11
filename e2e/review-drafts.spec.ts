@@ -1,3 +1,4 @@
+import type { Request } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { addPlayer, call, closeSession, createAccount, current, menu, money, newSession, signOut } from './helpers';
 import type { SessionState } from '../src/domain/session';
@@ -222,29 +223,43 @@ test('a late form acknowledgement after another tab signs out cannot restore pri
   const held = new Promise<void>(resolve => { release = resolve; });
   let committed!: () => void;
   const committedRequest = new Promise<void>(resolve => { committed = resolve; });
+  let settled!: () => void;
+  const completed = new Promise<void>(resolve => { settled = resolve; });
+  let heldRequest: Request | undefined;
   await page.route('**/api/sessions', async route => {
-    if (route.request().method() !== 'POST') { await route.continue(); return; }
-    const response = await route.fetch();
-    expect(response.status()).toBe(200); committed();
-    await held; await route.fulfill({ response });
+    if (route.request().method() !== 'POST' || heldRequest) { await route.continue(); return; }
+    heldRequest = route.request();
+    try {
+      const response = await route.fetch();
+      expect(response.status()).toBe(200); committed();
+      await held;
+      if (!heldRequest.failure()) await route.fulfill({ response });
+    } finally { settled(); }
   });
   await page.getByRole('button', { name: 'New session', exact: true }).click();
   await page.getByLabel('Session name', { exact: true }).fill('Held server acknowledgement');
   await page.getByRole('button', { name: 'Create session', exact: true }).click();
   await committedRequest;
-  const other = await context.newPage(); await other.goto('/');
-  await expect(other.getByRole('button', { name: 'Players', exact: true })).toBeVisible();
-  await signOut(other);
-  const delivered = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/sessions');
-  release(); await (await delivered).finished();
-  await expect.poll(async () => await page.getByLabel('Username', { exact: true }).isVisible() || await page.getByRole('button', { name: 'Check saved result', exact: true }).isVisible() && await page.getByRole('button', { name: 'Check saved result', exact: true }).isEnabled()).toBe(true);
-  const counts = await page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>((resolve, reject) => { const opening = indexedDB.open('poker-banker'); opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
-    const values: number[] = [];
-    for (const name of ['drafts', 'outbox', 'snapshots']) values.push(await new Promise<number>((resolve, reject) => { const reading = db.transaction(name).objectStore(name).count(); reading.onsuccess = () => resolve(reading.result); reading.onerror = () => reject(reading.error); }));
-    db.close(); return values;
-  });
-  expect(counts).toEqual([0, 0, 0]);
+  const other = await context.newPage();
+  try {
+    await other.goto('/');
+    await expect(other.getByRole('button', { name: 'Players', exact: true })).toBeVisible();
+    const saved = await call<{ sessions: { name: string }[] }>(other, '/sessions');
+    expect(saved.sessions.filter(session => session.name === 'Held server acknowledgement')).toHaveLength(1);
+    const canceled = page.waitForEvent('requestfailed', { predicate: request => request === heldRequest });
+    await signOut(other);
+    expect((await canceled).failure()).not.toBeNull();
+    release();
+    await completed;
+    await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
+    await expect.poll(() => page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { const opening = indexedDB.open('poker-banker'); opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
+      const values: number[] = [];
+      for (const name of ['drafts', 'outbox', 'snapshots']) values.push(await new Promise<number>((resolve, reject) => { const reading = db.transaction(name).objectStore(name).count(); reading.onsuccess = () => resolve(reading.result); reading.onerror = () => reject(reading.error); }));
+      db.close(); return values;
+    })).toEqual([0, 0, 0]);
+    await expect(page.getByTestId('saved-confirmation')).toHaveCount(0);
+  } finally { release(); await completed; await other.close(); }
 });
 
 test('a dropped timing-validation rejection restores editing before a fresh timing operation', async ({ page }) => {

@@ -1,3 +1,4 @@
+import type { Request } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
 import { addPlayer, call, createAccount, current, keepMoneyDraft, money, newSession, openMoney } from './helpers';
@@ -98,12 +99,19 @@ test('signing out in another tab prevents a late acknowledged write from restori
   let release!: () => void;
   let committed = false;
   const held = new Promise<void>(resolve => { release = resolve; });
+  let settled!: () => void;
+  const completed = new Promise<void>(resolve => { settled = resolve; });
+  let heldRequest: Request | undefined;
   await page.route(`**/api/sessions/${state.session.id}/entries`, async route => {
-    const response = await route.fetch();
-    expect(response.status()).toBe(200);
-    committed = true;
-    await held;
-    await route.fulfill({ response });
+    if (route.request().method() !== 'POST' || heldRequest) { await route.continue(); return; }
+    heldRequest = route.request();
+    try {
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      committed = true;
+      await held;
+      if (!heldRequest.failure()) await route.fulfill({ response });
+    } finally { settled(); }
   });
   await openMoney(page, player.id);
   await page.getByLabel('Amount', { exact: true }).fill('25');
@@ -117,12 +125,12 @@ test('signing out in another tab prevents a late acknowledged write from restori
     await other.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(other.getByLabel('Discard unsent entries and drafts', { exact: true })).toBeVisible();
     await other.getByLabel('Discard unsent entries and drafts', { exact: true }).check();
+    const canceled = page.waitForEvent('requestfailed', { predicate: request => request === heldRequest });
     await other.getByRole('button', { name: 'Confirm sign out', exact: true }).click();
     await expect(other.getByLabel('Username', { exact: true })).toBeVisible();
-    const delivered = page.waitForResponse(`**/api/sessions/${state.session.id}/entries`);
+    expect((await canceled).failure()).not.toBeNull();
     release();
-    expect((await delivered).status()).toBe(200);
-    await page.waitForTimeout(500);
+    await completed;
     await expect.poll(() => other.evaluate(async bankerId => {
       const db = await new Promise<IDBDatabase>((resolve, reject) => { const open = indexedDB.open('poker-banker'); open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
       const counts: number[] = [];
@@ -133,7 +141,7 @@ test('signing out in another tab prevents a late acknowledged write from restori
       db.close(); return counts;
     }, user.banker.id)).toEqual([0, 0, 0]);
     await expect(page.getByTestId('saved-confirmation')).toHaveCount(0);
-  } finally { release(); await other.close(); }
+  } finally { release(); await completed; await other.close(); }
 });
 
 });
