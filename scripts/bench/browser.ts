@@ -12,7 +12,10 @@ type Stack = Awaited<ReturnType<typeof benchmarkStack>>;
 type Engine = Awaited<ReturnType<typeof isolatedEngine>>;
 type ObservedWindow = Window & { __pbObserveSaved?: (note: string, total: string) => Promise<number> };
 type Target = 'workspace' | 'viewer';
-export async function benchmarkBrowser(stack: Stack, engine: Engine, output: string, record: RecordSample, options: { samples: number; reverse: boolean; phase: (name: string) => void }) {
+export async function benchmarkBrowser(stack: Stack, engine: Engine, output: string, record: RecordSample, options: { samples: number; reverse: boolean; phase: (name: string) => void; metrics?: Set<string> }) {
+  const wanted = (metric: string) => !options.metrics || options.metrics.has(metric);
+  const hasWrites = wanted('entry.confirm') || [1,10,25].some(count => wanted(`viewer.delay.${count}`));
+  const profiled = wanted('entry.confirm') || ['workspace.cold','workspace.warm','viewer.cold','viewer.warm'].some(wanted);
   const server = await webkit.launchServer({ executablePath: engine.executable });
   const browser = await webkit.connect(server.wsEndpoint());
   const budget = new CpuBudget(engine.engine, server);
@@ -34,7 +37,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   }
   async function meaningful(page: Page) {
     await expect.poll(() => page.evaluate(() => !!(window as Window & { __pbBenchMeaningful?: unknown }).__pbBenchMeaningful), { timeout: 20000 }).toBe(true);
-    const proof = await page.evaluate(() => ({ marker: (window as Window & { __pbBenchMeaningful?: { ms: number; currentHttp: boolean } }).__pbBenchMeaningful!, name: document.querySelector('h1')?.textContent, total: document.querySelector('[data-testid="totals"] strong')?.textContent, players: [...document.querySelectorAll('.players .player-row')].map(row => row.getAttribute('data-testid')), visible: !!document.querySelector('h1')?.getClientRects().length }));
+    const proof = await page.evaluate(() => ({ marker: (window as Window & { __pbBenchMeaningful?: { ms: number; currentHttp: boolean; epoch: number } }).__pbBenchMeaningful!, name: document.querySelector('h1')?.textContent, total: document.querySelector('[data-testid="totals"] strong')?.textContent, players: [...document.querySelectorAll('.players .player-row')].map(row => row.getAttribute('data-testid')), visible: !!document.querySelector('h1')?.getClientRects().length }));
     expect(proof.name).toBe(state.session.name); expect(proof.visible).toBe(true);
     expect(proof.total).toBe(formatMoney(BigInt(state.totals.total_in_minor), 'USD'));
     expect(new Set(proof.players)).toEqual(new Set(state.players.map(player => `player-${player.id}`)));
@@ -58,7 +61,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
       if (cache === 'warm') await page.reload({ waitUntil: 'commit' }); else await page.goto(path(target), { waitUntil: 'commit' });
       const marker = await meaningful(page);
       expect(errors).toEqual([]);
-      record({ metric, ms: marker.ms, ok: true, work: { players: 9, ledger_entries: state.entries.length, profile: 'synthetic phone', cache, current_http_observed_at_render: marker.currentHttp, sample: index } });
+      record({ metric, ms: marker.ms, ok: true, work: { players: 9, ledger_entries: state.entries.length, profile: 'synthetic phone', cache, current_http_observed_at_render: marker.currentHttp, sample: index, renderedEpoch: marker.epoch } });
       await expect.poll(() => currentResponses, { timeout: 15000 }).toBeGreaterThan(0);
       const resources = await page.evaluate(() => (performance.getEntriesByType('resource') as PerformanceResourceTiming[]).map(entry => ({ path: new URL(entry.name).pathname.replace(/\/api\/view\/[^/]+/, '/api/view/OWNED_TOKEN'), startTime: entry.startTime, responseStart: entry.responseStart, responseEnd: entry.responseEnd, duration: entry.duration, transferSize: entry.transferSize, encodedBodySize: entry.encodedBodySize, decodedBodySize: entry.decodedBodySize, workerStart: entry.workerStart })));
       await writeFile(join(output, `${target}-${cache}-${index}-resources.json`), JSON.stringify({ marker, resources }, null, 2));
@@ -109,21 +112,22 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   try {
     const targets: Target[] = options.reverse ? ['viewer', 'workspace'] : ['workspace', 'viewer'];
     const caches = options.reverse ? ['warm', 'cold'] as const : ['cold', 'warm'] as const;
-    for (let index = 0; index < options.samples; index++) for (const target of targets) for (const cache of caches) await load(target, cache, index);
+    for (let index = 0; index < options.samples; index++) for (const target of targets) for (const cache of caches) if (wanted(`${target}.${cache}`)) await load(target, cache, index);
+    if (hasWrites) {
     options.phase('prepare.banker');
     bankerContext = await context(true);
     const banker = await prepareBanker(bankerContext);
-    stack.proxy.enabled = true; budget.start();
-    for (let index = 0; index < options.samples; index++) {
+    stack.proxy.enabled = wanted('entry.confirm'); if (wanted('entry.confirm')) budget.start();
+    for (let index = 0; index < (wanted('entry.confirm') ? options.samples : 0); index++) {
       try {
         const before = state.entries.length;
         const result = await save(banker, `Benchmark save ${randomUUID()}`, true);
         expect(result.entries - before).toBe(2);
-        record({ metric: 'entry.confirm', ms: result.confirmed - result.click, ok: true, work: { ledger_rows_written: 2, buy_in_rows_written: 1, revision: result.revision, ledger_rows_after: result.entries, profile: 'synthetic phone' } });
+        record({ metric: 'entry.confirm', ms: result.confirmed - result.click, ok: true, work: { ledger_rows_written: 2, buy_in_rows_written: 1, confirmedEpoch: result.confirmed, revision: result.revision, ledger_rows_after: result.entries, profile: 'synthetic phone' } });
       } catch (error) { record({ metric: 'entry.confirm', ms: 0, ok: false, work: {}, error: String(error) }); throw error; }
     }
     await budget.pause(); stack.proxy.enabled = false;
-    for (const count of options.reverse ? [25, 10, 1] : [1, 10, 25]) {
+    for (const count of (options.reverse ? [25, 10, 1] : [1, 10, 25]).filter(count => wanted(`viewer.delay.${count}`))) {
       options.phase(`prepare.viewers.${count}`);
       const viewers: Page[] = [];
       try {
@@ -144,7 +148,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
             for (const [viewer, epoch] of displayed.entries()) {
               await expect(viewers[viewer]!.getByTestId(`entry-${result.entry!.id}`)).toBeVisible();
               await expect(viewers[viewer]!.getByTestId('totals').locator('strong').first()).toHaveText(formatMoney(BigInt(state.totals.total_in_minor), 'USD'));
-              record({ metric: `viewer.delay.${count}`, ms: epoch - result.click, ok: true, work: { concurrency: count, viewers_completed: count, viewer, batch: index, ledger_rows_written: 1, revision: result.revision, banker_confirmed_ms: result.confirmed - result.click, confirmed_to_viewer_ms: epoch - result.confirmed, profile: 'unthrottled load generator; real visible WebKit contexts' } });
+              record({ metric: `viewer.delay.${count}`, ms: epoch - result.click, ok: true, work: { concurrency: count, viewers_completed: count, viewer, batch: index, renderedEpoch: epoch, ledger_rows_written: 1, revision: result.revision, banker_confirmed_ms: result.confirmed - result.click, confirmed_to_viewer_ms: epoch - result.confirmed, profile: 'unthrottled load generator; real visible WebKit contexts' } });
             }
             if (index === 0) await viewers[0]!.screenshot({ path: join(output, `live-${count}-viewers.png`) });
           } catch (error) { record({ metric: `viewer.delay.${count}`, ms: 0, ok: false, work: { concurrency: count, batch: index }, error: String(error) }); throw error; }
@@ -153,10 +157,11 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
         for (const page of viewers) { const owned = page.context(); await owned.close(); observers.splice(observers.indexOf(owned), 1); }
       }
     }
+    }
     expect(errors).toEqual([]);
-    const cpu = budget.summary();
-    expect(cpu.cycles).toBeGreaterThan(0);
-    expect(cpu.actualRunnableFraction).toBeGreaterThan(.15); expect(cpu.actualRunnableFraction).toBeLessThan(.35);
+    const cpu = profiled ? budget.summary() : null;
+    if (cpu) { expect(cpu.cycles).toBeGreaterThan(0);
+    expect(cpu.actualRunnableFraction).toBeGreaterThan(.15); expect(cpu.actualRunnableFraction).toBeLessThan(.35); }
     await writeFile(join(output, 'profile.json'), JSON.stringify({ cpu, network: stack.proxy.profile(), proxyCounts: stack.proxy.counts, engineHashes: engine.hashes, browserVersion: browser.version(), browserErrors: errors }, null, 2));
     return { cpu, errors };
   } finally {

@@ -54,7 +54,7 @@ export async function benchmarkReads(client: BenchmarkClient, pool: pg.Pool, fix
       return { rows_returned: body.sessions.length, rows_selected: 31, has_next: true, sessions_available: 301 };
     } },
   ];
-  for (const request of options.reverse ? [...paths].reverse() : paths) {
+  for (const request of (options.reverse ? [...paths].reverse() : paths).filter(item => !options.metrics || options.metrics.has(item.metric))) {
     request.validate(await client.request(request.path));
     for (let index = 0; index < options.samples; index++) await measured(client, request.path, request.metric, record, request.validate);
   }

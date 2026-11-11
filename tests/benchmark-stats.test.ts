@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import { summarize, workSummary } from '../scripts/bench/stats';
+import { hostPolicy } from '../scripts/bench/host';
 import type { Sample } from '../scripts/bench/types';
 it('reports nearest-rank p95, median and range without hiding errors', () => {
   const samples: Sample[] = Array.from({ length: 10 }, (_, index) => ({ metric: 'save', ms: index + 1, ok: true, work: { rows: 1 } }));
@@ -15,4 +16,10 @@ it('counts committed writes once across correlated viewer and writer observation
   expect(workSummary('viewer.delay.25', viewers)).toBe('10 committed writes; 250 viewer renders');
   const writers: Sample[] = Array.from({ length: 20 }, (_, index) => ({ metric: 'api.write10', ms: 1, ok: true, work: { run: 1, batch: Math.floor(index / 10), writes_completed: 10 } }));
   expect(workSummary('api.write10', writers)).toBe('20 committed writes; 2 batches of 10');
+});
+
+it('marks host load at half the machine capacity as noisy without rejecting it', () => {
+  expect(hostPolicy(10, 499)).toMatchObject({ threshold: 500, noisyHost: false });
+  expect(hostPolicy(10, 500)).toMatchObject({ threshold: 500, noisyHost: true });
+  expect(hostPolicy(10, 800)).toMatchObject({ otherCpu: 800, noisyHost: true });
 });

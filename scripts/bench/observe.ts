@@ -20,7 +20,7 @@ export const observationScript = String.raw`
       if (!valid()) return;
       const ms = performance.now();
       const currentHttp = performance.getEntriesByType('resource').some(entry => entry.name.includes(expected.endpoint) && entry.responseEnd > 0 && entry.responseEnd <= ms);
-      window.__pbBenchMeaningful = { ms, currentHttp }; observer.disconnect();
+      window.__pbBenchMeaningful = { ms, currentHttp, epoch: performance.timeOrigin + ms }; observer.disconnect();
     }));
   };
   const observer = new MutationObserver(check);
