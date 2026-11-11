@@ -508,7 +508,6 @@ function draftWrite(key: string, action: () => Promise<void>): Promise<void> {
 export function writeDraft(key: string, value: unknown, observation?: DraftCursor): Promise<void> {
   const cursor = cursorFor(key, observation);
   draftConflicts.delete(cursor);
-  observedDraftIntents.delete(cursor);
   const intent: DraftIntent = { value: structuredClone(value), revision: ++draftRevision, cursor, expectedVersion: cursor.version, error: draftIntents.get(key)?.error };
   draftIntents.set(key, intent);
   return saveDraftIntent(key, intent);
