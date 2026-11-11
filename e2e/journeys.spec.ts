@@ -73,6 +73,7 @@ test('same-day session tabs and month history restore separate drafts after relo
   const second = await newSession(page, 'Late game');
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
   await page.getByLabel('Search players', { exact: true }).fill('Justin');
+  await expect(page.getByLabel('Search players', { exact: true })).toHaveValue('Justin');
   await expect(page.getByText('An exact name match already exists.', { exact: false })).toBeVisible();
   await page.getByRole('dialog').getByRole('button', { name: 'Justin', exact: true }).click();
   await openMoney(page, justin.id);
