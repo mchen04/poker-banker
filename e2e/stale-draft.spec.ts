@@ -158,7 +158,9 @@ test('a mismatched entry and a newer saved draft both remain reviewable and pres
     expect(await storedAmount(other, key)).toBe('25');
     expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor)).toEqual(['1000']);
     await recovery.getByRole('button', { name: 'Use recovered edit', exact: true }).click();
-    await expect(recovery).toHaveCount(0);
+    await expect(recovery).toHaveCount(1);
+    await recovery.getByText('Review recovered edit', { exact: true }).click();
+    await expect(recovery.getByLabel('Amount', { exact: true })).toHaveValue('50');
     await openMoney(page, player.id);
     await expect(page.getByTestId('money-amount')).toHaveValue('50');
     const saved = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === `/api/sessions/${session.session.id}/entries` && request.postDataJSON().op_id !== operation);
@@ -169,5 +171,6 @@ test('a mismatched entry and a newer saved draft both remain reviewable and pres
     await expect(page.getByTestId('saved-confirmation')).toContainText('50.00');
     expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor).sort()).toEqual(['1000', '5000']);
     await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
+    await expect(recovery).toHaveCount(0);
   } finally { release(); await other.close(); }
 });
