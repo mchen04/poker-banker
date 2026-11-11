@@ -61,7 +61,7 @@ export function assertOpen(row: SessionRow) {
 
 export async function insertEntry(db: Transaction, banker: string, session: string, revision: string, entry: {
   player_id: string; kind: LedgerEntry['kind']; amount_minor: string; note?: string | null; voids_entry_id?: string;
-  method?: PaymentMethod | null; occurred_at: string;
+  method?: PaymentMethod | null; occurred_at: string | null;
 }) {
   await db.query(`INSERT INTO ledger_entries(id,banker_id,session_id,player_id,kind,amount_minor,note,voids_entry_id,revision,method,occurred_at)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,

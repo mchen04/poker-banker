@@ -1,3 +1,4 @@
+import { submittedAt } from '../clock';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { EntryKind, LedgerEntry, PaymentMethod, PlayerState, SessionState } from '../../domain/session';
 import { currencyExponent, parseMoney } from '../../domain/money';
@@ -69,7 +70,7 @@ export function Activity({ state, onlyPlayer }: { state: SessionState; onlyPlaye
   return <section className="activity" data-testid="activity"><h2>{onlyPlayer ? 'Player entries' : 'Activity'}</h2>{!rows.length && <p className="muted">No entries yet.</p>}<ul>{rows.map(entry => {
     const cancelled = voided.has(entry.id);
     const player = state.players.find(player => player.id === entry.player_id);
-    return <li key={entry.id} data-testid={`entry-${entry.id}`}><div><span className={cancelled ? 'voided' : ''}>{entry.voids_entry_id ? 'Void · ' : ''}{entryLabels[entry.kind]} · {player?.display_name} · <strong>{money(entry.amount_minor, state.session.currency)}</strong>{entry.method && ` · ${methodLabel(entry.method)}`}</span>{cancelled && <span className="entry-status">Voided</span>}<small>{new Date(entry.occurred_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}{entry.note ? ` · ${entry.note}` : ''}</small></div>{banker && state.session.status === 'open' && !cancelled && !entry.voids_entry_id && <button className="small-button" aria-label={`Correct ${entryLabels[entry.kind]} ${money(entry.amount_minor, state.session.currency)}`} onClick={() => open({ kind: 'correction', entry: entry.id, player: entry.player_id })}>Correct</button>}</li>;
+    return <li key={entry.id} data-testid={`entry-${entry.id}`}><div><span className={cancelled ? 'voided' : ''}>{entry.voids_entry_id ? 'Void · ' : ''}{entryLabels[entry.kind]} · {player?.display_name} · <strong>{money(entry.amount_minor, state.session.currency)}</strong>{entry.method && ` · ${methodLabel(entry.method)}`}</span>{cancelled && <span className="entry-status">Voided</span>}<small>{entry.occurred_at === null ? 'Time unavailable' : new Date(entry.occurred_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}{entry.note ? ` · ${entry.note}` : ''}</small></div>{banker && state.session.status === 'open' && !cancelled && !entry.voids_entry_id && <button className="small-button" aria-label={`Correct ${entryLabels[entry.kind]} ${money(entry.amount_minor, state.session.currency)}`} onClick={() => open({ kind: 'correction', entry: entry.id, player: entry.player_id })}>Correct</button>}</li>;
   })}</ul></section>;
 }
 export function PlayerSheet({ playerId }: { playerId: string }) {
@@ -125,7 +126,7 @@ export function MoneySheet({ title, playerId, kind: initialKind }: { title: stri
       if (chip) body.paid_now = draft.value.paid_now;
       if (payment || (chip && draft.value.paid_now && amount > 0n)) body.method = draft.value.method;
       if (draft.value.note) body.note = draft.value.note;
-      if (draft.value.occurred_at) body.occurred_at = new Date(draft.value.occurred_at).toISOString();
+      body.occurred_at = draft.value.occurred_at ? new Date(draft.value.occurred_at).toISOString() : submittedAt(chip ? { started_at: state!.session.started_at, ended_at: state!.session.ended_at, server_now: state!.server_now } : undefined);
       await enqueue({ banker_id: banker!.id, session_id: state!.session.id, path: `/api/sessions/${state!.session.id}/entries`, body, label: `${entryLabels[draft.value.kind]} · ${money(String(amount), currency)}`, draft_key: key });
       notify('Not saved yet'); open(null);
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not save entry'); submitting.current = false; setSaving(false); }

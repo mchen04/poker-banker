@@ -24,7 +24,8 @@ async function mutate<T extends { op_id: string }>(c: AppContext, pool: Database
   return c.json(result.body, result.status as ContentfulStatusCode);
 }
 
-function assertOccurredAt(session: Pick<SessionSettings, 'started_at' | 'ended_at'>, occurredAt: string) {
+function assertOccurredAt(session: Pick<SessionSettings, 'started_at' | 'ended_at'>, occurredAt: string | null) {
+  if (occurredAt === null) return;
   if ((session.started_at !== null && Date.parse(occurredAt) < Date.parse(session.started_at)) ||
       (session.ended_at !== null && Date.parse(occurredAt) > Date.parse(session.ended_at))) {
     throw new ApiError(400, 'outside_timer_bounds', 'Entry time must be inside the session timer');
@@ -171,12 +172,13 @@ export function createApp(pool: Database, config: Config = {}) {
     assertOpen(row);
     const seated = await db.query('SELECT player_id FROM session_players WHERE session_id = $1 AND player_id = $2 AND banker_id = $3', [id, input.player_id, banker]);
     if (!seated.rowCount) notFound();
-    const occurredAt = input.occurred_at ?? await serverTime(db);
+    const occurredAt = input.occurred_at ?? null;
     assertOccurredAt(row, occurredAt);
     const revision = await bump(db, banker, id);
     if (input.kind === 'buy_in' && row.started_at === null) {
-      await db.query('UPDATE game_sessions SET started_at = $3 WHERE id = $1 AND banker_id = $2', [id, banker, occurredAt]);
-      await event(db, banker, id, revision, 'timer_started', { old: { started_at: null, ended_at: row.ended_at }, new: { started_at: occurredAt, ended_at: row.ended_at } });
+      const timerStart = occurredAt ?? await serverTime(db);
+      await db.query('UPDATE game_sessions SET started_at = $3 WHERE id = $1 AND banker_id = $2', [id, banker, timerStart]);
+      await event(db, banker, id, revision, 'timer_started', { old: { started_at: null, ended_at: row.ended_at }, new: { started_at: timerStart, ended_at: row.ended_at } });
     }
     const payment = input.kind === 'payment_in' || input.kind === 'payment_out';
     await insertEntry(db, banker, id, revision, { ...input, method: payment ? input.method! : null, occurred_at: occurredAt });
@@ -197,7 +199,7 @@ export function createApp(pool: Database, config: Config = {}) {
     const payment = original.kind === 'payment_in' || original.kind === 'payment_out';
     if (input.replacement_method !== undefined && !payment) throw new ApiError(400, 'invalid_request', 'Only a payment has a method');
     const replacing = input.replacement_amount_minor !== undefined || input.replacement_method !== undefined || input.replacement_occurred_at !== undefined;
-    const replacementTime = input.replacement_occurred_at ?? original.occurred_at;
+    const replacementTime = input.replacement_occurred_at === undefined ? original.occurred_at : input.replacement_occurred_at;
     if (replacing) assertOccurredAt(row, replacementTime);
     const revision = await bump(db, banker, id);
     await insertEntry(db, banker, id, revision, { ...original, voids_entry_id: original.id });

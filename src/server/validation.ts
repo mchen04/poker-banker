@@ -35,7 +35,7 @@ export const method = z.enum(['cash', 'venmo', 'zelle']);
 export const entryCreate = z.strictObject({
   op_id: opId, player_id: id, kind: z.enum(['buy_in', 'cash_out', 'payment_in', 'payment_out', 'expense']),
   amount_minor: nonnegativeMinor, note: z.string().trim().max(500).optional(), paid_now: z.boolean().optional(),
-  method: method.optional(), occurred_at: timestamp.optional(),
+  method: method.optional(), occurred_at: timestamp.nullable().optional(),
 }).superRefine((value, context) => {
   if (value.amount_minor === '0' && value.kind !== 'cash_out') context.addIssue({ code: 'custom', message: 'Only a cash-out may be zero' });
   const payment = value.kind === 'payment_in' || value.kind === 'payment_out';
@@ -45,7 +45,7 @@ export const entryCreate = z.strictObject({
 });
 export const voidEntry = z.strictObject({
   op_id: opId, replacement_amount_minor: nonnegativeMinor.optional(),
-  replacement_method: method.optional(), replacement_occurred_at: timestamp.optional(),
+  replacement_method: method.optional(), replacement_occurred_at: timestamp.nullable().optional(),
 });
 export const reportQuery = z.strictObject({
   group: z.enum(['overall', 'location', 'game', 'weekday', 'month']).optional(),

@@ -83,7 +83,7 @@ CREATE TABLE ledger_entries (
   method text CHECK (method IN ('cash', 'venmo', 'zelle')),
   CHECK ((kind IN ('payment_in', 'payment_out') AND method IS NOT NULL) OR
          (kind NOT IN ('payment_in', 'payment_out') AND method IS NULL)),
-  occurred_at timestamptz NOT NULL DEFAULT now(),
+  occurred_at timestamptz,
   voids_entry_id uuid UNIQUE,
   created_at timestamptz NOT NULL DEFAULT now(),
   revision bigint NOT NULL CHECK (revision > 0),

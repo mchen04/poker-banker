@@ -1,0 +1,48 @@
+import { randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { createApp } from '../src/server/app';
+import { createEntryClock } from '../src/client/clock';
+import { testDatabase } from './database';
+import type { SessionState } from '../src/domain/session';
+let database: Awaited<ReturnType<typeof testDatabase>>;
+beforeAll(async () => { database = await testDatabase(); });
+afterAll(async () => { await database.stop(); });
+for (const skew of [-60000, 60000]) it(`keeps ${skew}ms tolerated wall skew inside a started timer and a normal close`, async () => {
+  const origin = 'https://skew.test'; const app = createApp(database.pool, { origin }); let cookie = '';
+  const call = async (path: string, body?: unknown) => {
+    const response = await app.request(`${origin}/api${path}`, { method: body ? 'POST' : 'GET', headers: { origin, cookie, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const set = response.headers.get('set-cookie'); if (set) cookie = set.split(';')[0]!;
+    const value = await response.json(); expect(response.status, JSON.stringify(value)).toBe(200); return value as SessionState;
+  };
+  await call('/auth/signup', { username: `skew-${randomUUID().slice(0, 8)}`, password: 'secure-skew-proof-password' });
+  let state = await call('/sessions', { op_id: randomUUID(), name: 'Skew bounds', played_on: '2026-11-10', currency: 'USD' });
+  const path = `/sessions/${state.session.id}`;
+  state = await call(`${path}/players`, { op_id: randomUUID(), new_player_name: 'Justin' });
+  state = await call(`${path}/start`, { op_id: randomUUID() });
+  state = await call(path);
+  const clock = createEntryClock(); clock.observe(state.server_now, 100);
+  const stamp = clock.stamp(Date.parse(state.server_now) + skew, 100);
+  for (const kind of ['buy_in', 'cash_out']) state = await call(`${path}/entries`, { op_id: randomUUID(), player_id: state.players[0]!.id, kind, amount_minor: '10000', paid_now: false, occurred_at: stamp });
+  state = await call(`${path}/close`, { op_id: randomUUID(), expected_revision: state.revision });
+  expect(state.session.status).toBe('closed'); expect(Date.parse(stamp!)).toBeLessThanOrEqual(Date.parse(state.session.ended_at!));
+});
+it('records money with unavailable personal timing when a delayed clock sample predates a known start', async () => {
+  const origin = 'https://delay.test'; const app = createApp(database.pool, { origin }); let cookie = '';
+  const call = async (path: string, body?: unknown, status = 200) => {
+    const response = await app.request(`${origin}/api${path}`, { method: body ? 'POST' : 'GET', headers: { origin, cookie, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const set = response.headers.get('set-cookie'); if (set) cookie = set.split(';')[0]!;
+    const value = await response.json(); expect(response.status, JSON.stringify(value)).toBe(status); return value as SessionState;
+  };
+  await call('/auth/signup', { username: `delay-${randomUUID().slice(0, 8)}`, password: 'secure-delay-proof-password' });
+  let state = await call('/sessions', { op_id: randomUUID(), name: 'Delayed clock', played_on: '2026-11-10', currency: 'USD' });
+  const path = `/sessions/${state.session.id}`;
+  state = await call(`${path}/players`, { op_id: randomUUID(), new_player_name: 'Justin' });
+  state = await call(`${path}/start`, { op_id: randomUUID() });
+  const start = Date.parse(state.session.started_at!); const clock = createEntryClock();
+  clock.observe(new Date(start - 500).toISOString(), 500);
+  const stamp = clock.stamp(start + 150, 650, { started_at: state.session.started_at, server_now: new Date(start + 10).toISOString() });
+  state = await call(`${path}/entries`, { op_id: randomUUID(), player_id: state.players[0]!.id, kind: 'buy_in', amount_minor: '10000', paid_now: false, occurred_at: stamp });
+  expect(state.entries[0]!.occurred_at).toBeNull();
+  expect(state.players[0]).toMatchObject({ state: 'playing', bought_in_minor: '10000', duration_ms: null, performance: { per_hour: null } });
+  await call(`${path}/entries`, { op_id: randomUUID(), player_id: state.players[0]!.id, kind: 'buy_in', amount_minor: '100', paid_now: false, occurred_at: new Date(start - 1).toISOString() }, 400);
+});

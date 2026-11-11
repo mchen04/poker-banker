@@ -16,8 +16,14 @@ export function effectiveEntries(entries: LedgerEntry[]): LedgerEntry[] {
       current = original;
     }
   };
-  return entries.filter(entry => !entry.voids_entry_id && !voided.has(entry.id)).sort((a, b) => {
-    const time = Date.parse(a.occurred_at) - Date.parse(b.occurred_at);
+  const live = entries.filter(entry => !entry.voids_entry_id && !voided.has(entry.id));
+  const unknownPlayers = new Set(live.filter(entry => (entry.kind === 'buy_in' || entry.kind === 'cash_out') && entry.occurred_at === null).map(entry => entry.player_id));
+  return live.sort((a, b) => {
+    const player = a.player_id.localeCompare(b.player_id);
+    if (player) return player;
+    const leftChip = a.kind === 'buy_in' || a.kind === 'cash_out', rightChip = b.kind === 'buy_in' || b.kind === 'cash_out';
+    if (leftChip !== rightChip) return leftChip ? -1 : 1;
+    const time = leftChip && !unknownPlayers.has(a.player_id) && a.occurred_at !== null && b.occurred_at !== null ? Date.parse(a.occurred_at) - Date.parse(b.occurred_at) : 0;
     if (time) return time;
     const left = originalRevision(a), right = originalRevision(b);
     return left < right ? -1 : left > right ? 1 : a.id.localeCompare(b.id);
@@ -26,8 +32,10 @@ export function effectiveEntries(entries: LedgerEntry[]): LedgerEntry[] {
 
 export function playingTime(entries: LedgerEntry[], endedAt: string | null, serverNow: string) {
   const intervals: PlayingInterval[] = [];
+  if (entries.some(entry => (entry.kind === 'buy_in' || entry.kind === 'cash_out') && entry.occurred_at === null)) return { intervals, duration_ms: null };
   let start: string | null = null;
   for (const entry of entries) {
+    if (entry.occurred_at === null) continue;
     if (entry.kind === 'buy_in' && start === null) start = entry.occurred_at;
     if (entry.kind === 'cash_out' && start !== null) {
       intervals.push({ started_at: start, ended_at: entry.occurred_at });

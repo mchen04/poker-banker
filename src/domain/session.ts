@@ -9,7 +9,7 @@ export type LedgerEntry = {
   amount_minor: string;
   note: string | null;
   method: PaymentMethod | null;
-  occurred_at: string;
+  occurred_at: string | null;
   voids_entry_id: string | null;
   created_at: string;
   revision: string;

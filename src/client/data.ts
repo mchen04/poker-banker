@@ -1,3 +1,4 @@
+import { observeServerTime } from './clock';
 import type { SessionState } from '../domain/session';
 
 export type Banker = { id: string; username: string };
@@ -115,7 +116,9 @@ async function http<T>(path: string, method: string, body: unknown, consume: (re
       method, credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
       ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     });
-    return await consume(response);
+    const result = await consume(response);
+    if (method === 'GET' && result !== null && typeof result === 'object' && 'server_now' in result && typeof result.server_now === 'string') observeServerTime(result.server_now);
+    return result;
   } finally { window.clearTimeout(timeout); }
 }
 async function parse<T>(response: Response): Promise<T> {

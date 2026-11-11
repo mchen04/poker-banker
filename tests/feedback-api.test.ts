@@ -137,7 +137,8 @@ describe('persisted timers and participation', () => {
     const start = state.session.started_at;
     expect(start).not.toBeNull();
     expect(state.events[0]!.kind).toBe('timer_started');
-    expect(state.entries[0]!.occurred_at).toBe(start);
+    expect(state.entries[0]!.occurred_at).toBeNull();
+    expect(state.players[0]!.duration_ms).toBeNull();
     const reload = await ok<SessionState>(await request(owner, `/sessions/${state.session.id}`));
     expect(reload.session.started_at).toBe(start);
     expect(Date.parse(reload.server_now)).toBeGreaterThanOrEqual(Date.parse(start!));
