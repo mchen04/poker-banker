@@ -44,6 +44,23 @@ it('uses only public routes to seed its own account, corrected history and a six
   expect((await database.pool.query('SELECT username,password_hash FROM bankers WHERE id=$1', [other])).rows[0]).toEqual({ username: `untouched-${other.slice(0, 8)}`, password_hash: 'not-used' });
   expect(paths.every(path => path.startsWith('/api/'))).toBe(true);
   expect(paths[0]).toBe('/api/auth/signup');
+  const roster = (await client.request('/api/players')).body as { players: { id: string; cumulative?: { currency: string; result_minor: string }[] }[] };
+  const expectedResults = new Map([[0, '-1500'], [5, '1500'], [7, '-1500'], [13, '1500'], [14, '-1500'], [21, '1500'], [1, '0']]);
+  for (const [index, result] of expectedResults) expect(roster.players.find(player => player.id === fixture.playerIds[index])!.cumulative).toEqual([{ currency: 'USD', result_minor: result }]);
+  for (const index of [6, 22, 39]) expect(roster.players.find(player => player.id === fixture.playerIds[index])!.cumulative).toEqual([]);
+  for (const fault of ['missing', 'wrong']) {
+    const invalid: BenchmarkClient = { request: async (path, options) => {
+      const response = await client.request(path, options);
+      if (path !== '/api/players') return response;
+      const body = structuredClone(response.body) as typeof roster;
+      const player = body.players.find(player => player.id === fixture.playerId)!;
+      if (fault === 'missing') delete player.cumulative; else player.cumulative = [{ currency: 'USD', result_minor: '999' }];
+      return { ...response, body };
+    } };
+    const rejected: Sample[] = [];
+    await expect(liveApi(invalid, fixture, sample => rejected.push(sample), false, 1)).rejects.toThrow('Closed-session cumulative result');
+    expect(rejected.at(-1)).toMatchObject({ metric: 'api.players', ok: false });
+  }
   const samples: Sample[] = [];
   await liveApi(client, fixture, sample => samples.push(sample), false, 1);
   await liveWrites(client, fixture, sample => samples.push(sample), 1);
