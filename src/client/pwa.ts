@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { flushDraftWrites, hasAnyOutbox } from './data';
+import { flushDraftWrites, hasAnyOutbox, hasPendingLocalWrites } from './data';
 
 declare const __APP_RELEASE__: string;
 
-type Holds = { sheetOpen: boolean; outboxCount: number };
+type Holds = { sheetOpen: boolean; outboxCount: number; busy: boolean };
 
 export function usePwaUpdate(holds: Holds) {
   const [waiting, setWaiting] = useState(false);
@@ -14,11 +14,11 @@ export function usePwaUpdate(holds: Holds) {
   const pendingReload = useRef(false);
   const manualReload = useRef(false);
 
-  const canReload = useCallback((manual: boolean) => document.visibilityState === 'visible' && current.current.outboxCount === 0 && (manual || !current.current.sheetOpen), []);
+  const canReload = useCallback((manual: boolean) => document.visibilityState === 'visible' && !current.current.busy && current.current.outboxCount === 0 && (manual || !current.current.sheetOpen), []);
   const reload = useCallback(async (manual: boolean) => {
     if (!pendingReload.current || !canReload(manual)) return;
     await flushDraftWrites();
-    if (!await hasAnyOutbox() && canReload(manual)) window.location.reload();
+    if (!await hasAnyOutbox() && !hasPendingLocalWrites() && canReload(manual)) window.location.reload();
   }, [canReload]);
 
   const activateWorker = useCallback(async (manual: boolean) => {
@@ -26,7 +26,7 @@ export function usePwaUpdate(holds: Holds) {
     activating.current = true;
     try {
       await flushDraftWrites();
-      if (await hasAnyOutbox() || !canReload(manual)) return;
+      if (await hasAnyOutbox() || hasPendingLocalWrites() || !canReload(manual)) return;
       if (pendingReload.current) { await reload(manual); return; }
       const worker = registration.current?.waiting;
       if (!worker) return;
@@ -64,15 +64,17 @@ export function usePwaUpdate(holds: Holds) {
       if (hadController) {
         pendingReload.current = true;
         setWaiting(true);
-        void reload(manualReload.current);
+        const manual = manualReload.current;
+        manualReload.current = false;
+        void reload(manual).catch(() => {});
       }
       hadController = true;
     };
     const visibility = () => {
       if (document.visibilityState !== 'visible') return;
       void check();
-      void reload(false);
-      if (registration.current?.waiting && !current.current.sheetOpen && current.current.outboxCount === 0) void activateWorker(false);
+      void reload(false).catch(() => {});
+      if (registration.current?.waiting && !current.current.sheetOpen && current.current.outboxCount === 0) void activateWorker(false).catch(() => {});
     };
     const online = () => { void check(true); };
     const preloadFailed = (event: Event) => { event.preventDefault(); void check(true); };
@@ -94,8 +96,8 @@ export function usePwaUpdate(holds: Holds) {
       void check(true);
     }).catch(() => {});
     const timer = window.setInterval(() => {
-      if (pendingReload.current) void reload(false);
-      else if (registration.current?.waiting) void activateWorker(false);
+      if (pendingReload.current) void reload(false).catch(() => {});
+      else if (registration.current?.waiting) void activateWorker(false).catch(() => {});
     }, 3000);
     return () => {
       stopped = true;
@@ -111,7 +113,7 @@ export function usePwaUpdate(holds: Holds) {
   }, [activateWorker, reload]);
 
   useEffect(() => {
-    if (waiting) void activateWorker(false);
+    if (waiting) void activateWorker(false).catch(() => {});
   }, [activateWorker, holds.sheetOpen, holds.outboxCount, waiting]);
 
   return { waiting, release: __APP_RELEASE__, activate: () => activateWorker(true) };

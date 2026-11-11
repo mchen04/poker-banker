@@ -48,6 +48,7 @@ self.addEventListener('fetch', event => {
       const timeout = setTimeout(() => controller.abort(), 3000);
       try {
         const response = await fetch(request, { signal: controller.signal });
+        await response.clone().arrayBuffer();
         clearTimeout(timeout);
         return response;
       } catch {

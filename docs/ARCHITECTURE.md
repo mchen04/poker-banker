@@ -75,12 +75,16 @@ Cumulative, per player and per currency: sum of `result` over closed sessions on
 ## Concurrency and idempotency
 
 - Every mutating request carries an `op_id` (UUID v4) chosen by the client when the draft is created. Once submitted, the request body is frozen with that `op_id`. If the reply is lost, the client replays the same request: a stored success completes the draft; a validation rejection returns the draft to editing with a fresh `op_id`; an uncertain write can be discarded only after the server shows it was never applied or the banker accepts that it may exist. The server stores `(banker_id, op_id)` with a hash of the canonical request body and the response, in the same transaction as the write. A replay with the same body returns the stored response. The same key with a different body returns `409 idempotency_mismatch`.
+- An edit from another tab is stored beside the frozen request as a later draft. Confirmation or a proven rejection promotes that edit with a fresh `op_id` in the same local transaction. The form explains that it was submitted in another tab; the original request stays unchanged. A successful draft write always represents a committed local write.
+- Confirmed mutation rejections include business conflicts such as `already_seated`, not just input validation. An explicit application error after the stored-operation lookup releases the submitted draft, preserves its values, removes its unconfirmed marker and gives the next submission a fresh `op_id`. The same proof makes an outbox item safely discardable after an earlier uncertain attempt. Network failures, timeouts, 5xx, missing application codes, authentication/origin/content-type checks, throttling and `idempotency_mismatch` cannot settle that earlier attempt and preserve uncertainty.
+- Every signed-in request uses an immutable client bound to its banker, sends that expected banker and verifies the authenticated response banker before accepting data, including reads, polls and logout. Signup, login, recovery and public viewer requests stay neutral; only startup and explicit account reload use neutral identity discovery. An active owner mismatch blocks that banker's work and shows Account changed with Reload account state, preserving local work until verified identity discovery adopts the cookie account. Outbox and submitted-form settlement also requires the account, sync claim or form lifecycle to remain current; a stopped or superseded attempt preserves uncertainty and cannot acknowledge or release another attempt's work.
 - Every write to a session first locks its row with `SELECT ... FOR UPDATE`, checks status, writes, and increments `revision`. Writes to one session serialize; different sessions do not contend.
 - Close carries `expected_revision`. Ledger writes do not, because appends do not lose updates.
 
 ## Auth and recovery
 
 - Sign-up takes username and password (minimum 10 characters, checked against a short list of common passwords). It returns 10 one-time recovery codes, shown once, stored as SHA-256 hashes.
+- Recovery codes appear immediately when the server returns them and stay visible until the banker confirms saving them. The local backup and restore marker can fail independently without hiding the codes. Startup checks the authenticated banker's recovery-code draft even if the marker is missing; a failed read requires retry before opening the workspace. Update reload waits for authentication requests and recovery-code backup or acknowledgement to finish.
 - Sessions are 32 random bytes in an `HttpOnly; Secure; SameSite=Lax; Path=/` cookie named `pb_session`, stored as SHA-256, with a 180-day sliding expiry. The installed iOS app keeps its own cookie jar, so a banker signs in once inside the installed app.
 - Sign-in throttling: failures are counted per normalized username and per client IP. After 5 failures in 15 minutes the key locks for 15 minutes, doubling up to 24 hours. Errors never reveal whether a username exists, and unknown usernames still run a password hash for equal timing.
 - Recovery: username plus one unused recovery code plus a new password. Success marks the code used, replaces the password, and revokes every session. A signed-in banker can regenerate codes after re-entering the password, which invalidates the old set.
@@ -135,10 +139,11 @@ Polling, not sockets. Neon's pooled connections cannot `LISTEN`, and Vercel func
 
 - IndexedDB database `poker-banker`, versioned, with stores `drafts`, `outbox` and `snapshots`. Upgrades migrate old records forward and never drop drafts.
 - A draft key is `banker_id / session_id / form / player_id`. Switching sessions shows only that session's drafts. Drafts survive reloads, updates and app kills.
+- A failed local draft write retains the latest value in memory across sheet closure and account changes, shows "Not saved on this device" and offers retry. Application reloads wait until every retained value persists or is explicitly discarded. Unsaved memory cannot survive a browser or device process being killed.
 - Submitting moves the draft into the outbox with its `op_id`. The outbox sends in order per session and retries with backoff when online. Entries the server has not acknowledged show as "Not saved yet" and are excluded from totals. A server rejection keeps the item, shows the reason, and offers retry or discard.
 - `snapshots` holds the last `SessionState` per session so the app opens offline read-only.
 - `navigator.storage.persist()` is requested after sign-in.
-- Signing out clears that banker's drafts, outbox and snapshots after confirming nothing unsent remains, or after explicit discard.
+- Signing out clears that banker's drafts, outbox and snapshots after confirming nothing unsent remains, or after explicit discard of the current work. The sheet tracks changes, and the clearing transaction compares the accepted work again before deleting anything. New work invalidates earlier discard consent. If work arrives while logout is in flight, it remains local and the banker can sign in again to review it.
 
 ## Service worker and updates
 
@@ -146,7 +151,7 @@ Hand-written `public/sw.js`, stamped at build with a release version and the pre
 
 - Precache the shell and hashed assets. Navigations are network-first with a 3-second timeout, falling back to the cached shell. Hashed assets are cache-first. `/api/*`, non-GET requests and responses with `Set-Cookie` or `no-store` are never cached.
 - A new worker installs and waits. The page checks for updates on load, on `visibilitychange` to visible (at most every 5 minutes) and on `online`.
-- When a worker is waiting, the page shows "Update ready" with a Reload button. It activates and reloads by itself only when the page is visible, the outbox is empty and no sheet is open. Drafts are already in IndexedDB, so a reload never loses them.
+- When a worker is waiting, the page shows "Update ready" with a Reload button. It activates and reloads by itself only when the page is visible, the outbox is empty and no sheet is open. Activation and reload both flush local writes and check again for pending or failed writes immediately before proceeding.
 - Missing hashed assets return `404` with `no-store` from Vercel instead of the SPA fallback, so a stale chunk never receives HTML. A chunk-load failure triggers the update path.
 - Auth lives in the cookie, which the worker never touches, so updates cannot sign anyone out.
 
@@ -200,6 +205,7 @@ session_events + kinds 'timer_started', 'timing_corrected', 'details_changed' wi
 ### Session timer
 
 - `started_at` is set by Start timer, or automatically by the first buy-in when unset and that buy-in has a known `occurred_at` (it takes that time). A buy-in with an unknown time leaves an unset timer unset, shown as "Start time unknown" until the banker sets it through Correct times. `ended_at` is set by Close when unset. Reopen does not clear `ended_at`; the banker restarts timing explicitly if play resumes.
+- Every timer write checks the proposed bounds against all effective, known-time chip entries under the session row lock in the same transaction. If an automatic start would exclude an earlier cash-out, the entire buy-in is rejected with `409 entries_outside_timing`, including its timer, revision, ledger and history changes; the banker can use Correct times to include the earlier entry, then retry the buy-in. Reopen does not write either timer bound.
 - `PATCH /api/sessions/:id/timing {op_id, started_at, ended_at|null}` corrects times and writes a `timing_corrected` event with old and new values. The session menu shows that history.
 - The client shows `(ended_at ?? server_now) - started_at`. The server returns `server_now` so device clocks do not matter, and the client advances it locally between polls.
 

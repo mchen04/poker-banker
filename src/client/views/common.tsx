@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { Banker, OutboxItem } from '../data';
-import { ApiError, deleteDraft, prepareDraftSubmission, readDraft, releaseRejectedDraft, replaySubmittedDraft, writeDraft, type DraftRequest } from '../data';
+import type { Banker, BankerClient, OutboxItem } from '../data';
+import { deleteDraft, draftSaveFailed, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftRequest } from '../data';
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
@@ -8,6 +8,7 @@ import { formatRational, formatSquareRoot, type Rational } from '../../domain/ra
 export type SheetState = { kind: string; player?: string; entry?: string } | null;
 export type ClientState = {
   banker: Banker | null;
+  client: BankerClient | null;
   state: SessionState | null;
   online: boolean;
   pending: OutboxItem[];
@@ -17,6 +18,7 @@ export type ClientState = {
   updateBanner?: ReactNode;
   formBusy: boolean;
   setFormBusy: (busy: boolean) => void;
+  isCurrent?: () => boolean;
   mutate: (path: string, body: Record<string, unknown>, method?: string) => Promise<SessionState>;
 };
 export const ClientContext = createContext<ClientState | null>(null);
@@ -69,58 +71,98 @@ export function useDraft<T extends object>(key: string, initial: T) {
   const client = useContext(ClientContext);
   type Value = T & { __submitted?: DraftRequest };
   const [value, setValue] = useState<Value>(initial);
+  const latestValue = useRef<Value>(initial);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
   const initialValue = useRef(initial);
   const previousKey = useRef(key);
   const submitted = useRef<DraftRequest | undefined>(undefined);
-  const inFlight = useRef(false);
-  const active = useRef(true);
-  if (previousKey.current !== key) { initialValue.current = initial; previousKey.current = key; submitted.current = undefined; }
+  const inFlight = useRef<symbol | undefined>(undefined);
+  const scope = useRef({ active: true, version: 0 });
+  if (previousKey.current !== key) {
+    scope.current.active = false;
+    scope.current = { active: true, version: 0 };
+    initialValue.current = initial; previousKey.current = key; submitted.current = undefined; inFlight.current = undefined;
+  }
+  const owner = scope.current;
+  const current = () => scope.current === owner && owner.active && (!client || (client.banker?.id === key.split('/')[0] && client.isCurrent?.() !== false));
+  const capture = () => { const version = owner.version; return () => current() && owner.version === version; };
+  function adopt(next: Value) { latestValue.current = next; submitted.current = next.__submitted; setValue(next); }
   useEffect(() => {
-    let current = true;
-    active.current = true;
+    owner.active = true;
+    const isCurrent = capture();
     setReady(false); setError('');
-    void readDraft<Value>(key).then(saved => { if (current) { const next = saved ?? initialValue.current; submitted.current = (next as Value).__submitted; setValue(next); setReady(true); } }).catch(problem => { if (current) { const message = problem instanceof Error ? problem.message : 'Could not restore the draft'; setError(message); storageFailure(problem); } });
-    return () => { current = false; active.current = false; };
+    void readDraft<Value>(key).then(saved => { if (isCurrent()) { adopt(saved ?? initialValue.current); setReady(true); } }).catch(problem => { if (isCurrent()) { const message = problem instanceof Error ? problem.message : 'Could not restore the draft'; setError(message); storageFailure(problem); } });
+    return () => { owner.active = false; owner.version++; };
   }, [key]);
-  function update(next: T) { if (submitted.current) return; setValue(next); void writeDraft(key, next).catch(problem => { setError(problem instanceof Error ? problem.message : 'Could not save draft'); storageFailure(problem); }); }
-  function freshValue() {
+  useEffect(() => {
+    const refresh = () => {
+      if (!current()) return;
+      setError(draftSaveFailed(key) ? 'Not saved on this device' : '');
+      if (!submitted.current || inFlight.current || draftSaveFailed(key)) return;
+      const isCurrent = capture();
+      const previous = latestValue.current;
+      void readDraft<Value>(key).then(saved => {
+        if (!isCurrent() || latestValue.current !== previous || inFlight.current || draftSaveFailed(key)) return;
+        if (saved) adopt(saved);
+        else freshValue(isCurrent);
+      }).catch(problem => { if (isCurrent()) storageFailure(problem); });
+    };
+    refresh(); window.addEventListener('pb-data', refresh);
+    return () => window.removeEventListener('pb-data', refresh);
+  }, [key]);
+  function update(next: T) {
+    if (!current() || submitted.current) return;
+    const isCurrent = capture();
+    adopt(next);
+    void writeDraft(key, next).then(async () => {
+      if (!isCurrent() || latestValue.current !== next) return;
+      const saved = await readDraft<Value>(key);
+      if (!isCurrent() || latestValue.current !== next || draftSaveFailed(key)) return;
+      setError('');
+      if (saved) adopt(saved);
+    }).catch(problem => { if (isCurrent()) { setError('Not saved on this device'); storageFailure(problem); } });
+  }
+  function freshValue(isCurrent: () => boolean) {
+    if (!isCurrent()) return;
     submitted.current = undefined;
     const fresh = { ...initialValue.current, ...('op_id' in initialValue.current ? { op_id: crypto.randomUUID() } : {}) };
-    if (active.current) setValue(fresh);
+    adopt(fresh);
   }
-  async function clear() { try { await deleteDraft(key); freshValue(); } catch (problem) { storageFailure(problem); throw problem; } }
+  async function clear() { const isCurrent = capture(); if (!isCurrent()) return; try { await deleteDraft(key, isCurrent); freshValue(isCurrent); } catch (problem) { if (isCurrent()) storageFailure(problem); throw problem; } }
   async function perform<R>(request: DraftRequest, first: boolean): Promise<R> {
+    const isCurrent = capture();
+    const ensureCurrent = () => { if (!isCurrent()) throw new Error('Account changed or this form is no longer open. Check your saved work.'); };
+    ensureCurrent();
     if (inFlight.current) throw new Error('Wait for this saved result to finish checking');
-    inFlight.current = true;
+    const flight = Symbol();
+    inFlight.current = flight;
     try {
       if (first) {
-        const prepared = await prepareDraftSubmission(key, value, request);
-        if (prepared.previouslyConfirmed) { submitted.current = undefined; if (active.current) setValue(prepared.value); throw new Error('The previous form was saved. Review this new draft and save again.'); }
-        request = prepared.request; first = prepared.first;
-        submitted.current = request;
-        if (active.current) setValue(prepared.value);
+        const prepared = await prepareDraftSubmission(key, value, request, isCurrent);
+        ensureCurrent();
+        if (prepared.previouslyConfirmed) { adopt(prepared.value); throw new Error('This form changed in another tab. Review this draft and save again.'); }
+        adopt(prepared.value);
       }
       let result: R;
-      try { result = await replaySubmittedDraft<R>(key); }
+      try { result = await replaySubmittedDraft<R>(key, isCurrent); }
       catch (problem) {
+        ensureCurrent();
         const restored = await readDraft<Value>(key);
-        if (restored && !restored.__submitted && active.current) {
-          submitted.current = undefined;
-          setValue(restored);
-        } else if (first && problem instanceof ApiError && problem.status >= 400 && problem.status < 500 && ![401, 403, 429].includes(problem.status) && problem.code !== 'idempotency_mismatch' && active.current) {
-          submitted.current = undefined;
-          const fresh = { ...value, ...('op_id' in value ? { op_id: crypto.randomUUID() } : {}) };
-          delete fresh.__submitted;
-          await releaseRejectedDraft(key, request, fresh); setValue(fresh);
+        ensureCurrent();
+        if (restored && !restored.__submitted) {
+          adopt(restored);
         }
         throw problem;
       }
-      freshValue();
+      ensureCurrent();
+      const retained = await readDraft<Value>(key);
+      ensureCurrent();
+      if (retained) adopt(retained);
+      else freshValue(isCurrent);
       if (result && typeof result === 'object' && 'session' in result) client?.update(result as unknown as SessionState);
       return result;
-    } finally { inFlight.current = false; }
+    } finally { if (inFlight.current === flight) inFlight.current = undefined; }
   }
   async function submit<R>(path: string, body: Record<string, unknown>, method = 'POST') {
     const request = submitted.current ?? { path, body: structuredClone(body), method };
@@ -136,13 +178,19 @@ export function DraftRecovery<T>({ recover, recovered, pending = false }: { reco
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useFormBusy(busy || pending);
-  return <><p className="warning">This form may already have been saved. Check the saved result before editing it or starting another.</p><ErrorText text={error} /><button className="primary wide" disabled={busy || pending} onClick={() => { if (busy || pending) return; setBusy(true); setError(''); void recover().then(recovered).catch(problem => { setError(problem instanceof Error ? problem.message : 'Could not check the saved result'); setBusy(false); }); }}>{busy ? 'Checking saved result…' : 'Check saved result'}</button></>;
+  return <><p className="warning">This form was submitted here or in another tab and may already have been saved. Check the saved result before editing it or starting another.</p><ErrorText text={error} /><button className="primary wide" disabled={busy || pending} onClick={() => { if (busy || pending) return; setBusy(true); setError(''); void recover().then(recovered).catch(problem => { setError(problem instanceof Error ? problem.message : 'Could not check the saved result'); setBusy(false); }); }}>{busy ? 'Checking saved result…' : 'Check saved result'}</button></>;
 }
 export function useFormBusy(busy: boolean) {
   const setBusy = useClient().setFormBusy;
   useLayoutEffect(() => { setBusy(busy); return () => setBusy(false); }, [busy, setBusy]);
 }
 export function storageFailure(problem: unknown) { window.dispatchEvent(new CustomEvent('pb-storage-error', { detail: problem instanceof Error ? problem.message : 'Local storage is unavailable' })); }
+export function DraftSaveStatus() {
+  const [failed, setFailed] = useState(draftSaveFailed);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { const refresh = () => setFailed(draftSaveFailed()); window.addEventListener('pb-data', refresh); refresh(); return () => window.removeEventListener('pb-data', refresh); }, []);
+  return failed ? <div className="warning" role="alert"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div> : null;
+}
 export function ErrorText({ text }: { text: string }) { return text ? <p role="alert" className="error">{text}</p> : null; }
 export function Sheet({ title, children, close, leadingClose = false, closeLabel = 'Done', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -183,6 +231,6 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
   }, []);
   const closeButton = <button type="button" aria-label={leadingClose ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
   return <div className="sheet-backdrop"><div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
-    {updateBanner}<div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><fieldset className="sheet-fields" disabled={busy}>{children}</fieldset>
+    {updateBanner}<DraftSaveStatus /><div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><fieldset className="sheet-fields" disabled={busy}>{children}</fieldset>
   </div></div>;
 }

@@ -132,6 +132,7 @@ export function createApp(pool: Database, config: Config = {}) {
     assertOpen(row);
     if (row.started_at !== null) conflict('timer_started', 'Correct timing to change a started timer');
     const startedAt = await serverTime(db);
+    await assertTimingEntries(db, banker, id, startedAt, null);
     await db.query('UPDATE game_sessions SET started_at = $3, ended_at = NULL WHERE id = $1 AND banker_id = $2', [id, banker, startedAt]);
     const revision = await bump(db, banker, id);
     await event(db, banker, id, revision, 'timer_started', { old: { started_at: row.started_at, ended_at: row.ended_at }, new: { started_at: startedAt, ended_at: null } });
@@ -180,7 +181,10 @@ export function createApp(pool: Database, config: Config = {}) {
         AND NOT EXISTS (SELECT 1 FROM ledger_entries e WHERE e.session_id = $1 AND e.banker_id = $2
           AND e.kind = 'buy_in' AND e.voids_entry_id IS NULL
           AND NOT EXISTS (SELECT 1 FROM ledger_entries v WHERE v.voids_entry_id = e.id AND v.session_id = $1 AND v.banker_id = $2))`, [id, banker, occurredAt]);
-      if (started.rowCount) await event(db, banker, id, revision, 'timer_started', { old: { started_at: null, ended_at: row.ended_at }, new: { started_at: occurredAt, ended_at: row.ended_at } });
+      if (started.rowCount) {
+        await assertTimingEntries(db, banker, id, occurredAt, row.ended_at);
+        await event(db, banker, id, revision, 'timer_started', { old: { started_at: null, ended_at: row.ended_at }, new: { started_at: occurredAt, ended_at: row.ended_at } });
+      }
     }
     const payment = input.kind === 'payment_in' || input.kind === 'payment_out';
     await insertEntry(db, banker, id, revision, { ...input, method: payment ? input.method! : null, occurred_at: occurredAt });
@@ -221,8 +225,8 @@ export function createApp(pool: Database, config: Config = {}) {
     const discrepancy = state.totals.discrepancy_minor!;
     if (discrepancy !== '0' && input.accept_discrepancy_minor !== discrepancy) conflict('discrepancy_unaccepted', 'Accept the exact discrepancy before closing');
     const endedAt = row.ended_at ?? await serverTime(db);
+    await assertTimingEntries(db, banker, id, row.started_at, endedAt);
     if (row.started_at !== null && Date.parse(endedAt) < Date.parse(row.started_at)) conflict('invalid_timing', 'End must be at or after start');
-    await assertTimingEntries(db, banker, id, null, endedAt);
     await db.query("UPDATE game_sessions SET status = 'closed', closed_at = now(), closed_balanced = $3, ended_at = $4 WHERE id = $1 AND banker_id = $2", [id, banker, discrepancy === '0', endedAt]);
     const revision = await bump(db, banker, id);
     await event(db, banker, id, revision, 'closed', { discrepancy_minor: discrepancy, old: { ended_at: row.ended_at }, new: { ended_at: endedAt } });

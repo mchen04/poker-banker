@@ -80,6 +80,9 @@ export async function authenticate(pool: Database, c: AppContext): Promise<Banke
     FROM bankers b WHERE a.banker_id = b.id AND a.token_hash = $1 AND a.expires_at > now() RETURNING b.id, b.username`, [digest(token)]);
   const banker = result.rows[0];
   if (!banker) throw new ApiError(401, 'unauthorized', 'Sign in to continue');
+  c.header('X-PB-Banker-ID', banker.id);
+  const expectedBanker = c.req.header('X-PB-Expected-Banker-ID');
+  if (expectedBanker && expectedBanker !== banker.id) throw new ApiError(409, 'account_changed', 'Account changed. Sign in to check your saved work.');
   cookie(c, token);
   c.set('banker', banker);
   return banker;

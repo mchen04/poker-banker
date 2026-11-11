@@ -1,3 +1,4 @@
+import type { Request } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { addPlayer, call, closeSession, createAccount, current, menu, money, newSession, signOut } from './helpers';
 import type { SessionState } from '../src/domain/session';
@@ -174,7 +175,7 @@ test('a committed correction stays recoverable after its original entry becomes 
   expect(after.entries).toHaveLength(4);
 });
 
-test('concurrent preparations preserve the first submitted payload and later draft edits cannot overwrite it', async ({ page }) => {
+test('concurrent preparations preserve the first submitted payload and retain later edits for a fresh operation', async ({ page }) => {
   const account = await createAccount(page);
   const source = await readFile('src/client/data.ts', 'utf8');
   const compile = (value: string) => ts.transpileModule(value, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
@@ -197,17 +198,18 @@ test('concurrent preparations preserve the first submitted payload and later dra
     await data.writeDraft(key, { op_id, name: 'Changed after submission' });
     const retained = await data.readDraft<{ __submitted: typeof first }>(key);
     await data.replaySubmittedDraft(key);
-    const cleared = await data.readDraft(key) === undefined;
+    const recovered = await data.readDraft<{ name: string; op_id: string }>(key);
     const stale = await data.prepareDraftSubmission(key, { op_id, name: 'Next reviewed intent' }, { ...first, body: { ...first.body, name: 'Next reviewed intent' } });
     const fresh = await data.readDraft<{ op_id: string; name: string }>(key);
     await data.prepareDraftSubmission(key, fresh!, { ...first, body: { ...first.body, op_id: fresh!.op_id, name: fresh!.name } });
     await data.replaySubmittedDraft(key);
-    return { submitted, retained, cleared, stale, fresh, unsent: await data.hasUnsent(banker), originalOp: op_id };
+    return { submitted, retained, recovered, stale, fresh, unsent: await data.hasUnsent(banker), originalOp: op_id };
   }, account.banker.id);
   expect(result.submitted.map(item => item.first).sort()).toEqual([false, true]);
   expect(result.submitted[0]!.request).toEqual(result.submitted[1]!.request);
   expect(result.retained!.__submitted).toEqual(result.submitted[0]!.request);
-  expect(result.cleared).toBe(true);
+  expect(result.recovered?.name).toBe('Changed after submission');
+  expect(result.recovered?.op_id).not.toBe(result.originalOp);
   expect(result.stale.previouslyConfirmed).toBe(true);
   expect(result.fresh!.name).toBe('Next reviewed intent');
   expect(result.fresh!.op_id).not.toBe(result.originalOp);
@@ -222,29 +224,43 @@ test('a late form acknowledgement after another tab signs out cannot restore pri
   const held = new Promise<void>(resolve => { release = resolve; });
   let committed!: () => void;
   const committedRequest = new Promise<void>(resolve => { committed = resolve; });
+  let settled!: () => void;
+  const completed = new Promise<void>(resolve => { settled = resolve; });
+  let heldRequest: Request | undefined;
   await page.route('**/api/sessions', async route => {
-    if (route.request().method() !== 'POST') { await route.continue(); return; }
-    const response = await route.fetch();
-    expect(response.status()).toBe(200); committed();
-    await held; await route.fulfill({ response });
+    if (route.request().method() !== 'POST' || heldRequest) { await route.continue(); return; }
+    heldRequest = route.request();
+    try {
+      const response = await route.fetch();
+      expect(response.status()).toBe(200); committed();
+      await held;
+      if (!heldRequest.failure()) await route.fulfill({ response });
+    } finally { settled(); }
   });
   await page.getByRole('button', { name: 'New session', exact: true }).click();
   await page.getByLabel('Session name', { exact: true }).fill('Held server acknowledgement');
   await page.getByRole('button', { name: 'Create session', exact: true }).click();
   await committedRequest;
-  const other = await context.newPage(); await other.goto('/');
-  await expect(other.getByRole('button', { name: 'Players', exact: true })).toBeVisible();
-  await signOut(other);
-  const delivered = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/sessions');
-  release(); await (await delivered).finished();
-  await expect.poll(async () => await page.getByLabel('Username', { exact: true }).isVisible() || await page.getByRole('button', { name: 'Check saved result', exact: true }).isVisible() && await page.getByRole('button', { name: 'Check saved result', exact: true }).isEnabled()).toBe(true);
-  const counts = await page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>((resolve, reject) => { const opening = indexedDB.open('poker-banker'); opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
-    const values: number[] = [];
-    for (const name of ['drafts', 'outbox', 'snapshots']) values.push(await new Promise<number>((resolve, reject) => { const reading = db.transaction(name).objectStore(name).count(); reading.onsuccess = () => resolve(reading.result); reading.onerror = () => reject(reading.error); }));
-    db.close(); return values;
-  });
-  expect(counts).toEqual([0, 0, 0]);
+  const other = await context.newPage();
+  try {
+    await other.goto('/');
+    await expect(other.getByRole('button', { name: 'Players', exact: true })).toBeVisible();
+    const saved = await call<{ sessions: { name: string }[] }>(other, '/sessions');
+    expect(saved.sessions.filter(session => session.name === 'Held server acknowledgement')).toHaveLength(1);
+    const canceled = page.waitForEvent('requestfailed', { predicate: request => request === heldRequest });
+    await signOut(other);
+    expect((await canceled).failure()).not.toBeNull();
+    release();
+    await completed;
+    await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
+    await expect.poll(() => page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { const opening = indexedDB.open('poker-banker'); opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
+      const values: number[] = [];
+      for (const name of ['drafts', 'outbox', 'snapshots']) values.push(await new Promise<number>((resolve, reject) => { const reading = db.transaction(name).objectStore(name).count(); reading.onsuccess = () => resolve(reading.result); reading.onerror = () => reject(reading.error); }));
+      db.close(); return values;
+    })).toEqual([0, 0, 0]);
+    await expect(page.getByTestId('saved-confirmation')).toHaveCount(0);
+  } finally { release(); await completed; await other.close(); }
 });
 
 test('a dropped timing-validation rejection restores editing before a fresh timing operation', async ({ page }) => {
@@ -287,4 +303,44 @@ test('a dropped timing-validation rejection restores editing before a fresh timi
   expect(saved.events.filter(event => event.kind === 'timing_corrected')).toHaveLength(2);
   expect(bodies).toHaveLength(3);
   expect(bodies[2]!.op_id).not.toBe(bodies[0]!.op_id);
+});
+
+test('a rejected timer start leaves no pending operation and correct times remains available', async ({ page }) => {
+  await createAccount(page);
+  let state = await newSession(page, 'Reject late timer start');
+  const player = await addPlayer(page, 'Justin');
+  state = await call<SessionState>(page, `/sessions/${state.session.id}/entries`, 'POST', { op_id: crypto.randomUUID(), player_id: player.id, kind: 'cash_out', amount_minor: '10000', paid_now: false, occurred_at: '2026-11-10T19:00:00Z' });
+  await page.reload();
+  const bodies: { op_id: string }[] = [];
+  await page.route(`**/api/sessions/${state.session.id}/start`, async route => {
+    bodies.push(route.request().postDataJSON());
+    await route.continue();
+  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const rejected = page.waitForResponse(response => new URL(response.url()).pathname === `/api/sessions/${state.session.id}/start` && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Start timer', exact: true }).click();
+    expect((await rejected).status()).toBe(409);
+    await expect(page.getByTestId('save-status')).toHaveText('Timing must include the effective entries');
+    await expect(page.getByRole('button', { name: 'Start timer', exact: true })).toBeEnabled();
+  }
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0]!.op_id).not.toBe(bodies[1]!.op_id);
+  expect((await current(page)).session.started_at).toBeNull();
+  await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Unsent entries', exact: true })).toHaveCount(0);
+  const pending = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const opening = indexedDB.open('poker-banker'); opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
+    const outbox = await new Promise<number>((resolve, reject) => { const reading = db.transaction('outbox').objectStore('outbox').count(); reading.onsuccess = () => resolve(reading.result); reading.onerror = () => reject(reading.error); });
+    const drafts = await new Promise<{ value?: { __submitted?: unknown } }[]>((resolve, reject) => { const reading = db.transaction('drafts').objectStore('drafts').getAll(); reading.onsuccess = () => resolve(reading.result); reading.onerror = () => reject(reading.error); });
+    db.close(); return { outbox, submitted: drafts.filter(draft => draft.value?.__submitted).length };
+  });
+  expect(pending).toEqual({ outbox: 0, submitted: 0 });
+  await menu(page, 'Correct times');
+  await page.getByLabel('Started at', { exact: true }).fill('2026-11-10T18:00:00');
+  await page.getByRole('button', { name: 'Save timing', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const saved = await current(page);
+  expect(saved.session.started_at).toBe('2026-11-10T18:00:00.000Z');
+  expect(saved.events.filter(event => event.kind === 'timer_started')).toHaveLength(0);
+  expect(saved.events.filter(event => event.kind === 'timing_corrected')).toHaveLength(1);
 });
