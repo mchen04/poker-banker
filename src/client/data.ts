@@ -49,7 +49,7 @@ export class DraftConflictError extends Error {
   }
 }
 export type SubmittedDraft = { key: string; form: string; request: DraftRequest; cursor: DraftCursor };
-type DraftValue = Record<string, unknown> & { __submitted?: DraftRequest };
+type DraftValue = Record<string, unknown> & { __submitted?: DraftRequest; __recovery_request?: DraftRequest; __recovery_currency?: string };
 type DraftRecord = { key: string; value: unknown; next_value?: unknown; banker_id: string; updated_at: number; kind?: 'operation_request' | 'acknowledged_operation' | 'recovered_edit'; replay_id?: string };
 const acknowledgedKey = (key: string, request: DraftRequest) => `${key.split('/')[0]}/_operations/confirmed/${String(request.body.op_id)}`;
 const operationKey = (banker: string, op: unknown) => `${banker}/_operations/requests/${String(op)}`;
@@ -299,9 +299,72 @@ function recoveredEntry(value: unknown, body: Record<string, unknown>, currency?
   const minor = typeof body.amount_minor === 'string' && /^-?\d+$/.test(body.amount_minor) ? BigInt(body.amount_minor) : undefined;
   const scale = exponent === undefined ? undefined : 10n ** BigInt(exponent);
   const amount = minor !== undefined && scale !== undefined ? `${minor / scale}${exponent ? `.${String(minor % scale).padStart(exponent, '0')}` : ''}` : '';
-  return preserveEntryTime(editableOperation({ ...body, amount, paid_now: body.paid_now ?? false, method: body.method ?? 'cash', occurred_at: '', note: body.note ?? '' }, true)!, body);
+  return preserveEntryTime(editableOperation({ ...body, amount, __recovery_raw_amount: exponent === undefined, paid_now: body.paid_now ?? body.kind === 'buy_in', method: body.method ?? 'cash', occurred_at: '', note: body.note ?? '' }, true)!, body);
 }
-const entrySourceKey = (banker: string, session: string, body: Record<string, unknown>) => draftKey(banker, session, String(body.kind ?? 'entry-recovery'), String(body.player_id ?? ''));
+function recoverySourceKey(banker: string, session: string, request: DraftRequest): string {
+  if (/^\/api\/sessions\/[^/]+\/entries$/.test(request.path)) return draftKey(banker, session, String(request.body.kind ?? 'entry-recovery'), String(request.body.player_id ?? ''));
+  const routes: [RegExp, string][] = [
+    [/^\/api\/sessions$/, 'new-session'], [/^\/api\/sessions\/[^/]+$/, 'settings'],
+    [/\/players$/, 'add-player'], [/\/timing$/, 'timing'], [/\/close$/, 'close'], [/\/reopen$/, 'reopen'],
+    [/\/share$/, 'share'], [/\/start$/, 'start'], [/\/void$/, 'correction'], [/^\/api\/players\/[^/]+$/, 'rename'],
+  ];
+  return draftKey(banker, session, routes.find(([pattern]) => pattern.test(request.path))?.[1] ?? 'legacy-command', String(request.body.op_id));
+}
+function recoveryFormValue(value: unknown, request: DraftRequest): DraftValue {
+  if (!value) return request.body;
+  const selectedPlayer = /^\/api\/sessions\/[^/]+\/players$/.test(request.path) && typeof request.body.player_id === 'string' ? { player_id: request.body.player_id } : {};
+  return { ...selectedPlayer, ...(value as DraftValue) };
+}
+function recoverOperation(value: unknown, request: DraftRequest, currency?: string): DraftValue {
+  const entry = /^\/api\/sessions\/[^/]+\/entries$/.test(request.path);
+  const editable = entry ? recoveredEntry(value, request.body, currency) : editableOperation(recoveryFormValue(value, request), true)!;
+  return { ...editable, __recovery_request: request, ...(currency ? { __recovery_currency: currency } : {}) };
+}
+function recoveryMinor(value: unknown, currency: string | undefined): string {
+  if (!currency) throw new Error('The session currency is unavailable. Review the amount in minor units.');
+  const exponent = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits!;
+  const match = /^(\d+)(?:\.(\d*))?$/.exec(String(value).trim());
+  if (!match || (match[2]?.length ?? 0) > exponent) throw new Error('Enter an exact amount for this currency.');
+  return String(BigInt(match[1]!) * 10n ** BigInt(exponent) + BigInt((match[2] ?? '').padEnd(exponent, '0') || '0'));
+}
+function recoveryRequest(value: DraftValue, request: DraftRequest, currency?: string): DraftRequest {
+  const body: Record<string, unknown> = { ...request.body, op_id: value.op_id };
+  const entry = /^\/api\/sessions\/[^/]+\/entries$/.test(request.path);
+  for (const field of Object.keys(request.body)) if (field in value && field !== 'op_id' && (!entry || !['amount_minor', 'occurred_at'].includes(field))) body[field] = value[field];
+  const fields: Record<string, string> = entry ? { kind: 'kind', note: 'note' }
+    : /\/timing$/.test(request.path) ? {}
+    : /\/void$/.test(request.path) ? {}
+    : /\/players$/.test(request.path) ? { search: 'new_player_name' }
+    : /^\/api\/players\/[^/]+$/.test(request.path) ? { name: 'display_name' }
+    : { name: 'name', played_on: 'played_on', currency: 'currency', location: 'location', game: 'game', reason: 'reason', action: 'action', expected_revision: 'expected_revision', accept_discrepancy_minor: 'accept_discrepancy_minor' };
+  for (const [field, target] of Object.entries(fields)) if (field in value && (target in body || (target === 'note' && value[field]))) body[target] = value[field];
+  if (entry) {
+    const rawAmount = value.__recovery_raw_amount === true || (!value.__recovery_currency && value.amount === '' && typeof value.amount_minor === 'string');
+    if (rawAmount) body.amount_minor = value.amount_minor;
+    else if ('amount' in value) {
+      if (typeof value.amount !== 'string' || !value.amount.trim()) throw new Error('Enter an amount before resubmitting.');
+      body.amount_minor = recoveryMinor(value.amount, currency);
+    }
+    const chip = body.kind === 'buy_in' || body.kind === 'cash_out';
+    const payment = body.kind === 'payment_in' || body.kind === 'payment_out';
+    if (chip && 'paid_now' in value) body.paid_now = value.paid_now;
+    if ((payment || (chip && body.paid_now)) && /^\d+$/.test(String(body.amount_minor)) && BigInt(String(body.amount_minor)) > 0n && 'method' in value) body.method = value.method;
+    else delete body.method;
+    if (value.occurred_at) body.occurred_at = new Date(String(value.occurred_at)).toISOString();
+    else if ('__recovered_occurred_at' in value) body.occurred_at = value.__recovered_occurred_at;
+  }
+  if (/\/timing$/.test(request.path)) {
+    if ('start' in value) body.started_at = value.start ? new Date(String(value.start)).toISOString() : null;
+    if ('end' in value) body.ended_at = value.end ? new Date(String(value.end)).toISOString() : null;
+  }
+  if (/\/void$/.test(request.path) && 'replacement_amount_minor' in body) {
+    if ('amount' in value) body.replacement_amount_minor = recoveryMinor(value.amount, currency);
+    if ('replacement_method' in body && 'method' in value) body.replacement_method = value.method;
+    if (value.time) body.replacement_occurred_at = new Date(String(value.time)).toISOString();
+  }
+  if ('big_blind_minor' in body && 'blind' in value) body.big_blind_minor = value.blind ? recoveryMinor(value.blind, request.method === 'PATCH' ? currency : String(value.currency ?? currency ?? '')) : null;
+  return { ...request, body };
+}
 async function operationRecord(store: IDBObjectStore, banker: string, request: DraftRequest): Promise<DraftRecord | undefined> {
   const current = await req(store.get(operationKey(banker, request.body.op_id))) as DraftRecord | undefined;
   return current ?? await req(store.get(acknowledgedKey(banker, request))) as DraftRecord | undefined;
@@ -555,7 +618,7 @@ export async function prepareDraftSubmission<T extends object>(key: string, valu
     return { request, first: false, value: fresh, previouslyConfirmed: true };
   }
   if (!previous && priorRequest && !sameRequest(priorRequest, request)) {
-    const fresh = { ...value, op_id: crypto.randomUUID(), __operation_conflict: operationMessage };
+    const fresh = { ...recoveryFormValue(value, request), ...value, op_id: crypto.randomUUID(), __operation_conflict: operationMessage, __recovery_request: request };
     const nextRecord = { key, banker_id: banker, value: fresh, updated_at: Date.now() } satisfies DraftRecord;
     store.put(nextRecord);
     await done;
@@ -601,8 +664,8 @@ async function finishDraftSubmission(key: string, request: DraftRequest, replayI
   const store = transaction.objectStore('drafts');
   const existing = await req(store.get(key)) as DraftRecord | undefined;
   const operation = mismatch || acknowledge ? await operationRecord(store, key.split('/')[0]!, request) : undefined;
-  const session = /^\/api\/sessions\/([^/]+)\/entries$/.exec(request.path)?.[1];
-  const recoveredSource = mismatch && key.includes('/_operations/uncertain/') ? operationSource(operation)?.key ?? (session ? entrySourceKey(key.split('/')[0]!, session, request.body) : undefined) : undefined;
+  const session = /^\/api\/sessions\/([^/]+)/.exec(request.path)?.[1];
+  const recoveredSource = mismatch && key.includes('/_operations/uncertain/') ? operationSource(operation)?.key ?? recoverySourceKey(key.split('/')[0]!, session ?? 'new', request) : undefined;
   const recoveredExisting = recoveredSource ? await req(store.get(recoveredSource)) as DraftRecord | undefined : undefined;
   const recoveredSnapshot = recoveredSource && session ? await req(transaction.objectStore('snapshots').get(snapshotKey(key.split('/')[0]!, session))) as SnapshotRecord | undefined : undefined;
   const previous = (existing?.value as DraftValue | undefined)?.__submitted;
@@ -615,13 +678,13 @@ async function finishDraftSubmission(key: string, request: DraftRequest, replayI
   if (matched) {
     if (acknowledge) rememberOperation(store, key.split('/')[0]!, request, operation, true);
     if (editable && recoveredSource) {
-      const fresh = recoveredEntry(operationSource(operation)?.value, request.body, recoveredSnapshot?.state.session.currency);
+      const fresh = recoverOperation(operationSource(operation)?.value, request, recoveredSnapshot?.state.session.currency);
       nextRecord = recoveredExisting ?? { key: recoveredSource, banker_id: key.split('/')[0]!, value: fresh, updated_at: Date.now() };
       if (!recoveredExisting) store.put(nextRecord);
       else store.put({ key: `${key.split('/')[0]}/_operations/recovered/${String(request.body.op_id)}/${String(fresh.op_id)}`, banker_id: key.split('/')[0]!, kind: 'recovered_edit', value: { source_key: recoveredSource, editable: fresh }, updated_at: Date.now() } satisfies DraftRecord);
       store.delete(key);
     }
-    else if (editable) { nextRecord = { key, banker_id: key.split('/')[0]!, value: editable, updated_at: Date.now() }; store.put(nextRecord); }
+    else if (editable) { nextRecord = { key, banker_id: key.split('/')[0]!, value: mismatch ? { ...recoveryFormValue(editable, request), __recovery_request: request } : editable, updated_at: Date.now() }; store.put(nextRecord); }
     else store.delete(key);
     const original = operationRequest(operation);
     if (mismatch && original && operation?.kind !== 'acknowledged_operation' && !sameRequest(original, request)) {
@@ -651,17 +714,86 @@ export async function listSubmittedDrafts(banker: string): Promise<SubmittedDraf
     return [{ key: record.key, form: record.key.split('/')[2] ?? 'form', request, cursor: { version } }];
   });
 }
-export type RecoveredDraft = { key: string; source_key: string; value: unknown; source_value: unknown; version: string | null; source_version: string | null };
+export type RecoveredDraft = { key: string; source_key: string; value: unknown; source_value: unknown; version: string | null; source_version: string | null; collision: boolean; uncertain: boolean; request?: DraftRequest; request_error?: string; currency?: string; label: string };
 export async function listRecoveredDrafts(banker: string): Promise<RecoveredDraft[]> {
-  const records = await all<DraftRecord>('drafts');
+  const records = (await all<DraftRecord>('drafts')).filter(record => record.banker_id === banker && record.key.startsWith(`${banker}/`));
   const byKey = new Map(records.map(record => [record.key, record]));
-  return records.filter(record => record.banker_id === banker && record.kind === 'recovered_edit').flatMap(record => {
-    const retained = record.value as { source_key: string; editable: unknown };
-    if (!retained.source_key.startsWith(`${banker}/`)) return [];
-    const source = byKey.get(retained.source_key);
-    return [{ key: record.key, source_key: retained.source_key, value: retained.editable, source_value: source?.value, version: draftVersion(record), source_version: draftVersion(source) }];
+  const collisions = new Set(records.filter(record => record.kind === 'recovered_edit').map(record => (record.value as { source_key?: string } | null)?.source_key));
+  const snapshots = await all<SnapshotRecord>('snapshots');
+  return records.flatMap(record => {
+    if (record.kind === 'operation_request' || record.kind === 'acknowledged_operation') return [];
+    const collision = record.kind === 'recovered_edit';
+    const retained = record.value as { source_key?: string; editable?: unknown } | null;
+    const raw = collision ? retained?.editable : record.value;
+    const value = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as DraftValue : record.key.includes('/_operations/') ? { saved_value: raw } as DraftValue : undefined;
+    if (!value || value.__submitted || (!collision && collisions.has(record.key))) return [];
+    if (!collision && !value.__operation_conflict && !value.__recovery_request && !record.key.includes('/_operations/')) return [];
+    const sourceKey = collision ? retained?.source_key : record.key;
+    if (!sourceKey?.startsWith(`${banker}/`)) return [];
+    const source = byKey.get(sourceKey);
+    const savedRequest = value.__recovery_request;
+    const session = savedRequest ? /^\/api\/sessions\/([^/]+)/.exec(savedRequest.path)?.[1] : sourceKey.split('/')[1];
+    const currency = value.__recovery_currency ?? snapshots.find(snapshot => snapshot.banker_id === banker && snapshot.state.session.id === session)?.state.session.currency;
+    let request: DraftRequest | undefined;
+    let requestError: string | undefined;
+    if (savedRequest && typeof savedRequest.path === 'string' && ['POST', 'PATCH'].includes(savedRequest.method) && savedRequest.body && typeof savedRequest.body === 'object' && !Array.isArray(savedRequest.body)) {
+      try { request = recoveryRequest(value, savedRequest, currency); }
+      catch (problem) { requestError = problem instanceof Error ? problem.message : 'Review the saved fields before resubmitting.'; }
+    }
+    const label = String(request?.body.kind ?? sourceKey.split('/')[2] ?? 'Saved command').replaceAll('_', ' ');
+    return [{ key: record.key, source_key: sourceKey, value, source_value: collision ? source?.value : undefined, version: draftVersion(record), source_version: draftVersion(source), collision, uncertain: !savedRequest, request, request_error: requestError, currency, label }];
   });
 }
+export async function editRecoveredDraft(recovery: RecoveredDraft, value: unknown, action: 'save' | 'discard' | 'submit', isCurrent = () => true, acceptUncertainDiscard = false): Promise<unknown> {
+  const banker = recovery.key.split('/')[0]!;
+  const epoch = generation(banker);
+  const current = () => generation(banker) === epoch && !blockedOwners.has(banker) && isCurrent();
+  if (!current() || !recovery.source_key.startsWith(`${banker}/`)) throw new AccountChangedError(banker);
+  if (action === 'discard' && recovery.uncertain && !acceptUncertainDiscard) throw new Error('This operation may already be saved. Confirm that discarding it does not undo a saved operation.');
+  await flushOnlyDrafts();
+  const db = await storage();
+  if (!current()) throw new AccountChangedError(banker);
+  const transaction = db.transaction('drafts', 'readwrite');
+  const done = complete(transaction);
+  const store = transaction.objectStore('drafts');
+  const record = await req(store.get(recovery.key)) as DraftRecord | undefined;
+  const source = recovery.source_key === recovery.key ? record : await req(store.get(recovery.source_key)) as DraftRecord | undefined;
+  if (!current()) { await done; throw new AccountChangedError(banker); }
+  try {
+    assertDraftVersion(recovery.key, record, recovery.version);
+    assertDraftVersion(recovery.source_key, source, recovery.source_version);
+  } catch (problem) { await done; throw problem; }
+  if (!record || record.banker_id !== banker || (source && source.banker_id !== banker)) { await done; throw new AccountChangedError(banker); }
+  if ((record.value as DraftValue | undefined)?.__submitted) { await done; throw new Error('This draft was submitted in another tab. Check its saved result before editing or discarding.'); }
+  const editable = value as DraftValue;
+  if (!editable || typeof editable !== 'object' || Array.isArray(editable) || editable.__submitted) { await done; throw new Error('This recovered draft is not editable.'); }
+  let next: DraftRecord | undefined;
+  let request: DraftRequest | undefined;
+  if (action === 'submit') {
+    const original = editable.__recovery_request;
+    if (!original) { await done; throw new Error('The original request is unavailable. Keep or discard this draft.'); }
+    request = recoveryRequest(editable, original, editable.__recovery_currency ?? recovery.currency);
+    if (!request.path.startsWith('/api/') || !['POST', 'PATCH'].includes(request.method)) { await done; throw new Error('The original request cannot be resubmitted.'); }
+    request.body.op_id = crypto.randomUUID();
+    const claimed = await operationRecord(store, banker, request);
+    if (!current()) { await done; throw new AccountChangedError(banker); }
+    rememberOperation(store, banker, request, claimed, false, { key: record.key, value: editable });
+    next = { key: record.key, banker_id: banker, value: { ...editable, op_id: request.body.op_id, __recovery_request: request, __submitted: request }, updated_at: Date.now() };
+    store.put(next);
+  } else if (action === 'discard') store.delete(record.key);
+  else {
+    const saved = { ...editable };
+    next = { ...record, value: recovery.collision ? { source_key: recovery.source_key, editable: saved } : saved, updated_at: Date.now() };
+    store.put(next);
+  }
+  await done;
+  if (!current()) throw new AccountChangedError(banker);
+  const notice = draftConflictNotice(recovery.key);
+  if (notice) forgetDraftConflict(notice);
+  changed();
+  if (action === 'submit') return replaySubmittedDraft(record.key, current, { version: draftVersion(next) });
+}
+
 export async function resolveRecoveredDraft(recovery: RecoveredDraft, useRecovered: boolean, isCurrent = () => true): Promise<void> {
   const banker = recovery.key.split('/')[0]!;
   const epoch = generation(banker);
@@ -820,11 +952,11 @@ async function enqueueRecord(input: EnqueueInput): Promise<OutboxItem | DraftCon
   const claimed = await operationRecord(drafts, input.banker_id, request);
   const prior = operationRequest(claimed) ?? (existing ? { path: existing.path, method: existing.method, body: existing.body } : undefined);
   if (prior && !sameRequest(prior, request)) {
-    const key = input.draft_key ?? entrySourceKey(input.banker_id, input.session_id, input.body);
+    const key = input.draft_key ?? recoverySourceKey(input.banker_id, input.session_id, request);
     const snapshot = await req(transaction.objectStore('snapshots').get(snapshotKey(input.banker_id, input.session_id))) as SnapshotRecord | undefined;
     const currentDraft = input.draft_key ? draft : await req(drafts.get(key)) as DraftRecord | undefined;
     if (epoch !== generation(input.banker_id)) { await done; throw new AccountChangedError(input.banker_id); }
-    const fresh = recoveredEntry(input.draft_value ?? draft?.value, input.body, snapshot?.state.session.currency);
+    const fresh = recoverOperation(input.draft_value ?? draft?.value, request, snapshot?.state.session.currency);
     const next = !input.draft_key && currentDraft ? currentDraft : { key, banker_id: input.banker_id, value: fresh, updated_at: Date.now() } satisfies DraftRecord;
     if (!input.draft_key && currentDraft) drafts.put({ key: `${input.banker_id}/_operations/recovered/${op}/${String(fresh.op_id)}`, banker_id: input.banker_id, kind: 'recovered_edit', value: { source_key: key, editable: fresh }, updated_at: Date.now() } satisfies DraftRecord);
     else drafts.put(next);
@@ -978,14 +1110,14 @@ async function settleClaim(item: OutboxItem, isCurrent: () => boolean, error?: u
     const drafts = transaction.objectStore('drafts');
     const request = { path: item.path, method: item.method, body: item.body };
     const operation = await operationRecord(drafts, item.banker_id, request);
-    const key = item.draft_key ?? entrySourceKey(item.banker_id, item.session_id, item.body);
+    const key = item.draft_key ?? recoverySourceKey(item.banker_id, item.session_id, request);
     const existing = await req(drafts.get(key)) as DraftRecord | undefined;
     const snapshot = await req(transaction.objectStore('snapshots').get(snapshotKey(item.banker_id, item.session_id))) as SnapshotRecord | undefined;
     const earlier = operationRequest(operation);
     const earlierKey = `${item.banker_id}/_operations/uncertain/${item.op_id}`;
     const retained = earlier && !sameRequest(earlier, request) && operation?.kind !== 'acknowledged_operation' ? await req(drafts.get(earlierKey)) : undefined;
     if (!isCurrent()) { await done; return; }
-    const fresh = recoveredEntry(item.draft_value, item.body, snapshot?.state.session.currency);
+    const fresh = recoverOperation(item.draft_value, request, snapshot?.state.session.currency);
     const next = existing ?? { key, banker_id: item.banker_id, value: fresh, updated_at: Date.now() } satisfies DraftRecord;
     if (!existing) drafts.put(next);
     else drafts.put({ key: `${item.banker_id}/_operations/recovered/${item.op_id}/${String(fresh.op_id)}`, banker_id: item.banker_id, kind: 'recovered_edit', value: { source_key: key, editable: fresh }, updated_at: Date.now() } satisfies DraftRecord);
