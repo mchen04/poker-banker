@@ -23,3 +23,7 @@ ts	phase	decision	why	evidence	result
 2026-11-11T04:40:59Z	review	ran the independent review as a fresh read-only Codex thread with the routed model and effort	the review route returns a plan, not a runner; read-only keeps it from changing the code it judges	review/round-1	running
 2026-11-11T06:10:56Z	review	accepted all six first-review findings and sent them back to the builder	each describes a real money or data-loss scenario	review/round-1/REVIEW.md, commits 20f7267..70a71fa	fixed
 2026-11-11T06:10:56Z	review	updated the architecture for zero cash-outs, unknown times, late settlements and form recovery	the second review found the binding document now contradicted the fixes	docs/ARCHITECTURE.md	done
+2026-11-11T08:56:17Z	review	accepted the third review's approval	all nine findings fixed with named tests, cleanup removed nothing needed	review/round-3/REVIEW.md	APPROVE
+2026-11-11T08:56:17Z	test	held push for one reproduced iPhone sign-up failure	a real banker could hit the same misplaced tap	e2e/auth-startup.spec.ts, commit 83a83b4	fixed; 580 repeats passed
+2026-11-11T08:56:17Z	test	held push to fix leaked test databases	each full run left about 4 GB on the shared test machine	commits 6c70452, 4fb0faa	zero leftover folders after the final suite
+2026-11-11T08:56:17Z	ship	pushed after reviewing every secret-scan finding as a synthetic fixture	all 24 are throwaway test passwords, placeholders or UI labels	card evidence secret-scan-review.md	no real credential in history
