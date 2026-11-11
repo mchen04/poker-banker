@@ -1,6 +1,6 @@
 # Performance baseline
 
-Round 5 measures the current production build and keeps only improvements supported by alternating comparisons. Goals below are proposed p95 budgets, chosen before baseline collection. Missing a goal is a finding, not a reason to change the application during this round.
+Round 5 measures the current production build and keeps only improvements supported by alternating comparisons. Goals below are proposed p95 budgets, chosen before baseline collection. Each miss is investigated before an application change is considered.
 
 | Metric | Proposed p95 goal |
 | --- | ---: |
@@ -33,7 +33,7 @@ Load and single-Save scenarios use WebKit with iPhone 15 touch settings and synt
 
 Concurrent-viewer scenarios use visible, unthrottled WebKit contexts as a load generator. They measure from the banker's actual Save click to each viewer rendering the uniquely identified stored entry and updated totals, followed by two animation frames. Raw work also includes banker-confirmation time and the difference between banker confirmation and viewer render. API reads and loads start with 60 open-session entries. The timed user writes then grow that ledger; every sample records its work. Databases are reseeded between repetitions. Viewer observations within a saved write are correlated; five runs are the independent repetitions. Different polling phases and observation counts can change the per-viewer median; a lower median with more viewers is not a speedup. Local TLS handshakes and DNS are not shaped. No Vercel edge, Neon round trip or physical iPhone performance is measured.
 
-The copied engine is primed outside reported timing. The runner waits at most two minutes once before a campaign for other CPU to fall below half the machine's core capacity, then proceeds either way. Every repetition and sample records host load; summaries say "noisy host" whenever this threshold was exceeded. Background work is left running. Alternating metric order, and A/B alternation during hill-climbing, expose both sides to the same shared-host noise. Host CPU, memory and controller event-loop delay identify load-generator saturation. Query plans use `EXPLAIN (ANALYZE, BUFFERS)` outside timed samples. An unreported CPU-profile pass diagnoses server work.
+The copied engine is primed outside reported timing. The runner waits at most two minutes once before a campaign for other CPU to fall below half the machine's core capacity, then proceeds either way. Every repetition and sample records host load; summaries say "noisy host" whenever this threshold was exceeded. Background work is left running. Alternating metric order, and A/B alternation during hill-climbing, expose both sides to the same shared-host noise. Host CPU, memory and controller event-loop delay identify load-generator saturation. Query plans use `EXPLAIN (ANALYZE, BUFFERS)` outside timed samples.
 
 ## Round 5 measured baseline
 
@@ -57,10 +57,10 @@ Evidence: `evidence/bench/baseline-r5-verified/summary.json` and `run-01` throug
 | viewer.delay.10 | 1239.00 | 1931.00 | 112.00–2031.00 | 0 / 50 | 5 saved writes; 50 viewer renders | 0.80 / 0.40–1.27 | 3000 | pass | — |
 | viewer.delay.25 | 1082.00 | 1947.00 | 81.00–2050.00 | 0 / 125 | 5 saved writes; 125 viewer renders | 0.81 / 0.47–2.10 | 3000 | pass | — |
 | viewer.warm | 423.00 | 427.00 | 402.00–427.00 | 0 / 5 | 5 renders; 9 players / 60 rows each | 0.57 / 0.49–2.22 | 500 | pass | — |
-| workspace.cold | 2523.00 | 3540.00 | 2454.00–3540.00 | 0 / 5 | 5 renders; 9 players / 60 rows each | 0.82 / 0.47–2.12 | 2500 | miss | Uncompressed JS transfer under the 2 Mbps proxy, then CPU-budgeted WebKit startup; first-run host outlier. |
+| workspace.cold | 2523.00 | 3540.00 | 2454.00–3540.00 | 0 / 5 | 5 renders; 9 players / 60 rows each | 0.82 / 0.47–2.12 | 2500 | miss | Uncompressed JS transfer under the 2 Mbps proxy, then CPU-budgeted WebKit startup; first-run startup variation. |
 | workspace.warm | 299.00 | 307.00 | 291.00–307.00 | 0 / 5 | 5 renders; 9 players / 60 rows each | 1.02 / 0.59–3.15 | 750 | pass | — |
 
-Host samples use macOS `ps` lifetime-decayed CPU readings: 100% is one core, not an instantaneous utilization counter. The mini has ten cores; the threshold is five cores of other CPU. Run and per-sample records retain this approximation rather than claiming a quiet machine. The p95 for five observations is their maximum; viewer observations within a write are correlated. EXPLAIN plans live in each run’s `explain/`; the unreported earlier diagnostic CPU profile is in `evidence/bench/diagnostic-20261111T024333632Z/run-01/`.
+Host samples use macOS `ps` lifetime-decayed CPU readings: 100% is one core, not an instantaneous utilization counter. The mini has ten cores; the threshold is five cores of other CPU. Run and per-sample records retain this approximation rather than claiming a quiet machine. The p95 for five observations is their maximum; viewer observations within a write are correlated. EXPLAIN plans live in each run’s `explain/`.
 
 | Repetition | Order | Other CPU at start (cores) | Noisy during run | Generator saturated | Proxy errors |
 | --- | --- | ---: | --- | --- | ---: |
@@ -72,6 +72,21 @@ Host samples use macOS `ps` lifetime-decayed CPU readings: 100% is one core, not
 
 ## Hill-climb decisions
 
-Comparisons freeze the `0f7df93` harness and seed. `scripts/bench-compare.ts` runs A,B five times with fresh databases, the same production release and one sample per metric per side per pair. Targeted metric selection bounds runtime. Both sides see the shared host in the same window; host observations stay with every sample. Keep requires all five paired run medians to improve, median improvement larger than both sides’ median absolute deviation, and the relevant regression checks green. Five observations cannot establish a production p95 SLO. The append-only decision log is `evidence/bench/hillclimb.tsv`.
+Comparisons freeze the `4e17486` harness and seed. `scripts/bench-compare.ts` runs A,B five times with fresh databases, the same production release and one sample per metric per side per pair. Targeted metric selection bounds runtime. Both sides see the shared host in the same window; host observations stay with every sample. Keep requires all five paired run medians to improve, median improvement larger than both sides’ median absolute deviation, and the relevant regression checks green. Five observations cannot establish a production p95 SLO. The append-only decision log is `evidence/bench/hillclimb.tsv`.
 
 The first two-sample campaign (`evidence/bench/baseline-r5/`) stopped during repetition 5 on one WebKit network access-control pageerror. Its four completed repetitions and failed receipt are retained and excluded from this baseline. A caught-fetch reproducer explains the Playwright event classification, but does not establish the original same-origin network failure cause. No measured network error is filtered. Cleanup events are recorded separately by lifecycle phase. The fresh reported campaign completed without errors.
+
+### Kept attempt: compressed local assets
+
+Existing Hono compression middleware negotiates gzip for local static assets. No dependency was added. This corrects local production-server transport toward Vercel’s already-compressed static delivery; **it is not a Vercel performance improvement**. The identical production JS decoded to 292,793 bytes on both sides; the first paired resource records show encoded JS 292,793 → 90,211 bytes and transfer duration 1,773 → 676 ms, explaining the approximately 1.1 s render saving. All resource records are retained. Work is unchanged: nine players, 60 ledger rows, actual totals and two animation frames per render.
+
+| Metric | Before median / p95 / range ms | After median / p95 / range ms | Median change | Paired wins | Errors / observations | After goal |
+| --- | --- | --- | ---: | --- | --- | --- |
+| workspace.cold | 2463 / 2491 / 2460–2491 | 1365 / 1388 / 1268–1388 | -44.6% | 5 of 5 | 0 / 10 | pass, 2500 ms |
+| viewer.cold | 2354 / 2439 / 2228–2439 | 1134 / 1141 / 1117–1141 | -51.8% | 5 of 5 | 0 / 10 | pass, 2000 ms |
+
+Other client work continued throughout the interleaved A,B window; sampled other CPU was median 0.73 cores, range 0.42–1.54; no threshold breach or load-generator saturation. Both median changes exceed the observed run-to-run variation (workspace MAD floor 5 ms; viewer 10 ms), and before/after ranges do not overlap. Evidence: `evidence/bench/hillclimb/transport/comparison.json`, ten case directories and `evidence/bench/hill-transport.log`. Seven compression behavior checks passed, including exact decompression, negotiation, cache headers, HEAD and missing-asset 404; affected payment/reload/viewer and offline/replay regressions passed 4/4 on iPhone WebKit and desktop Chromium (`evidence/bench/transport-regression.log`).
+
+Stop: **all 18 measured goals are met**: the 16 baseline passes plus both previously missed cold loads now passing. One attempt kept; none reverted. The optional formatter cache, code splitting, ledger index and batched roster candidates were prepared but never applied or timed as attempts, because their target metrics already passed. They are not claimed wins. Further work should start from deployed `bench:live` results: Neon round trips may justify batching the 40-player history queries; a measured ledger scan may justify the composite player lookup index; boot CPU traces may justify formatter reuse or code splitting. None is added speculatively.
+
+The unused server CPU-profile mode was removed after measurement. The retained harness consists of measurements, validation, shared-host observations, requested SQL plans, and the owned WebKit/network shaping required for the stated profile. Measurement boundaries and workload remain those frozen for the comparison.

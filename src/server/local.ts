@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createServer as createHttpsServer } from 'node:https';
 import { serve } from '@hono/node-server';
+import { compress } from 'hono/compress';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { createApp } from './app';
 import { createPool } from './db';
@@ -11,6 +12,7 @@ if (!!tlsKey !== !!tlsCert) throw new Error('LOCAL_TLS_KEY and LOCAL_TLS_CERT mu
 const tls = tlsKey && tlsCert ? { createServer: createHttpsServer, serverOptions: { key: await readFile(tlsKey), cert: await readFile(tlsCert) } } : {};
 const pool = createPool();
 const app = createApp(pool, { origin: process.env.APP_ORIGIN, onError: error => console.error(error) });
+app.use('/assets/*', compress());
 app.use('/assets/*', async (c, next) => {
   c.header('Cache-Control', 'public, max-age=31536000, immutable');
   await next();

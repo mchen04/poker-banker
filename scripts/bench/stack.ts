@@ -13,7 +13,7 @@ async function availablePort() {
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('No local benchmark port');
   await new Promise<void>(resolve => server.close(() => resolve())); return address.port;
 }
-export async function benchmarkStack(output: string, cpuProfile = false) {
+export async function benchmarkStack(output: string) {
   const database = await testDatabase();
   const directory = await mkdtemp(resolve('.cache/bench-tls-'));
   let child: ChildProcess | undefined;
@@ -40,7 +40,7 @@ export async function benchmarkStack(output: string, cpuProfile = false) {
     await new Promise<void>(resolve => listener!.listen(0, '127.0.0.1', resolve));
     const address = listener.address(); if (!address || typeof address === 'string') throw new Error('No shaping port');
     const origin = `https://127.0.0.1:${address.port}`;
-    child = spawn(cpuProfile ? process.execPath : 'pnpm', cpuProfile ? ['--cpu-prof', `--cpu-prof-dir=${output}`, '--import', 'tsx', 'src/server/local.ts'] : ['start:local'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'production', PORT: String(port), DATABASE_URL: database.pool.options.connectionString, APP_ORIGIN: origin, LOCAL_TLS_KEY: key, LOCAL_TLS_CERT: certificate, PB_BENCHMARK_TIMING: '1' } });
+    child = spawn('pnpm', ['start:local'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'production', PORT: String(port), DATABASE_URL: database.pool.options.connectionString, APP_ORIGIN: origin, LOCAL_TLS_KEY: key, LOCAL_TLS_CERT: certificate, PB_BENCHMARK_TIMING: '1' } });
     await new Promise<void>((resolve, reject) => {
       let text = ''; const timeout = setTimeout(() => reject(new Error('Owned benchmark server startup timed out')), 30000);
       child!.stdout!.on('data', chunk => { log.write(chunk); text += String(chunk); if (text.includes('Poker banker ready at')) { clearTimeout(timeout); resolve(); } });
