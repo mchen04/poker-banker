@@ -200,6 +200,7 @@ session_events + kinds 'timer_started', 'timing_corrected', 'details_changed' wi
 ### Session timer
 
 - `started_at` is set by Start timer, or automatically by the first buy-in when unset and that buy-in has a known `occurred_at` (it takes that time). A buy-in with an unknown time leaves an unset timer unset, shown as "Start time unknown" until the banker sets it through Correct times. `ended_at` is set by Close when unset. Reopen does not clear `ended_at`; the banker restarts timing explicitly if play resumes.
+- Every timer write checks the proposed bounds against all effective, known-time chip entries under the session row lock in the same transaction. If an automatic start would exclude an earlier cash-out, the entire buy-in is rejected with `409 entries_outside_timing`, including its timer, revision, ledger and history changes; the banker can use Correct times to include the earlier entry, then retry the buy-in. Reopen does not write either timer bound.
 - `PATCH /api/sessions/:id/timing {op_id, started_at, ended_at|null}` corrects times and writes a `timing_corrected` event with old and new values. The session menu shows that history.
 - The client shows `(ended_at ?? server_now) - started_at`. The server returns `server_now` so device clocks do not matter, and the client advances it locally between polls.
 
