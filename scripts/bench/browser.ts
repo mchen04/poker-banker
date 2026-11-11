@@ -20,6 +20,8 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   const browser = await webkit.connect(server.wsEndpoint());
   const budget = new CpuBudget(engine.engine, server);
   const errors: string[] = [];
+  const teardownErrors: { url: string; message: string }[] = [];
+  const closing = new WeakSet<Page>();
   const fixture = stack.fixture;
   const initial = await stack.client.request(`/api/sessions/${fixture.sessionId}`);
   expect(initial.status).toBe(200);
@@ -32,9 +34,10 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
     return value;
   };
   function watch(page: Page) {
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', error => { if (closing.has(page)) teardownErrors.push({ url: page.url(), message: error.message }); else errors.push(`${page.url()}: ${error.message}`); });
     page.on('response', response => { if (response.url().includes('/api/') && response.status() >= 400) errors.push(`${response.status()} ${new URL(response.url()).pathname}`); });
   }
+  async function closeContext(context: BrowserContext) { for (const page of context.pages()) closing.add(page); await context.close(); }
   async function meaningful(page: Page) {
     await expect.poll(() => page.evaluate(() => !!(window as Window & { __pbBenchMeaningful?: unknown }).__pbBenchMeaningful), { timeout: 20000 }).toBe(true);
     const proof = await page.evaluate(() => ({ marker: (window as Window & { __pbBenchMeaningful?: { ms: number; currentHttp: boolean; epoch: number } }).__pbBenchMeaningful!, name: document.querySelector('h1')?.textContent, total: document.querySelector('[data-testid="totals"] strong')?.textContent, players: [...document.querySelectorAll('.players .player-row')].map(row => row.getAttribute('data-testid')), visible: !!document.querySelector('h1')?.getClientRects().length }));
@@ -70,7 +73,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
         await writeFile(join(output, `${target}-${cache}.aria.txt`), await page.locator('body').ariaSnapshot());
       }
     } catch (error) { await writeFile(join(output, 'browser-failure.json'), JSON.stringify({ errors, error: String(error) }, null, 2)); await page.screenshot({ path: join(output, 'browser-failure.png') }); record({ metric, ms: 0, ok: false, work: { sample: index }, error: String(error) }); throw error; }
-    finally { try { await budget.pause(); } finally { await owned.close(); } }
+    finally { try { await budget.pause(); } finally { await closeContext(owned); } }
   }
   async function prepareBanker(owned: BrowserContext) {
     const page = await owned.newPage(); watch(page);
@@ -154,7 +157,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
           } catch (error) { record({ metric: `viewer.delay.${count}`, ms: 0, ok: false, work: { concurrency: count, batch: index }, error: String(error) }); throw error; }
         }
       } finally {
-        for (const page of viewers) { const owned = page.context(); await owned.close(); observers.splice(observers.indexOf(owned), 1); }
+        for (const page of viewers) { const owned = page.context(); await closeContext(owned); observers.splice(observers.indexOf(owned), 1); }
       }
     }
     }
@@ -162,12 +165,12 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
     const cpu = profiled ? budget.summary() : null;
     if (cpu) { expect(cpu.cycles).toBeGreaterThan(0);
     expect(cpu.actualRunnableFraction).toBeGreaterThan(.15); expect(cpu.actualRunnableFraction).toBeLessThan(.35); }
-    await writeFile(join(output, 'profile.json'), JSON.stringify({ cpu, network: stack.proxy.profile(), proxyCounts: stack.proxy.counts, engineHashes: engine.hashes, browserVersion: browser.version(), browserErrors: errors }, null, 2));
+    await writeFile(join(output, 'profile.json'), JSON.stringify({ cpu, network: stack.proxy.profile(), proxyCounts: stack.proxy.counts, engineHashes: engine.hashes, browserVersion: browser.version(), browserErrors: errors, teardownErrors }, null, 2));
     return { cpu, errors };
   } finally {
     try { await budget.pause(); } finally {
       stack.proxy.enabled = false;
-      try { for (const owned of observers) await owned.close(); await bankerContext?.close(); await browser.close(); } finally { await server.close(); }
+      try { for (const owned of observers) await closeContext(owned); if (bankerContext) await closeContext(bankerContext); await browser.close(); } finally { await server.close(); }
     }
   }
 }
