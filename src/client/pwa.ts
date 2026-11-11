@@ -44,7 +44,7 @@ export function usePwaUpdate(holds: Holds) {
     let hadController = !!navigator.serviceWorker.controller;
     const workerListeners = new Map<ServiceWorker, () => void>();
     const waitingChanged = () => {
-      if (!stopped) setWaiting(!!registration.current?.waiting || pendingReload.current);
+      if (!stopped) setWaiting((!!registration.current?.active && !!registration.current.waiting) || pendingReload.current);
     };
     const watchWorker = (worker: ServiceWorker | null) => {
       if (!worker || workerListeners.has(worker)) return;
