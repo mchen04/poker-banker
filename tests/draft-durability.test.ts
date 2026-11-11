@@ -250,3 +250,19 @@ it.each([false, true])('does not acknowledge or lose a healthy edit behind anoth
   expect(editing.draftSaveFailed(playerKey)).toBe(false);
   expect(editing.hasPendingLocalWrites()).toBe(false);
 });
+
+it('does not report a superseded write as saved when its transaction never committed', async () => {
+  const storage = draftStorage();
+  const data = await freshData();
+  await data.writeDraft(key, original);
+  const held = storage.holdNextWrite();
+  const first = data.writeDraft(key, { ...original, amount: '123' });
+  const failure = expect(first).rejects.toMatchObject({ name: 'QuotaExceededError' });
+  const second = data.writeDraft(key, { ...original, amount: '456' });
+  await held.started;
+  held.abort();
+  await failure;
+  await second;
+  expect(await data.readDraft(key)).toEqual({ ...original, amount: '456' });
+  expect(data.hasPendingLocalWrites()).toBe(false);
+});

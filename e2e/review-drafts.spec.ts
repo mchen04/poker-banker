@@ -175,7 +175,7 @@ test('a committed correction stays recoverable after its original entry becomes 
   expect(after.entries).toHaveLength(4);
 });
 
-test('concurrent preparations preserve the first submitted payload and later draft edits cannot overwrite it', async ({ page }) => {
+test('concurrent preparations preserve the first submitted payload and retain later edits for a fresh operation', async ({ page }) => {
   const account = await createAccount(page);
   const source = await readFile('src/client/data.ts', 'utf8');
   const compile = (value: string) => ts.transpileModule(value, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
@@ -198,17 +198,18 @@ test('concurrent preparations preserve the first submitted payload and later dra
     await data.writeDraft(key, { op_id, name: 'Changed after submission' });
     const retained = await data.readDraft<{ __submitted: typeof first }>(key);
     await data.replaySubmittedDraft(key);
-    const cleared = await data.readDraft(key) === undefined;
+    const recovered = await data.readDraft<{ name: string; op_id: string }>(key);
     const stale = await data.prepareDraftSubmission(key, { op_id, name: 'Next reviewed intent' }, { ...first, body: { ...first.body, name: 'Next reviewed intent' } });
     const fresh = await data.readDraft<{ op_id: string; name: string }>(key);
     await data.prepareDraftSubmission(key, fresh!, { ...first, body: { ...first.body, op_id: fresh!.op_id, name: fresh!.name } });
     await data.replaySubmittedDraft(key);
-    return { submitted, retained, cleared, stale, fresh, unsent: await data.hasUnsent(banker), originalOp: op_id };
+    return { submitted, retained, recovered, stale, fresh, unsent: await data.hasUnsent(banker), originalOp: op_id };
   }, account.banker.id);
   expect(result.submitted.map(item => item.first).sort()).toEqual([false, true]);
   expect(result.submitted[0]!.request).toEqual(result.submitted[1]!.request);
   expect(result.retained!.__submitted).toEqual(result.submitted[0]!.request);
-  expect(result.cleared).toBe(true);
+  expect(result.recovered?.name).toBe('Changed after submission');
+  expect(result.recovered?.op_id).not.toBe(result.originalOp);
   expect(result.stale.previouslyConfirmed).toBe(true);
   expect(result.fresh!.name).toBe('Next reviewed intent');
   expect(result.fresh!.op_id).not.toBe(result.originalOp);
