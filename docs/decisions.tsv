@@ -11,3 +11,6 @@ ts	phase	decision	why	evidence	result
 2026-11-10T23:36:10Z	design	drafts and unsent saves in IndexedDB	Pancake's own notes show session storage drafts die when an installed iOS app is killed	docs/DESIGN-RESEARCH.md	decided
 2026-11-10T23:36:10Z	setup	database creation blocked; desktop control tool is not installed	the approved route needs it, so a machine blocker is on the card and work continues on a local test database	card blocker b1	blocked
 2026-11-10T23:36:10Z	setup	tests and benchmarks use a throwaway local Postgres package	the Mac mini has no Postgres, and tests should need no secrets	docs/ARCHITECTURE.md	decided
+2026-11-10T23:58:54Z	build	round one accepted after rerunning its checks on the mini	54 of 54 tests passed in my own run, and the locking and idempotency code reads correctly	commit e8d7939	54/54 pass
+2026-11-10T23:58:54Z	design	fold Justin's feedback into the first migration instead of adding a second one	nothing is deployed, so a compatibility step would protect no data	docs/ARCHITECTURE.md	decided
+2026-11-10T23:58:54Z	design	per-player hours come from each player's own buy-in and cash-out times	the spec forbids using the whole table's duration for a late arrival	docs/ARCHITECTURE.md	decided
