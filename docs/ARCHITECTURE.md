@@ -168,6 +168,8 @@ One workspace, phone-first, readable vertical scrolling, no horizontal tables.
 
 ## Deployment order
 
+`api/[...route].ts` exports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` and `HEAD` as Hono's `app.fetch`. These [Vercel Node Web Handlers](https://vercel.com/docs/functions/runtimes/node-js) receive a Web `Request` and return a Web `Response`, so JSON bodies reach Hono without a Node request-stream adapter. `vercel.json` routes `/api/*` to this function in `cle1` with `maxDuration: 30`.
+
 1. Create the Neon project and set `DATABASE_URL` and `DATABASE_URL_UNPOOLED` in Vercel's encrypted project env. Sessions are random tokens checked against the database, so no signing secret exists.
 2. Run `pnpm db:migrate` against the unpooled URL. Migrations are forward-only, numbered SQL files, each in a transaction, recorded in `schema_migrations`, and safe to rerun.
 3. Deploy the build that needs the new schema. Each migration must also work with the previous release, so a migration lands before its code.
