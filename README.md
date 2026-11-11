@@ -1,6 +1,6 @@
 # Justin's poker banker
 
-This round supplies the banking domain, Postgres schema, account recovery and HTTP API. The React screen is a placeholder. UI, offline storage, the service worker, browser verification and benchmarks come in later rounds.
+The phone-first workspace includes banking, account recovery, reusable players, reports, offline drafts and a waiting-worker update path. Production provisioning, deployment, benchmarks and physical iPhone verification remain separate work.
 
 ## Run locally
 
@@ -78,3 +78,22 @@ Every metric has `sessions_used`, `value` and `unavailable`. Available values ar
 Money values are in minor units. Hourly metrics use only sessions with valid positive player duration. Big-blind rates also require that session's positive blind. Rates divide total results by total time over the matching subset. Fees have separate expense and net-after-expense metrics; rate numerators use results before fees. Winning sessions have strictly positive results, while breakeven remains in the denominator. `formatRational` and `formatSquareRoot` apply half-even rounding only when preparing display text.
 
 Migration `0001` was amended before deployment. Development clusters that already recorded its older version need a fresh local database to use this schema. The migration runner does not alter an already recorded migration. Test clusters always start empty.
+
+
+## Client storage and updates
+
+Drafts, queued writes and confirmed snapshots live in the versioned `poker-banker` IndexedDB database. The v1 to v2 upgrade preserves records and adds banker indexes and metadata. Drafts are scoped by banker, session, form and player. Save atomically moves a draft to the outbox. Only server-confirmed records affect totals.
+
+The outbox sends session heads in order and retries transient failures with backoff. A rejected head stays visible with its reason and blocks later entries in that session until retry or discard. Other sessions can continue. Sign-out requires explicit discard when unsent work exists, then clears that banker's local data. Confirmed snapshots can reopen offline while new entries wait to sync.
+
+`pnpm build` generates icons and stamps a unique release and precache list into the hand-written worker. Set `RELEASE_VERSION` to an explicit unique identifier when preparing a release. Direct Vite builds without a release fail. An installed update waits while a sheet is open, the page is hidden, or the outbox is not empty. The Update ready banner offers Reload, which flushes drafts before activation.
+
+## Browser journeys
+
+```sh
+scripts/mini.sh pnpm e2e
+```
+
+Playwright uses its own browsers and a new embedded database for every journey. Screenshots are copied to ignored `evidence/screenshots/`. See [TESTING.md](docs/TESTING.md) for the projects and physical-device acceptance items that emulation cannot prove.
+
+WebKit requires HTTPS for the Secure authentication cookie. The browser fixture generates a temporary self-signed certificate inside `.cache/` and runs the same local server with `LOCAL_TLS_KEY` and `LOCAL_TLS_CERT`. Both paths must be set together. For manual local HTTPS development, generate your own certificate in the ignored cache and pass those explicit paths to `pnpm start:local`. Test contexts accept their generated certificate; production uses normal HTTPS trust.

@@ -1,0 +1,60 @@
+import { test, expect, screen } from './fixtures';
+import { addPlayer, createAccount, current, newSession, openMoney } from './helpers';
+import { buildRelease } from './global-setup';
+import type { Page } from '@playwright/test';
+
+async function version(page: Page) {
+  return page.evaluate(async () => {
+    const worker = navigator.serviceWorker.controller;
+    if (!worker) return null;
+    return new Promise<string>((resolve, reject) => {
+      const channel = new MessageChannel();
+      const timeout = setTimeout(() => reject(new Error('Worker did not answer version')), 5000);
+      channel.port1.onmessage = event => { clearTimeout(timeout); resolve(event.data.version); };
+      worker.postMessage({ type: 'GET_VERSION' }, [channel.port2]);
+    });
+  });
+}
+
+test('waiting release update after hidden and visible preserves auth, drafts and open session', async ({ page }, testInfo) => {
+  test.setTimeout(120000);
+  const releaseA = `e2e-A-${testInfo.project.name}`;
+  const releaseB = `e2e-B-${testInfo.project.name}`;
+  buildRelease(releaseA);
+  const user = await createAccount(page);
+  const state = await newSession(page, 'Survives update');
+  const player = await addPlayer(page, 'Justin');
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await expect.poll(() => version(page)).toBe(releaseA);
+  await openMoney(page, player.id);
+  await page.getByLabel('Amount', { exact: true }).fill('37.');
+  await page.getByLabel('Payment method', { exact: true }).selectOption('venmo');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  buildRelease(releaseB);
+  await page.evaluate(async () => { const registration = await navigator.serviceWorker.ready; await registration.update(); });
+  await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.ready).waiting)).toBe(true);
+  expect(await version(page)).toBe(releaseA);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(page.getByText('Update ready', { exact: true })).toBeVisible();
+  await screen(page, testInfo, 'update-ready');
+  await page.getByTestId('update-reload').click();
+  await expect.poll(() => version(page)).toBe(releaseB);
+  await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
+  await expect(page.getByRole('heading', { name: 'Survives update', exact: true })).toBeVisible();
+  await openMoney(page, player.id);
+  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('37.');
+  await expect(page.getByLabel('Payment method', { exact: true })).toHaveValue('venmo');
+  expect((await current(page)).session.id).toBe(state.session.id);
+  expect((await page.request.get('/api/auth/me')).status()).toBe(200);
+  const me = await (await page.request.get('/api/auth/me')).json() as { banker: { id: string } };
+  expect(me.banker.id).toBe(user.banker.id);
+  await screen(page, testInfo, 'updated-draft');
+});

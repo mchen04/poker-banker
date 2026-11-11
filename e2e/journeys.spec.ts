@@ -1,0 +1,321 @@
+import { randomUUID } from 'node:crypto';
+import { test, expect, screen } from './fixtures';
+import { addPlayer, call, closeSession, createAccount, current, fixtureSession, menu, money, newSession, openMoney, share, signIn, signOut } from './helpers';
+import type { SessionState } from '../src/domain/session';
+
+test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
+  const user = await createAccount(page, testInfo);
+  await signOut(page);
+  await screen(page, testInfo, 'signin');
+  await signIn(page, user.username);
+  const state = await newSession(page, 'Recovery preserves draft');
+  const player = await addPlayer(page, 'Justin');
+  await openMoney(page, player.id);
+  await page.getByLabel('Amount', { exact: true }).fill('42.');
+  const validCookies = await page.context().cookies();
+  const old = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
+  const recovery = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
+  try {
+    await old.addCookies(validCookies);
+    expect((await old.request.get(`${baseURL}/api/auth/me`)).status()).toBe(200);
+    const recover = await recovery.newPage();
+    await recover.goto('/');
+    await recover.getByRole('button', { name: 'Recover account', exact: true }).click();
+    await recover.getByLabel('Username', { exact: true }).fill(user.username);
+    await recover.getByLabel('Recovery code', { exact: true }).fill(user.codes[0]!);
+    await recover.getByLabel('New password', { exact: true }).fill('a-new-browser-game-password');
+    await screen(recover, testInfo, 'recover');
+    await recover.getByRole('button', { name: 'Reset password', exact: true }).click();
+    await expect(recover.getByText('Password reset. Sign in with your new password.', { exact: true })).toBeVisible();
+    const reused = await recover.request.post('/api/auth/recover', { headers: { origin: new URL(recover.url()).origin }, data: { username: user.username, recovery_code: user.codes[0], new_password: 'another-browser-game-password' } });
+    expect(reused.status()).toBe(401);
+    expect((await old.request.get(`${baseURL}/api/auth/me`)).status()).toBe(401);
+    await page.bringToFront();
+    await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
+    await page.getByLabel('Username', { exact: true }).fill(user.username);
+    await page.getByLabel('Password', { exact: true }).fill('a-new-browser-game-password');
+    await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
+    await expect(page.getByTestId(`session-tab-${state.session.id}`)).toBeVisible();
+    await page.getByTestId(`session-tab-${state.session.id}`).click();
+    await expect(page.getByRole('heading', { name: 'Recovery preserves draft', exact: true })).toBeVisible();
+    await openMoney(page, player.id);
+    await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('42.');
+  } finally { await old.close(); await recovery.close(); }
+});
+
+test('two bankers cannot open each other session or private history', async ({ page, browser, baseURL }) => {
+  await createAccount(page);
+  const a = await newSession(page, 'Private Friday');
+  const player = await addPlayer(page, 'Private Justin');
+  await money(page, player.id, '50');
+  const bContext = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
+  try {
+    const b = await bContext.newPage();
+    await createAccount(b);
+    await b.goto(`/?session=${a.session.id}`);
+    await expect(b.getByText('Session not found. It may belong to another account.', { exact: true })).toBeVisible();
+    await expect(b.getByText('Private Justin', { exact: true })).toHaveCount(0);
+    expect((await b.request.get(`${baseURL}/api/sessions/${a.session.id}`)).status()).toBe(404);
+    expect((await b.request.get(`${baseURL}/api/players/${player.id}/report`)).status()).toBe(404);
+    expect((await b.request.get(`${baseURL}/api/view/${randomUUID().replaceAll('-', '').slice(0, 22)}`)).status()).toBe(404);
+    const sessions = await call<{ sessions: unknown[] }>(b, '/sessions');
+    expect(sessions.sessions).toEqual([]);
+  } finally { await bContext.close(); }
+});
+
+test('same-day session tabs and month history restore separate drafts after reload', async ({ page }, testInfo) => {
+  await createAccount(page);
+  const first = await newSession(page, 'Early game', testInfo);
+  const justin = await addPlayer(page, 'Justin', testInfo);
+  await openMoney(page, justin.id);
+  await page.getByLabel('Amount', { exact: true }).fill('12.');
+  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
+  const second = await newSession(page, 'Late game');
+  await page.getByRole('button', { name: 'Add player', exact: true }).click();
+  await page.getByLabel('Search players', { exact: true }).fill('Justin');
+  await expect(page.getByText('An exact name match already exists.', { exact: false })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Justin', exact: true }).click();
+  await openMoney(page, justin.id);
+  await page.getByLabel('Amount', { exact: true }).fill('34.');
+  await page.reload();
+  await openMoney(page, justin.id);
+  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('34.');
+  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
+  await page.getByTestId(`session-tab-${first.session.id}`).click();
+  await openMoney(page, justin.id);
+  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('12.');
+  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
+  await page.getByRole('button', { name: 'History', exact: true }).click();
+  await page.getByLabel('Search sessions', { exact: true }).fill('Late');
+  await screen(page, testInfo, 'history');
+  await page.getByRole('dialog').getByRole('button', { name: /Late game/ }).click();
+  expect(new URL(page.url()).searchParams.get('session')).toBe(second.session.id);
+  await openMoney(page, justin.id);
+  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('34.');
+});
+
+test('banking, early cash-out, re-entry, corrections and cumulative reclosure preserve history', async ({ page }, testInfo) => {
+  await createAccount(page);
+  await newSession(page, 'Saturday table');
+  const player = await addPlayer(page, 'Justin');
+  await money(page, player.id, '100', { testInfo });
+  await money(page, player.id, '50');
+  await expect(page.getByTestId(`result-${player.id}`)).toContainText('Playing, in $150.00');
+  await money(page, player.id, '180', { kind: 'Cash out', testInfo });
+  await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$30.00 up');
+  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Bank owes $180.00');
+  await money(page, player.id, '20', { paid: false });
+  await expect(page.getByTestId(`result-${player.id}`)).toContainText('Playing, in $170.00');
+  let state = await money(page, player.id, '10', { kind: 'Cash out' });
+  const original = state.entries.find(entry => entry.kind === 'cash_out' && entry.amount_minor === '1000')!;
+  await page.getByTestId(`entry-${original.id}`).getByRole('button').click();
+  await page.getByLabel('Replacement amount', { exact: true }).fill('5');
+  await screen(page, testInfo, 'correction');
+  await page.getByRole('button', { name: 'Save correction', exact: true }).click();
+  await expect(page.getByTestId(`entry-${original.id}`)).toContainText('Voided');
+  await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$15.00 up');
+  await money(page, player.id, '2', { kind: 'Tips and meals', testInfo });
+  await closeSession(page, true);
+  await menu(page, 'Reopen session');
+  await page.getByLabel('Reason', { exact: true }).fill('Review recap');
+  await page.getByRole('dialog').getByRole('button', { name: 'Reopen session', exact: true }).click();
+  await closeSession(page, true);
+  await page.getByRole('button', { name: 'Players', exact: true }).click();
+  await screen(page, testInfo, 'players');
+  await expect(page.getByTestId(`roster-player-${player.id}`)).toContainText('$15.00');
+  await page.getByTestId(`roster-player-${player.id}`).click();
+  await screen(page, testInfo, 'player-detail');
+  await page.getByRole('button', { name: 'Rename player', exact: true }).click();
+  await page.getByLabel('Player name', { exact: true }).fill('Justin Tan');
+  await page.getByRole('button', { name: 'Save name', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Justin Tan', exact: true })).toBeVisible();
+  await expect(page.getByText('Saturday table', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  const balanced = await newSession(page, 'Balanced table');
+  await page.getByRole('button', { name: 'Add player', exact: true }).click();
+  await page.getByLabel('Search players', { exact: true }).fill('Justin Tan');
+  await page.getByRole('dialog').getByRole('button', { name: 'Justin Tan', exact: true }).click();
+  await money(page, player.id, '25');
+  await money(page, player.id, '25', { kind: 'Cash out', paid: true });
+  state = await closeSession(page);
+  expect(state.session.id).toBe(balanced.session.id);
+  await screen(page, testInfo, 'closed-workspace');
+});
+
+test('payment methods persist through reload, later settlement and visible corrections in viewer', async ({ page, browser, baseURL }, testInfo) => {
+  await createAccount(page);
+  await newSession(page, 'Methods');
+  const player = await addPlayer(page, 'Justin');
+  await money(page, player.id, '40', { method: 'venmo' });
+  await page.reload();
+  await expect(page.getByTestId('activity')).toContainText('Venmo');
+  const viewerLink = await share(page);
+  const viewerContext = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
+  try {
+    const viewer = await viewerContext.newPage();
+    await viewer.goto(viewerLink);
+    await expect(viewer.getByText(/View only, updated/)).toBeVisible();
+    await expect(viewer.getByTestId('activity')).toContainText('Venmo');
+    for (const name of ['Add player', 'Buy-in', 'Session menu', 'Players']) await expect(viewer.getByRole('button', { name, exact: true })).toHaveCount(0);
+    await screen(viewer, testInfo, 'viewer');
+    let state = await money(page, player.id, '20', { paid: false });
+    expect(state.players[0]!.payment_in_minor).toBe('4000');
+    await money(page, player.id, '20', { kind: 'Record payment', method: 'zelle', testInfo });
+    state = await current(page);
+    const payment = state.entries.find(entry => entry.kind === 'payment_in' && entry.method === 'zelle')!;
+    await page.getByTestId(`entry-${payment.id}`).getByRole('button').click();
+    await page.getByLabel('Replacement method', { exact: true }).selectOption('cash');
+    await page.getByRole('button', { name: 'Save correction', exact: true }).click();
+    await expect(page.getByTestId(`entry-${payment.id}`)).toContainText('Zelle');
+    await expect(page.getByTestId(`entry-${payment.id}`)).toContainText('Voided');
+    await expect(page.getByTestId('activity')).toContainText('Cash');
+    await money(page, player.id, '5', { method: 'venmo' });
+    const savedAt = Date.now();
+    await expect(viewer.getByTestId(`player-${player.id}`)).toContainText('in $65.00', { timeout: 3000 });
+    expect(Date.now() - savedAt).toBeLessThan(3000);
+    await menu(page, 'Share');
+    await screen(page, testInfo, 'share');
+    await page.getByRole('button', { name: 'Rotate link', exact: true }).click();
+    await expect(page.getByLabel('Viewer link', { exact: true })).not.toHaveValue(viewerLink);
+    const rotatedLink = await page.getByLabel('Viewer link', { exact: true }).inputValue();
+    await viewer.reload();
+    await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Disable sharing', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Enable sharing', exact: true })).toBeVisible();
+    await viewer.goto(rotatedLink);
+    await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();
+  } finally { await viewerContext.close(); }
+});
+
+test('server timer survives reload and another device, freezes at close, display modes do not write entries', async ({ page, browser, baseURL }, testInfo) => {
+  const user = await createAccount(page);
+  await newSession(page, 'Timer');
+  const player = await addPlayer(page, 'Justin');
+  await money(page, player.id, '20');
+  const state = await current(page);
+  const started = state.session.started_at;
+  await expect(page.getByTestId('session-timer')).toContainText('Playing time');
+  await expect.poll(async () => (await page.getByTestId('session-timer').textContent())!).not.toContain('00:00:00');
+  await page.reload();
+  expect((await current(page)).session.started_at).toBe(started);
+  const second = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
+  try {
+    const device = await second.newPage();
+    await signIn(device, user.username);
+    await device.goto(`/?session=${state.session.id}`);
+    await expect(device.getByTestId('session-timer')).toContainText('Playing time');
+    expect((await current(device)).session.started_at).toBe(started);
+    await money(page, player.id, '30', { kind: 'Cash out' });
+    const before = await current(page);
+    await page.getByRole('button', { name: 'Per hour', exact: true }).click();
+    await expect(page.getByTestId(`result-${player.id}`)).toContainText('/hour');
+    await page.getByRole('button', { name: 'Big blinds', exact: true }).click();
+    await expect(page.getByTestId(`result-${player.id}`)).toContainText('No big blind set');
+    await page.getByRole('button', { name: 'Total', exact: true }).click();
+    await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$10.00 up');
+    expect((await current(page)).entries).toEqual(before.entries);
+    await menu(page, 'Session settings');
+    await page.getByLabel('Big blind', { exact: true }).fill('2');
+    await page.waitForTimeout(650);
+    await expect(page.getByLabel('Big blind', { exact: true })).toBeFocused();
+    await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Big blinds', exact: true }).click();
+    await expect(page.getByTestId(`result-${player.id}`)).toContainText('5.00 big blinds');
+    await menu(page, 'Correct times');
+    await page.getByLabel('Started at', { exact: true }).fill(new Date(Date.parse(started!) - 3600000).toISOString().slice(0, 19));
+    await page.getByRole('button', { name: 'Save timing', exact: true }).click();
+    await menu(page, 'Correct times');
+    await expect(page.getByText('Timing corrected', { exact: true })).toBeVisible();
+    await screen(page, testInfo, 'timing-history');
+    await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
+    await closeSession(page, true);
+    const frozen = await page.getByTestId('session-timer').textContent();
+    await expect.poll(async () => (await current(page)).session.ended_at).not.toBeNull();
+    await page.waitForTimeout(1200);
+    expect(await page.getByTestId('session-timer').textContent()).toBe(frozen);
+    await expect(device.getByTestId('session-timer')).toContainText('Finished', { timeout: 3000 });
+    await screen(page, testInfo, 'timer-finished');
+  } finally { await second.close(); }
+});
+
+test('two-session player reports show hand-computed results in every grouping and filters', async ({ page }, testInfo) => {
+  await createAccount(page);
+  const first = await fixtureSession(page, undefined, { name: 'Report one', day: '2026-11-10', result: '6000', hours: 2, blind: '200', expense: '300' });
+  const player = first.players[0]!.id;
+  await fixtureSession(page, player, { name: 'Report two', day: '2026-11-17', result: '-2000', hours: 1, blind: '100', expense: '500' });
+  await page.reload();
+  await page.getByRole('button', { name: 'Players', exact: true }).click();
+  await page.getByTestId(`roster-player-${player}`).click();
+  for (const [group, heading] of [['Overall', 'Overall'], ['Location', 'Home'], ['Game', 'NLH'], ['Weekday', 'Tuesday'], ['Month', 'November 2026']]) {
+    await page.getByRole('button', { name: group, exact: true }).click();
+    await expect(page.getByRole('heading', { name: `${heading} · USD`, exact: true })).toBeVisible();
+    await expect(page.getByTestId('report-profit_loss_minor')).toContainText('$40.00');
+    await expect(page.getByTestId('report-per_hour_minor')).toContainText('$13.33');
+    await expect(page.getByTestId('report-per_session_minor')).toContainText('$20.00');
+    await expect(page.getByTestId('report-duration_ms')).toContainText('03:00:00');
+    await expect(page.getByTestId('report-winning_percentage')).toContainText('50.00');
+    await expect(page.getByTestId('report-expenses_minor')).toContainText('$8.00');
+    await expect(page.getByTestId('report-net_after_expenses_minor')).toContainText('$32.00');
+    await expect(page.getByTestId('report-big_blinds_per_hour')).toContainText('3.33');
+    await expect(page.getByTestId('report-variation_per_hour_minor')).toContainText('$35.36');
+    await expect(page.getByTestId('report-variation_big_blinds_per_hour')).toContainText('24.75');
+    await expect(page.getByTestId('report-profit_loss_minor')).toContainText('2 sessions');
+  }
+  await screen(page, testInfo, 'player-report');
+  await page.getByRole('button', { name: 'Filter: Off', exact: true }).click();
+  await page.getByLabel('From date', { exact: true }).fill('2026-11-17');
+  await screen(page, testInfo, 'report-filter');
+  await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+  await expect(page.getByTestId('report-profit_loss_minor')).toContainText('−$20.00');
+  await expect(page.getByTestId('report-variation_per_hour_minor')).toContainText('Unavailable · needs two sessions');
+});
+
+test('offline queue excludes unconfirmed totals, survives reload, saves once and replays idempotently', async ({ page, browser, baseURL }, testInfo) => {
+  const user = await createAccount(page);
+  const state = await newSession(page, 'Offline');
+  const player = await addPlayer(page, 'Justin');
+  const viewerLink = await share(page);
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+  const viewerContext = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
+  try {
+    const viewer = await viewerContext.newPage();
+    await viewer.goto(viewerLink);
+    await page.context().setOffline(true);
+    await openMoney(page, player.id);
+    await page.getByLabel('Amount', { exact: true }).fill('20');
+    await page.getByRole('button', { name: 'Save entry', exact: true }).dblclick();
+    await expect(page.getByText('Not saved yet', { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId('totals')).not.toContainText('$20.00');
+    const queued = await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { const open = indexedDB.open('poker-banker'); open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
+      const rows = await new Promise<Record<string, unknown>[]>((resolve, reject) => { const read = db.transaction('outbox').objectStore('outbox').getAll(); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error); });
+      db.close(); return rows;
+    });
+    expect(queued).toHaveLength(1);
+    await screen(page, testInfo, 'offline-pending');
+    await page.reload();
+    await expect(page.getByText(/Offline/).first()).toBeVisible();
+    await expect(page.getByText('Not saved yet', { exact: true }).first()).toBeVisible();
+    await page.context().setOffline(false);
+    await expect(page.getByTestId(`player-${player.id}`)).toContainText('in $20.00');
+    await expect(viewer.getByTestId(`player-${player.id}`)).toContainText('in $20.00', { timeout: 3000 });
+    const confirmed = await current(page);
+    expect(confirmed.entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(1);
+    const item = queued[0]!;
+    await page.evaluate(async value => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { const open = indexedDB.open('poker-banker'); open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
+      await new Promise<void>((resolve, reject) => { const tx = db.transaction('outbox', 'readwrite'); tx.objectStore('outbox').put({ ...value, status: 'pending', attempts: 0, next_attempt_at: 0, lease_until: 0 }); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
+      db.close(); window.dispatchEvent(new Event('pb-data'));
+    }, item);
+    await expect.poll(() => page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { const open = indexedDB.open('poker-banker'); open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
+      const count = await new Promise<number>((resolve, reject) => { const read = db.transaction('outbox').objectStore('outbox').count(); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error); });
+      db.close(); return count;
+    })).toBe(0);
+    expect((await current(page, state.session.id)).revision).toBe(confirmed.revision);
+    await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
+    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(1);
+    expect((await call<{ banker: { id: string } }>(page, '/auth/me')).banker.id).toBe(user.banker.id);
+  } finally { await viewerContext.close(); }
+});
