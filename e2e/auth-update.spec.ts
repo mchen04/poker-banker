@@ -16,27 +16,27 @@ test('an update waits for the signup reply and restores its unacknowledged recov
   await page.getByRole('button', { name: 'Sign up', exact: true }).click();
   await page.getByLabel('Username', { exact: true }).fill(`update-${randomUUID().slice(0, 12)}`);
   await page.getByLabel('Password', { exact: true }).fill(password);
-  let release!: () => void;
-  let committed!: () => void;
-  let settled!: () => void;
-  const held = new Promise<void>(resolve => { release = resolve; });
-  const saved = new Promise<void>(resolve => { committed = resolve; });
-  const completed = new Promise<void>(resolve => { settled = resolve; });
-  await page.route('**/api/auth/signup', async route => {
-    try {
-      const response = await route.fetch();
-      expect(response.status()).toBe(200);
-      committed();
-      await held;
-      await route.fulfill({ response });
-    } finally { settled(); }
+  await page.evaluate(() => {
+    const original = window.fetch.bind(window);
+    const held = new Promise<void>(resolve => window.addEventListener('release-signup-reply', () => resolve(), { once: true }));
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const response = await original(...args);
+      const input = args[0];
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href);
+      if (url.pathname === '/api/auth/signup') {
+        if (response.status !== 200) throw new Error('Signup failed before the reply could be held');
+        await response.clone().json();
+        document.documentElement.setAttribute('data-signup-reply-held', 'true');
+        await held;
+      }
+      return response;
+    };
   });
   try {
     await page.getByRole('button', { name: 'Create account', exact: true }).click();
-    await saved;
+    await expect(page.locator('html')).toHaveAttribute('data-signup-reply-held', 'true');
     await expect(page.getByTestId('update-reload')).toBeDisabled();
-    release();
-    await completed;
+    await page.evaluate(() => window.dispatchEvent(new Event('release-signup-reply')));
     await expect(page.getByTestId('recovery-codes')).toBeVisible();
     const codes = await page.getByTestId('recovery-codes').textContent();
     await expect(page.getByTestId('update-reload')).toBeEnabled();
@@ -45,5 +45,5 @@ test('an update waits for the signup reply and restores its unacknowledged recov
     await expect(page.getByTestId('recovery-codes')).toHaveText(codes!);
     await expect(page.getByRole('button', { name: 'Continue to workspace', exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'New session', exact: true })).toHaveCount(0);
-  } finally { release(); await completed; }
+  } finally { await page.evaluate(() => window.dispatchEvent(new Event('release-signup-reply'))).catch(() => {}); }
 });
