@@ -132,6 +132,7 @@ export function createApp(pool: Database, config: Config = {}) {
     assertOpen(row);
     if (row.started_at !== null) conflict('timer_started', 'Correct timing to change a started timer');
     const startedAt = await serverTime(db);
+    await assertTimingEntries(db, banker, id, startedAt, null);
     await db.query('UPDATE game_sessions SET started_at = $3, ended_at = NULL WHERE id = $1 AND banker_id = $2', [id, banker, startedAt]);
     const revision = await bump(db, banker, id);
     await event(db, banker, id, revision, 'timer_started', { old: { started_at: row.started_at, ended_at: row.ended_at }, new: { started_at: startedAt, ended_at: null } });

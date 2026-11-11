@@ -288,3 +288,43 @@ test('a dropped timing-validation rejection restores editing before a fresh timi
   expect(bodies).toHaveLength(3);
   expect(bodies[2]!.op_id).not.toBe(bodies[0]!.op_id);
 });
+
+test('a rejected timer start leaves no pending operation and correct times remains available', async ({ page }) => {
+  await createAccount(page);
+  let state = await newSession(page, 'Reject late timer start');
+  const player = await addPlayer(page, 'Justin');
+  state = await call<SessionState>(page, `/sessions/${state.session.id}/entries`, 'POST', { op_id: crypto.randomUUID(), player_id: player.id, kind: 'cash_out', amount_minor: '10000', paid_now: false, occurred_at: '2026-11-10T19:00:00Z' });
+  await page.reload();
+  const bodies: { op_id: string }[] = [];
+  await page.route(`**/api/sessions/${state.session.id}/start`, async route => {
+    bodies.push(route.request().postDataJSON());
+    await route.continue();
+  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const rejected = page.waitForResponse(response => new URL(response.url()).pathname === `/api/sessions/${state.session.id}/start` && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Start timer', exact: true }).click();
+    expect((await rejected).status()).toBe(409);
+    await expect(page.getByTestId('save-status')).toHaveText('Timing must include the effective entries');
+    await expect(page.getByRole('button', { name: 'Start timer', exact: true })).toBeEnabled();
+  }
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0]!.op_id).not.toBe(bodies[1]!.op_id);
+  expect((await current(page)).session.started_at).toBeNull();
+  await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Unsent entries', exact: true })).toHaveCount(0);
+  const pending = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const opening = indexedDB.open('poker-banker'); opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
+    const outbox = await new Promise<number>((resolve, reject) => { const reading = db.transaction('outbox').objectStore('outbox').count(); reading.onsuccess = () => resolve(reading.result); reading.onerror = () => reject(reading.error); });
+    const drafts = await new Promise<{ value?: { __submitted?: unknown } }[]>((resolve, reject) => { const reading = db.transaction('drafts').objectStore('drafts').getAll(); reading.onsuccess = () => resolve(reading.result); reading.onerror = () => reject(reading.error); });
+    db.close(); return { outbox, submitted: drafts.filter(draft => draft.value?.__submitted).length };
+  });
+  expect(pending).toEqual({ outbox: 0, submitted: 0 });
+  await menu(page, 'Correct times');
+  await page.getByLabel('Started at', { exact: true }).fill('2026-11-10T18:00:00');
+  await page.getByRole('button', { name: 'Save timing', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const saved = await current(page);
+  expect(saved.session.started_at).toBe('2026-11-10T18:00:00.000Z');
+  expect(saved.events.filter(event => event.kind === 'timer_started')).toHaveLength(0);
+  expect(saved.events.filter(event => event.kind === 'timing_corrected')).toHaveLength(1);
+});
