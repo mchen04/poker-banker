@@ -530,7 +530,7 @@ function draftForm(tab: Tab, formKey: string, initial: typeof original) {
   const exports: Record<string, unknown> = {};
   runInNewContext(source, {
     exports, require: (name: string) => name === 'react' ? hooks : name === '../data' ? tab : {},
-    window, crypto, structuredClone, Event, CustomEvent,
+    window, crypto, structuredClone, Event, CustomEvent, Error,
   });
   const useDraft = exports.useDraft as typeof import('../src/client/views/common').useDraft;
   return {
@@ -768,5 +768,89 @@ it('shows the conflict notice when a stale first submission adopts a newer froze
     expect(editing.hasPendingLocalWrites()).toBe(false);
     expect(editing.draftSaveFailed(key)).toBe(false);
     expect(storage.state()).toEqual(before);
+  } finally { harness.close(); }
+});
+
+it('saves a recovered quota write beside an unchanged frozen request instead of reporting a storage failure', async () => {
+  const storage = sharedStorage();
+  const editing = await freshTab();
+  await editing.writeDraft(key, original);
+  storage.quota(true);
+  await expect(editing.writeDraft(key, edited)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+  expect(editing.draftSaveFailed(key)).toBe(true);
+  storage.quota(false);
+  const other = await freshTab();
+  await other.prepareDraftSubmission(key, original, request);
+  await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
+  const row = storage.state().get('drafts')!.get(key)!;
+  expect(row.value).toEqual({ ...original, __submitted: request });
+  expect(row.next_value).toEqual(edited);
+  expect(editing.draftSaveFailed(key)).toBe(false);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+  await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
+});
+
+it.each([false, true])('releases a rejected quota value when an observed frozen row has already settled elsewhere (retained=%s)', async retained => {
+  const storage = sharedStorage();
+  const editing = await freshTab();
+  const cursor: import('../src/client/data').DraftCursor = {};
+  await editing.readDraft(key, cursor);
+  await editing.writeDraft(key, original, cursor);
+  storage.quota(true);
+  await expect(editing.writeDraft(key, edited, cursor)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+  storage.quota(false);
+  const other = await freshTab();
+  await other.prepareDraftSubmission(key, original, request);
+  expect(await editing.readDraft(key, cursor)).toEqual({ ...original, __submitted: request });
+  if (retained) await other.writeDraft(key, newer);
+  const server = heldReply(false);
+  server.release();
+  await other.replaySubmittedDraft(key);
+  await expect(editing.replaySubmittedDraft(key, () => true, cursor)).rejects.toBeInstanceOf(editing.DraftConflictError);
+  expect(editing.draftSaveFailed(key)).toBe(false);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+  const recovered = await editing.readDraft<typeof newer>(key);
+  if (retained) expect(recovered?.amount).toBe('25');
+  else expect(recovered).toBeUndefined();
+  await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
+  expect(server.fetch).toHaveBeenCalledTimes(2);
+  const row = storage.state().get('drafts')!.get(key);
+  if (retained) expect((row?.value as typeof newer).amount).toBe('25');
+  else expect(row).toBeUndefined();
+});
+
+it('keeps newer typing visible when a pending discard finishes and asks the banker to review it', async () => {
+  const bus = new EventTarget();
+  vi.stubGlobal('window', { setTimeout, clearTimeout, dispatchEvent: bus.dispatchEvent.bind(bus), addEventListener: bus.addEventListener.bind(bus), removeEventListener: bus.removeEventListener.bind(bus) });
+  const storage = sharedStorage();
+  const editing = await freshTab();
+  const harness = draftForm(editing, key, original);
+  let form = harness.render();
+  try {
+    await vi.waitFor(() => { form = harness.render(); expect(form.ready).toBe(true); });
+    form.update(original);
+    await vi.waitFor(() => expect(storage.draft(key)).toEqual(original));
+    await editing.flushDraftWrites();
+    await editing.readDraft(key);
+    form = harness.render();
+    const held = storage.holdNextWrite();
+    const clearing = form.clear().then(() => ({ cleared: true as const }), error => ({ cleared: false as const, error }));
+    await held.started;
+    form.update(edited);
+    form = harness.render();
+    expect(form.value.amount).toBe('50');
+    held.release();
+    const outcome = await clearing;
+    await editing.flushDraftWrites();
+    await editing.readDraft(key);
+    form = harness.render();
+    expect(form.value.amount).toBe('50');
+    expect(storage.draft(key)).toEqual(edited);
+    expect(outcome.cleared).toBe(false);
+    if (!outcome.cleared) expect(outcome.error).toBeInstanceOf(Error);
+    if (!outcome.cleared) expect(outcome.error.message).toMatch(/review/i);
+    expect(editing.draftSaveFailed(key)).toBe(false);
+    expect(editing.hasPendingLocalWrites()).toBe(false);
+    await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
   } finally { harness.close(); }
 });
