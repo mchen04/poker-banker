@@ -448,7 +448,7 @@ export async function readDraft<T>(key: string, cursor?: DraftCursor, options?: 
         operationNotice(key, fresh, observation.version, observation);
         await writeDraft(key, fresh, observation);
         operationNotice(key, fresh, observation.version ?? null, observation);
-        return readDraft<T>(key, observation);
+        return readDraft<T>(key, observation, options);
       }
     }
     if (!record && intent?.error !== undefined) {
@@ -460,7 +460,7 @@ export async function readDraft<T>(key: string, cursor?: DraftCursor, options?: 
       if (fresh) operationNotice(key, fresh, null, intent.cursor);
       try { await saveDraftIntent(key, intent); }
       catch (problem) { if (!(problem instanceof DraftConflictError)) throw problem; }
-      return readDraft<T>(key, cursor);
+      return readDraft<T>(key, cursor, options);
     }
     const observation = cursorFor(key, cursor);
     if (stored?.__operation_conflict && !draftConflictNotice(key)) operationNotice(key, stored, draftVersion(record), observation);
@@ -474,7 +474,7 @@ export async function readDraft<T>(key: string, cursor?: DraftCursor, options?: 
     observation.version = intent ? intent.expectedVersion : draftVersion(record);
     return (intent ? intent.value : record?.value) as T | undefined;
   } catch (problem) {
-    if (problem instanceof DraftConflictError) return readDraft<T>(key, cursor);
+    if (problem instanceof DraftConflictError) return readDraft<T>(key, cursor, options);
     const intent = draftIntents.get(key);
     if (intent) {
       const observation = cursorFor(key, cursor);

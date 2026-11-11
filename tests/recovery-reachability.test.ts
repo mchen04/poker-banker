@@ -307,3 +307,57 @@ it('keeps each physical edit beside a frozen request until replay releases the c
     expect((await data.readDraft<typeof initial>(key))?.amount).toBe('Alex');
   } finally { harness.close(); }
 });
+
+it('keeps retained-edit readback options when another tab freezes during operation normalization', async () => {
+  const fixture = storage() as unknown as { state: () => Map<string, Map<string, { next_value?: unknown }>> };
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, 'add-player');
+  const value = { op_id: 'original', amount: 'Alex' };
+  const request = { path: `/api/sessions/${session}/players`, method: 'POST', body: { op_id: value.op_id, new_player_name: 'Alex' } };
+  await data.writeDraft(key, value);
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const opening = indexedDB.open('poker-banker');
+    opening.onsuccess = () => resolve(opening.result);
+    opening.onerror = () => reject(opening.error);
+  });
+  const transaction = db.transaction.bind(db);
+  let armed = true;
+  db.transaction = (names: string | string[], mode?: IDBTransactionMode) => {
+    const tx = transaction(names, mode);
+    const objectStore = tx.objectStore.bind(tx);
+    tx.objectStore = name => {
+      const store = objectStore(name);
+      const get = store.get.bind(store);
+      store.get = query => {
+        const result = get(query);
+        if (armed && mode !== 'readwrite' && query === key) {
+          let success: ((event: Event) => void) | undefined;
+          Object.defineProperty(result, 'onsuccess', {
+            get: () => (event: Event) => {
+              if (armed) {
+                armed = false;
+                const freeze = transaction('drafts', 'readwrite').objectStore('drafts');
+                freeze.put({ key, banker_id: owner, value: { ...value, __submitted: request }, updated_at: 1 });
+                freeze.put({ key: `${owner}/_operations/requests/${value.op_id}`, banker_id: owner, kind: 'operation_request', value: { request, source: { key, value } }, updated_at: 1 });
+              }
+              success?.(event);
+            },
+            set: (callback: (event: Event) => void) => { success = callback; },
+            configurable: true,
+          });
+        }
+        return result;
+      };
+      return store;
+    };
+    return tx;
+  };
+  const cursor: import('../src/client/data').DraftCursor = {};
+  const returned = await data.readDraft<typeof value & { __submitted?: DraftRequest }>(key, cursor, { includeNext: true });
+  expect(armed).toBe(false);
+  expect(returned).toMatchObject({ amount: 'Alex' });
+  expect(returned).not.toHaveProperty('__submitted');
+  expect(cursor.submitted).toEqual(request);
+  expect(fixture.state().get('drafts')!.get(key)!.next_value).toMatchObject({ amount: 'Alex' });
+  expect(fetch).not.toHaveBeenCalled();
+});
