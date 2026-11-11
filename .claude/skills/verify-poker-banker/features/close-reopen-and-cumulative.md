@@ -29,6 +29,7 @@ Preconditions:
 - **Close, reopen and count once.** Save as `.cache/verify-close.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-close.ts --run RUN_ID --context iphone-webkit`. The balanced game's two player results are +$40 and −$40. The second game's −$10 result makes the first player's finalized total +$30.
 
 ```ts
+import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { expect } from '@playwright/test';
 import { addPlayer, call, closeSession, menu, money, newSession } from '../e2e/helpers';
@@ -37,9 +38,12 @@ import type { RecipeContext } from '../.claude/skills/verify-poker-banker/script
 type History = { cumulative: { currency: string; result_minor: string }[]; sessions: { session: { id: string; status: string } }[] };
 
 export default async function ({ page, runId, evidence, step }: RecipeContext) {
-  const first = await newSession(page, 'Verify balanced close');
-  const winner = await addPlayer(page, `Win ${runId.slice(-8)}`);
-  const loser = await addPlayer(page, `Loss ${runId.slice(-8)}`);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  const tag = `${runId.slice(-8)}-${randomUUID().slice(0, 6)}`;
+  const first = await newSession(page, `Verify balanced close ${tag}`);
+  const winner = await addPlayer(page, `Win ${tag}`);
+  const loser = await addPlayer(page, `Loss ${tag}`);
   await money(page, winner.id, '100');
   await money(page, loser.id, '100');
   await menu(page, 'Close session');
@@ -60,7 +64,7 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
   let history = await call<History>(page, `/players/${winner.id}`);
   expect(history.cumulative).toContainEqual({ currency: 'USD', result_minor: '4000' });
   expect(history.sessions.filter(row => row.session.id === first.session.id)).toHaveLength(1);
-  await newSession(page, 'Verify accepted discrepancy');
+  await newSession(page, `Verify accepted discrepancy ${tag}`);
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
   await page.getByLabel('Search players', { exact: true }).fill(winner.display_name);
   await page.getByRole('dialog').getByRole('button', { name: winner.display_name, exact: true }).click();
@@ -68,11 +72,11 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
   await money(page, winner.id, '90', { kind: 'Cash out', paid: true });
   await menu(page, 'Close session');
   await expect(page.getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
-  await expect(page.getByLabel('Accept discrepancy of $10.00', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Accept discrepancy of −$10.00', { exact: true })).toBeVisible();
   await step('close-discrepancy-before-acceptance');
-  await page.getByLabel('Accept discrepancy of $10.00', { exact: true }).check();
+  await page.getByLabel('Accept discrepancy of −$10.00', { exact: true }).check();
   await page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true }).click();
-  await expect(page.getByText('Closed, off by $10.00', { exact: true })).toBeVisible();
+  await expect(page.getByText('Closed, off by −$10.00', { exact: true })).toBeVisible();
   history = await call<History>(page, `/players/${winner.id}`);
   expect(history.cumulative).toContainEqual({ currency: 'USD', result_minor: '3000' });
   expect(history.sessions.filter(row => row.session.status === 'closed')).toHaveLength(2);
@@ -88,6 +92,7 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
 ## Gotchas
 
 - Outstanding payments do not block a balanced chip close. They remain visible separately and are not player profit.
+- Discrepancy is cash-outs minus buy-ins. A $90 cash-out against a $100 buy-in displays −$10.00, including the consent label and closed recap.
 - Discrepancy consent belongs to the displayed revision. If another write changes it, inspect the new amount and consent again.
 - Reopen does not erase timing history or unset the end. This recipe re-closes without resuming play.
 - A positive result must show a plus sign, a negative result a minus sign and zero Even. Color alone is insufficient.
