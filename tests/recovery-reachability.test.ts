@@ -254,3 +254,22 @@ it('exposes the chosen existing player as an editable selection rather than an i
   expect(JSON.parse(String(sent[1]?.body))).toMatchObject({ player_id: 'alex' });
   expect(JSON.parse(String(sent[1]?.body))).not.toHaveProperty('new_player_name');
 });
+
+
+it.each([
+  { form: 'rename', path: '/api/players/player', method: 'PATCH', value: { name: 'Justin' }, body: { display_name: 'Justin' }, raw: 'display_name' },
+  { form: 'timing', path: `/api/sessions/${session}/timing`, method: 'PATCH', value: { start: '2026-11-11T12:00:00', end: '' }, body: { started_at: '2026-11-11T12:00:00.000Z', ended_at: null }, raw: 'started_at' },
+  { form: 'settings', path: `/api/sessions/${session}`, method: 'PATCH', value: { blind: '1', currency: 'USD' }, body: { big_blind_minor: '100' }, raw: 'big_blind_minor' },
+  { form: 'correction', path: `/api/sessions/${session}/entries/entry/void`, method: 'POST', value: { amount: '50', method: 'cash', time: '' }, body: { replacement_amount_minor: '5000' }, raw: 'replacement_amount_minor' },
+])('does not add a nonauthoritative raw field to an ordinary recovered $form', async operation => {
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, operation.form);
+  const value = { op_id: crypto.randomUUID(), ...operation.value };
+  const request = { path: operation.path, method: operation.method, body: { op_id: value.op_id, ...operation.body } };
+  await data.writeDraft(key, value);
+  await data.prepareDraftSubmission(key, value, request);
+  await expect(data.replaySubmittedDraft(key)).rejects.toMatchObject({ code: 'idempotency_mismatch' });
+  const recovered = (await data.listRecoveredDrafts(owner))[0]!;
+  expect(recovered.value).toMatchObject(operation.value);
+  expect(recovered.value).not.toHaveProperty(operation.raw);
+});

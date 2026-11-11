@@ -6,7 +6,7 @@ import type { SessionState } from '../src/domain/session';
 
 test.use({ serviceWorkers: 'block' });
 
-type Command = { label: string; path: string; method?: 'POST' | 'PATCH'; body: Record<string, unknown>; field?: string; value?: string };
+type Command = { label: string; path: string; method?: 'POST' | 'PATCH'; body: Record<string, unknown>; field?: string; value?: string; select?: boolean };
 async function queueLegacy(page: Page, banker: string, session: string, command: Command) {
   const op = crypto.randomUUID();
   await page.evaluate(async ({ banker, session, command, op }) => {
@@ -46,6 +46,9 @@ for (const group of ['ledger', 'commands'] as const) {
       { label: 'legacy-command', path: `${base}/legacy-command`, body: { detail: 'Retained unknown value' }, field: 'detail', value: 'Edited unknown value' },
     ];
     if (group === 'commands') {
+      const directory = await call<SessionState>(page, '/sessions', 'POST', { op_id: crypto.randomUUID(), name: 'Recovery directory', played_on: '2026-11-11', currency: 'USD' });
+      const reusable = await call<SessionState>(page, `/sessions/${directory.session.id}/players`, 'POST', { op_id: crypto.randomUUID(), new_player_name: 'Reusable recovered player' });
+      commands.splice(2, 0, { label: 'existing-player', path: `${base}/players`, body: { player_id: player.id }, field: 'Player', value: reusable.players[0]!.id, select: true });
       const state = await call<SessionState>(page, `${base.slice(4)}/entries`, 'POST', { op_id: crypto.randomUUID(), player_id: player.id, kind: 'buy_in', amount_minor: '1000', paid_now: false, occurred_at: null });
       commands.splice(7, 0, { label: 'correction', path: `${base}/entries/${state.entries.find(entry => entry.kind === 'buy_in' && !entry.voids_entry_id)!.id}/void`, body: {} });
     }
@@ -69,9 +72,13 @@ for (const group of ['ledger', 'commands'] as const) {
       const region = page.getByRole('region', { name: 'Needs review', exact: true });
       await expect(region).toBeVisible();
       await region.getByText('Review recovered edit', { exact: true }).click();
-      if (command.field) await typeInput(region.getByLabel(command.field, { exact: true }), command.value!);
+      if (command.field) {
+        const field = command.select ? region.getByRole('combobox', { name: command.field, exact: true }) : region.getByLabel(command.field, { exact: true });
+        if (command.select) { await expect(field).toHaveValue(player.id); await field.selectOption(command.value!); }
+        else await typeInput(field, command.value!);
+      }
       await region.getByRole('button', { name: 'Save recovered draft', exact: true }).click();
-      if (command.field) await expect(region.getByLabel(command.field, { exact: true })).toHaveValue(command.value!);
+      if (command.field) await expect(command.select ? region.getByRole('combobox', { name: command.field, exact: true }) : region.getByLabel(command.field, { exact: true })).toHaveValue(command.value!);
       const response = page.waitForResponse(response => response.request().method() === (command.method ?? 'POST') && new URL(response.url()).pathname === command.path && response.request().postDataJSON().op_id !== oldOp);
       await region.getByRole('button', { name: 'Resubmit recovered draft', exact: true }).click();
       expect((await response).status(), command.label).toBe(command.label === 'legacy-command' ? 404 : 200);
@@ -89,6 +96,7 @@ for (const group of ['ledger', 'commands'] as const) {
         expect(requests[1]).toMatchObject({ kind: command.label, amount_minor: '6000', occurred_at: null });
         expect((await current(page, session)).entries.filter(entry => entry.kind === command.label && !entry.voids_entry_id)).toHaveLength(beforeEntries + 1);
       }
+      if (command.label === 'existing-player') { expect(requests[1]).toMatchObject({ player_id: command.value }); expect(requests[1]).not.toHaveProperty('new_player_name'); }
       if (command.label === 'correction') expect(requests[1]).not.toHaveProperty('replacement_amount_minor');
       if (command.label === 'settings') expect(Object.keys(requests[1]!).sort()).toEqual(['location', 'op_id']);
       if (command.label === 'rename') await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
