@@ -28,6 +28,7 @@ Preconditions:
 - **Record, reload, settle and correct.** Save as `.cache/verify-payments.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-payments.ts --run RUN_ID --context iphone-webkit`. The assertions distinguish buy-in totals from actual money received and retain the old and corrected methods.
 
 ```ts
+import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
 import { addPlayer, current, money, newSession, openMoney } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
@@ -62,7 +63,7 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
   await money(page, player.id, '60', { kind: 'Cash out', paid: true, method: 'zelle' });
   await openMoney(page, player.id, 'Record payment');
   await page.getByLabel('Payment direction', { exact: true }).selectOption('payment_out');
-  await page.getByLabel('Amount', { exact: true }).fill('1');
+  await typeInput(page.getByLabel('Amount', { exact: true }), '1');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByTestId('saved-confirmation')).toContainText('$1.00');

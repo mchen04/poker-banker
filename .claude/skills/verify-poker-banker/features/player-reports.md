@@ -29,6 +29,7 @@ Preconditions:
 - **Check groupings, filters, rename and display.** Save as `.cache/verify-reports.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-reports.ts --run RUN_ID --context iphone-webkit`. Every expected number below is hand-computable from the declared inputs.
 
 ```ts
+import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
 import { fixtureSession } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
@@ -41,7 +42,7 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
   await fixtureSession(page, player, { name: 'Verify report two', day: '2026-11-17', result: '-2000', hours: 1, blind: '100', expense: '500' });
   await page.reload();
   await page.getByRole('button', { name: 'Players', exact: true }).click();
-  await page.getByLabel('Find a player', { exact: true }).fill('Report Justin');
+  await typeInput(page.getByLabel('Find a player', { exact: true }), 'Report Justin');
   await page.getByTestId(`roster-player-${player}`).click();
   for (const [group, heading] of [['Overall', 'Overall'], ['Location', 'Home'], ['Game', 'NLH'], ['Weekday', 'Tuesday'], ['Month', 'November 2026']] as const) {
     await page.getByRole('button', { name: group, exact: true }).click();
@@ -54,7 +55,7 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
   for (const [label, value, expected, select] of [['Filter location', 'Home', '+$40.00', false], ['Filter game', 'NLH', '+$40.00', false], ['Filter weekday', '2', '+$40.00', true], ['Filter month', '2026-11', '+$40.00', false], ['From date', '2026-11-17', '−$20.00', false], ['To date', '2026-11-10', '+$60.00', false]] as const) {
     await page.getByRole('button', { name: 'Filter: Off', exact: true }).click();
     if (select) await page.getByLabel(label, { exact: true }).selectOption(value);
-    else await page.getByLabel(label, { exact: true }).fill(value);
+    else await typeInput(page.getByLabel(label, { exact: true }), value);
     await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
     await expect(page.getByTestId('report-profit_loss_minor').locator('dd')).toHaveText(expected);
     if (label === 'From date' || label === 'To date') await expect(page.getByTestId('report-variation_per_hour_minor')).toContainText('Unavailable · needs two sessions');
@@ -64,7 +65,7 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
   }
   const renamed = `Report ${runId.slice(-8)}`;
   await page.getByRole('button', { name: 'Rename player', exact: true }).click();
-  await page.getByLabel('Player name', { exact: true }).fill(renamed);
+  await typeInput(page.getByLabel('Player name', { exact: true }), renamed);
   await page.getByRole('button', { name: 'Save name', exact: true }).click();
   await expect(page.getByRole('heading', { name: renamed, exact: true })).toBeVisible();
   await page.getByRole('button', { name: /Verify report one/ }).click();
