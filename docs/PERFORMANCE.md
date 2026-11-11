@@ -131,3 +131,72 @@ The host has ten logical cores; the policy threshold is five cores of other CPU.
 The before limiter was 118 extra serialized calls and repeated per-player ledger scans. After batching, an unreported diagnostic SQL plan aggregated 12,148 ledger rows into 2,409 player/session groups in about 46.9 ms, dominated by JSON aggregation; the ledger scan itself took about 0.74 ms. Remaining work includes JSON transfer/decoding and pure derivation. The separate whole-roster diagnostic was 84.0 ms; this is an explanatory single sample, not an A/B latency result or exact CPU attribution. See `evidence/round-6/R6/bulk-plan.txt` and `bulk-diagnostic.json`. Further SQL/domain optimizations and deployed latency remain unmeasured; no speculative index or stored totals were added.
 
 The measured server app/store files match the integrated R6 files. Final R3 follow-ups only affect client timestamp reliability and are outside this timed server-read path. The decision is recorded in `evidence/bench/hillclimb.tsv` as R6. One required batching change is kept, with no rejected optimization attempts this round.
+
+
+## Round 12: players diagnosis and candidate
+
+The operator's supplied production baseline reports `api.players` at 551.985 ms median / 574.003 ms p95, versus roughly 90 ms transport floor from unchanged-state and history reads. That suggests about 460 ms beyond the floor against the 150 ms server-work goal. These are the operator's measurements, not a new live run. This round contacted only owned loopback servers. The candidate's deployed performance and production goal remain **unverified** until the live comparison below.
+
+### Local diagnosis
+
+`scripts/bench/players-profile.ts` profiles the real production-built local server, real embedded PostgreSQL and the unchanged realistic seed: 40 main players, 300 closed sessions, a nine-player/60-entry open session, and 20 other bankers. The main banker has 2,409 player/session seats and 12,148 ledger rows. Five warmed samples at each scale capture driver awaits, rows, incoming PostgreSQL socket bytes, JavaScript residual time, response size and HTTP `Server-Timing`. Five separate complete Hono-handler traces include auth and transaction statements. Row serialization for byte counting runs outside the measured interval. Separate `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and own-process CPU profiles are explanatory diagnostics, excluded from latency samples.
+
+The following full-request query medians are from `evidence/bench/players-r12/diagnosis-wire/` and `candidate-wire/`. Socket bytes are actual `pg` connection `bytesRead` deltas, including PostgreSQL result/protocol framing on the local plain TCP connection; they exclude TCP packet headers and TLS. Decoded JSON bytes independently describe the JavaScript rows and are not network bytes. Transaction statements return no rows but still exchange protocol messages.
+
+| Query | Before rows | Before PG bytes | Before decoded JSON bytes | Before driver ms | After rows | After PG bytes | After decoded JSON bytes | After driver ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Auth sliding-expiry UPDATE | 1 | 157 | 82 | 0.456 | 1 | 157 | 82 | 0.289 |
+| BEGIN | 0 | 17 | 2 | 0.078 | 0 | 17 | 2 | 0.079 |
+| SET repeatable-read/read-only | 0 | 15 | 2 | 0.080 | 0 | 15 | 2 | 0.069 |
+| Matching players SELECT | 40 | 3,559 | 4,441 | 0.180 | 40 | 3,559 | 4,441 | 0.184 |
+| History JSON / candidate numeric summaries | 2,409 | 4,582,587 | 4,828,113 | 53.767 | 40 | 3,140 | 5,899 | 15.854 |
+| Server clock SELECT | 1 | 91 | 43 | 0.989 | absent | 0 | 0 | absent |
+| COMMIT | 0 | 18 | 2 | 0.146 | 0 | 18 | 2 | 0.146 |
+
+Full-handler medians: before 71.403 ms wall, 55.702 ms summed driver awaits, 16.384 ms residual JavaScript; after 16.946 / 16.610 / 0.318 ms. Medians of components need not add to the median total. Residual time includes derivation, allocation, scheduling, GC and instrumentation; it is not a pure CPU measurement. Full-handler process CPU is 34.924 ms before and 0.851 ms after, measured separately from wall time. Driver time includes PostgreSQL execution, transfer, decoding and scheduling, so it cannot all be called SQL execution.
+
+The largest measured cost is the history JSON query. Its isolated before plan executes in 45.881 ms: the aggregate finishes at 42.169 ms after its input sort finishes at 6.428 ms. The final sort spills 4,296 KiB (537 temp blocks read, 538 written); all 474 shared blocks are cache hits, with zero shared reads. Building and sorting the wide JSON result dominates this plan, then transferring/decoding 4.58 MB and deriving full sessions adds work. The unchanged client response is only 10,311 bytes, so HTTP payload is not the limiter. Own-process profiles also show row parsing and session derivation; they do not establish Vercel CPU attribution.
+
+The candidate retains the ledger scan but returns exact per-player/currency summaries. Its isolated plan executes in 18.417 ms, including a 1.310 ms ledger scan and 2.100 ms correction-ancestry recursive union; all 474 shared blocks are hits, no shared reads or temporary blocks. Data-query incoming PG bytes fall from 4,586,237 to 6,699. The complete authenticated request uses six database calls instead of seven; player history remains seven.
+
+| Main closed sessions | Main ledger rows | Before / after data-query rows | Before / after PG bytes | Before / after decoded JSON bytes | Before / after driver ms | Before / after JS residual ms | Before / after HTTP app ms | Response bytes on both paths |
+| --- | ---: | --- | --- | --- | --- | --- | --- | ---: |
+| 30 | 1,272 | 290 / 80 | 483,043 / 6,651 | 508,444 / 10,292 | 5.862 / 2.309 | 1.494 / 0.021 | 8.005 / 3.083 | 10,263 |
+| 100 | 4,090 | 850 / 80 | 1,546,264 / 6,640 | 1,628,985 / 10,281 | 20.061 / 6.106 | 4.922 / 0.022 | 25.539 / 6.928 | 10,252 |
+| 300 | 12,148 | 2,450 / 80 | 4,586,237 / 6,699 | 4,832,597 / 10,340 | 53.722 / 16.123 | 16.518 / 0.040 | 72.509 / 17.272 | 10,311 |
+
+These scale samples keep all 40 main players and the background bankers fixed, retaining the oldest 30/100/300 sessions in each owned fixture. Response amounts change with history length; size equality is before-versus-after at each scale. Before transport and derivation grow with ledger history. After transport stays bounded by players/currencies, while database scan/aggregation still grows with entries. The scale runs are diagnostic, sequential campaigns rather than an interleaved gain estimate. Every profile completed with zero errors and an owned-stack cleanup receipt. Raw SQL, plans with synthetic UUID literals redacted, sample traces, byte counters, source hashes and host observations remain alongside each summary. Query parameters stay in memory and are not persisted.
+
+### Exact summaries and supporting A/B
+
+The retained change is limited to the roster reducer: scoped SQL excludes voids, follows correction ancestry for unknown-time ordering, preserves millisecond occurrence ordering, and computes numeric integer sums per player/session before currency aggregation. Results remain hidden while playing and cumulative results include only closed, cashed-out sessions. Positive and negative outstanding balances are bucketed per session before summing, so debts never cancel across games. Zero cash-outs, expenses, unseated players and empty sessions retain their existing behavior. There is no migration, cache, stored total or index change.
+
+The permanent real-Postgres equivalence test compares byte-identical JSON with the unchanged history/domain path for all 280 players across 21 bankers and six search variants (126 complete roster comparisons), plus five API normalization/search variants. Eight additional hand-written fixtures cover currencies, debts, open/closed lifecycle, expenses, zero cash-outs, correction chains, unknown times, millisecond ties and sums beyond signed 64-bit range. The authenticated query-budget check requires six calls, and history still requires seven. Money/domain tests remain unchanged.
+
+Five alternating A,B pairs used frozen main `c0180bf` versus the candidate, the same production UI build, dependencies and Node, fresh realistic databases and one measured request per side per pair. This is warm loopback **app Server-Timing**, not HTTP latency to Vercel. Evidence: `evidence/bench/hillclimb/players-r12/comparison.json`, all ten case directories, and `evidence/round-12/local-comparison-mini.log`.
+
+| Metric | Before median / p95 / range ms | After median / p95 / range ms | Change | Paired wins | Errors / samples per side | Local p95 goal |
+| --- | --- | --- | ---: | --- | --- | --- |
+| api.players | 75.869 / 76.302 / 75.636–76.302 | 17.699 / 17.804 / 17.369–17.804 | -76.7% | 5 of 5 | 0 / 5 | 150 ms: pass on both sides |
+
+The median difference is 58.170 ms, above both MADs (A 0.144 ms, B 0.105 ms). Other CPU was median 0.367 cores, range 0.207–0.486 on A; median 0.364, range 0.348–0.534 on B. Neither crossed the shared ten-core machine's five-core noisy-host threshold. Other work continued. Ten measured responses return 400 player summaries total, 300 closed sessions represented per response, 10,311 response bytes each and zero errors. With five observations the nearest-rank p95 is the maximum, not a production SLO estimate. Byte identity is proved on the same database by the regression tests; the local comparison's separate random-ID databases cannot have identical response hashes.
+
+One candidate is kept; none were timed and rejected. The local limiter and reduction justify a live experiment, **not a claimed live gain**. Remaining scan/aggregation cost scales with ledger size. The live goal stays pending until both deployments are measured against the same reused seed. The decision is appended to `evidence/bench/hillclimb.tsv` as R12.
+
+### Protected live A/B commands (operator-run)
+
+Set `PB_BASELINE_URL` and `PB_CANDIDATE_URL` to the two deployment origins for the same project/database. Optionally provide `PB_VERCEL_BYPASS` through the environment. The harness sends `x-vercel-protection-bypass` on controller and browser requests to the exact selected origin; redirects are rejected and the value is never printed or saved in evidence. Artifacts record only `bypass: true` or `false`.
+
+```sh
+pnpm bench:live --seed-only --state .cache/players-live-seed.json --base "$PB_BASELINE_URL" --label players-seed
+pnpm bench:live --reuse .cache/players-live-seed.json --base "$PB_CANDIDATE_URL" --metrics api.players --label players-candidate --runs 5 --samples 3
+pnpm bench:live:compare --baseline-url "$PB_BASELINE_URL" --candidate-url "$PB_CANDIDATE_URL" --reuse .cache/players-live-seed.json --metrics api.players --samples 3 --order alternating --output evidence/bench/live/players-ab
+```
+
+Seed-only creates its own uniquely named banker and realistic history through public APIs once. The versioned state contains only its base origin, owned banker/fixture IDs, viewer token and session cookie; it is an exclusive-create regular mode-0600 file under ignored `.cache/`. Existing files, symlinks, unsafe permissions and missing option arguments are rejected. Treat this file as private account access; it is never copied to evidence. Reuse adapts only that cookie to the selected deployment, checks `/api/auth/me` against the stored banker and verifies its session is visible. A different database, expired cookie or mismatched banker fails before measuring. Selected read metrics do not seed or issue mutations.
+
+The comparison supports exactly one metric, `api.players`, and five pairs. `--order alternating` runs A,B then B,A across successive pairs; `--order abba` runs A,B,B,A in every pair. `--samples 3` gives three reads per leg (15 per side in alternating mode, 30 per side in ABBA mode). Both sides use the same owned seed without writes. Raw JSONL retains order, pair/leg, status, body bytes, SHA-256, latency, completed work and per-sample client load. `comparison.json` includes per-pair medians, overall medians, both MADs, errors, request/mutation counts and the verdict. Keep requires all five pairs improve, the median improvement exceed both MADs, zero request/sample/campaign errors, and identical response body hashes and byte counts across both sides. Hashes cover the decoded HTTP response entity's original bytes, without JSON reserialization; they do not measure compressed wire payloads. Server host load remains unavailable through the public API. A completed no-gain comparison records `accepted: false` without inventing an operational failure.
+
+Protected browser measurements use Playwright `route.fetch`/fulfill to scope the header safely and refuse redirects on WebKit, so they include proxy overhead and should not be compared to native-transport browser baselines. Without bypass the browser keeps native transport. The API-only paired comparison uses the controller directly and does not use that browser proxy. Browser service workers are blocked for deterministic request coverage. No header value, cookie, viewer token or response error body is persisted in diagnostics.
+
+Local proof uses two owned loopback origins backed by the same disposable PostgreSQL, with `localhost` to `127.0.0.1` cookie remapping. Actual CLI seed-only/reuse and five-pair alternating/ABBA comparisons pass with matching body hashes and zero mutations on reuse; actual WebKit document, asset and API requests carry the synthetic bypass, while foreign-origin requests do not. Tests reject redirected credentials, invisible/mismatched bankers, unsafe state files and malformed reuse before network access. Targeted mini receipt: `evidence/round-12/final-targeted-mini.log` (47/47). These are local harness checks, not deployed measurements.
