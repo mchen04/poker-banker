@@ -86,7 +86,7 @@ function latestEntry(entries: LedgerEntry[]) {
 function PaymentMethods({ label = 'Payment method', value, change }: { label?: string; value: PaymentMethod; change: (value: PaymentMethod) => void }) {
   return <fieldset className="payment-methods"><legend>{label}</legend><div>{(['cash', 'venmo', 'zelle'] as const).map(method => <button key={method} type="button" aria-pressed={value === method} onClick={() => change(method)}>{methodLabel(method)}</button>)}</div></fieldset>;
 }
-type MoneyDraft = { op_id: string; amount: string; paid_now: boolean; method: PaymentMethod; occurred_at: string; note: string; kind: EntryKind };
+type MoneyDraft = { op_id: string; amount: string; paid_now: boolean; method: PaymentMethod; occurred_at: string; note: string; kind: EntryKind; __recovered_occurred_at?: string | null };
 export function MoneySheet({ title, playerId, kind: initialKind }: { title: string; playerId: string; kind: EntryKind }) {
   const { banker, state, notify, open } = useClient();
   const currency = state!.session.currency;
@@ -128,7 +128,7 @@ export function MoneySheet({ title, playerId, kind: initialKind }: { title: stri
       if (chip) body.paid_now = draft.value.paid_now;
       if (payment || (chip && draft.value.paid_now && amount > 0n)) body.method = draft.value.method;
       if (draft.value.note) body.note = draft.value.note;
-      body.occurred_at = draft.value.occurred_at ? new Date(draft.value.occurred_at).toISOString() : submittedAt(chip ? { started_at: state!.session.started_at, ended_at: state!.session.ended_at, server_now: state!.server_now } : undefined);
+      body.occurred_at = draft.value.occurred_at ? new Date(draft.value.occurred_at).toISOString() : draft.value.__recovered_occurred_at !== undefined ? draft.value.__recovered_occurred_at : submittedAt(chip ? { started_at: state!.session.started_at, ended_at: state!.session.ended_at, server_now: state!.server_now } : undefined);
       await draft.queue({ banker_id: banker!.id, session_id: state!.session.id, path: `/api/sessions/${state!.session.id}/entries`, body, label: `${entryLabels[draft.value.kind]} · ${money(String(amount), currency)}`, draft_key: key });
       notify('Not saved yet'); open(null);
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not save entry'); submitting.current = false; setSaving(false); }
@@ -137,7 +137,7 @@ export function MoneySheet({ title, playerId, kind: initialKind }: { title: stri
     {chip && <label className="check"><input type="checkbox" checked={draft.value.paid_now} onChange={event => draft.update({ ...draft.value, paid_now: event.target.checked })} />{draft.value.kind === 'buy_in' ? 'Paid now' : 'Paid out now'}</label>}
     {(payment || (chip && draft.value.paid_now)) && <PaymentMethods value={draft.value.method} change={method => draft.update({ ...draft.value, method })} />}
     {initialKind === 'expense' && <label>Expense detail<input placeholder="Tip or meal" value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}
-    <details><summary>Record an earlier time or note</summary><label>Entry time<input type="datetime-local" step="1" value={draft.value.occurred_at} onChange={event => draft.update({ ...draft.value, occurred_at: event.target.value })} /></label>{initialKind !== 'expense' && <label>Note<input value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}</details><ErrorText text={draft.error || error} /><p className="hint">Only confirmed entries change the totals.</p></div><footer className="money-actions"><button className="primary wide" disabled={saving || !draft.ready}>{saving ? 'Saving…' : 'Save entry'}</button></footer></form>}</Sheet>;
+    <details><summary>Record an earlier time or note</summary><label>Entry time<input type="datetime-local" step="1" value={draft.value.occurred_at} onChange={event => draft.update({ ...draft.value, occurred_at: event.target.value })} /></label>{draft.value.__recovered_occurred_at !== undefined && <p className="hint">{draft.value.__recovered_occurred_at === null ? 'The original entry time is unknown. It stays unknown unless you enter a time.' : 'The original entry time is kept unless you enter another time.'}</p>}{initialKind !== 'expense' && <label>Note<input value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}</details><ErrorText text={draft.error || error} /><p className="hint">Only confirmed entries change the totals.</p></div><footer className="money-actions"><button className="primary wide" disabled={saving || !draft.ready}>{saving ? 'Saving…' : 'Save entry'}</button></footer></form>}</Sheet>;
 }
 export function AddPlayerSheet() {
   const { banker, state, open, client } = useClient();

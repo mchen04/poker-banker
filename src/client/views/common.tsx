@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Banker, BankerClient, OutboxItem } from '../data';
-import { deleteDraft, dismissDraftConflict, DraftConflictError, draftConflict, draftConflictNotice, draftConflictNotices, draftSaveFailed, enqueue, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftCursor, type DraftRequest } from '../data';
+import { deleteDraft, dismissDraftConflict, DraftConflictError, draftConflict, draftConflictNotice, draftConflictNotices, draftSaveFailed, enqueue, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftCursor, type DraftRequest, type RecoveredDraft, listRecoveredDrafts, resolveRecoveredDraft } from '../data';
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
@@ -275,19 +275,50 @@ export function useFormBusy(busy: boolean) {
   useLayoutEffect(() => { setBusy(busy); return () => setBusy(false); }, [busy, setBusy]);
 }
 export function storageFailure(problem: unknown) { window.dispatchEvent(new CustomEvent('pb-storage-error', { detail: problem instanceof Error ? problem.message : 'Local storage is unavailable' })); }
+function RecoveredDraftFields({ value }: { value: unknown }) {
+  const labels: Record<string, string> = { amount: 'Amount', amount_minor: 'Amount in minor units', name: 'Name', search: 'Player search', played_on: 'Session date', currency: 'Currency', location: 'Location', game: 'Game', blind: 'Big blind', reason: 'Reason', start: 'Started at', end: 'Ended at', time: 'Entry time', occurred_at: 'Entry time', method: 'Payment method', paid_now: 'Paid now', note: 'Note', kind: 'Entry kind' };
+  const fields = value && typeof value === 'object' ? Object.entries(value).filter(([key]) => labels[key]) : [];
+  return fields.length ? <dl>{fields.map(([key, value]) => <div key={key}><dt>{labels[key]}</dt><dd>{typeof value === 'boolean' ? value ? 'Yes' : 'No' : String(value ?? '') || 'Not recorded'}</dd></div>)}</dl> : <p>No saved draft.</p>;
+}
 export function DraftSaveStatus() {
   const account = useContext(ClientContext);
   const bankerId = account?.banker?.id;
   const [failed, setFailed] = useState(draftSaveFailed);
   const [notices, setNotices] = useState<DraftConflictError[]>([]);
+  const [recoveries, setRecoveries] = useState<RecoveredDraft[]>([]);
+  const [recoveryError, setRecoveryError] = useState('');
   const [busy, setBusy] = useState(false);
+  const alive = useRef(false);
   useEffect(() => {
-    const refresh = () => { setFailed(draftSaveFailed()); setNotices(bankerId ? draftConflictNotices(bankerId) : []); };
+    alive.current = true;
+    let revision = 0;
+    const refresh = () => {
+      setFailed(draftSaveFailed()); setNotices(bankerId ? draftConflictNotices(bankerId) : []);
+      const version = ++revision;
+      if (!bankerId) { setRecoveries([]); return; }
+      void listRecoveredDrafts(bankerId).then(next => { if (alive.current && version === revision && account?.isCurrent?.() !== false) setRecoveries(next); }).catch(problem => { if (alive.current && version === revision) setRecoveryError(problem instanceof Error ? problem.message : 'Could not load recovered edits'); });
+    };
     window.addEventListener('pb-data', refresh); refresh();
-    return () => window.removeEventListener('pb-data', refresh);
+    return () => { alive.current = false; revision++; window.removeEventListener('pb-data', refresh); };
   }, [bankerId]);
+  async function resolve(recovery: RecoveredDraft, useRecovered: boolean) {
+    const current = () => alive.current && account?.isCurrent?.() !== false && recovery.key.startsWith(`${bankerId}/`);
+    if (busy || !current() || !bankerId) return;
+    setBusy(true); setRecoveryError('');
+    try { await resolveRecoveredDraft(recovery, useRecovered, current); }
+    catch (problem) { if (current()) setRecoveryError(problem instanceof Error ? problem.message : 'Could not resolve this recovered edit'); }
+    finally {
+      if (current()) {
+        try { const next = await listRecoveredDrafts(bankerId); if (current()) setRecoveries(next); }
+        catch (problem) { if (current()) setRecoveryError(problem instanceof Error ? problem.message : 'Could not reload recovered edits'); }
+        if (current()) setBusy(false);
+      }
+    }
+  }
   const visible = notices.filter(notice => bankerId && notice.key.startsWith(`${bankerId}/`));
-  return <>{visible.length > 0 && <div className="warning" role="alert" data-testid="draft-conflict-notice"><p>Another tab changed a draft. A conflicting edit was not kept. Reopen the form to review the saved version.</p><button type="button" onClick={() => { if (account?.isCurrent?.() === false) return; for (const notice of visible) dismissDraftConflict(notice); }}>Dismiss draft change notice</button></div>}{failed && <div className="warning" role="alert"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
+  return <>{visible.length > 0 && <div className="warning" role="alert" data-testid="draft-conflict-notice">{visible.map(notice => <p key={notice.key}>{notice.message}</p>)}<button type="button" onClick={() => { if (account?.isCurrent?.() === false) return; for (const notice of visible) dismissDraftConflict(notice); }}>Dismiss draft change notice</button></div>}
+    {recoveries.filter(recovery => bankerId && recovery.key.startsWith(`${bankerId}/`)).map(recovery => <details className="warning" key={recovery.key} data-testid="recovered-draft"><summary>Review recovered edit</summary><p>A saved draft and your recovered edit are both kept. Check the game for an earlier save before choosing.</p><h3>Saved draft</h3><RecoveredDraftFields value={recovery.source_value} /><h3>Your recovered edit</h3><RecoveredDraftFields value={recovery.value} /><button type="button" disabled={busy} onClick={() => { void resolve(recovery, true); }}>Use recovered edit</button><button type="button" disabled={busy} onClick={() => { void resolve(recovery, false); }}>Keep saved edit</button></details>)}
+    <ErrorText text={recoveryError} />{failed && <div className="warning" role="alert"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
 }
 export function ErrorText({ text }: { text: string }) { return text ? <p role="alert" className="error">{text}</p> : null; }
 export function Sheet({ title, children, close, leadingClose = false, closeLabel = 'Done', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {

@@ -35,21 +35,25 @@ export type OutboxItem = {
   attempts: number;
   next_attempt_at: number;
   lease_until?: number;
+  draft_key?: string;
+  draft_value?: unknown;
 };
 export type DraftRequest = { path: string; method: string; body: Record<string, unknown> };
 export type DraftCursor = { version?: string | null };
 export type DraftConflict = { draft_conflict: true; key: string; value: unknown; version: string | null; message: string };
 export class DraftConflictError extends Error {
   readonly draft_conflict = true;
-  constructor(public key: string, public value: unknown, public version: string | null) {
-    super('This draft was edited in another tab. Review the latest draft and submit again.');
+  constructor(public key: string, public value: unknown, public version: string | null, message = 'This draft was edited in another tab. Review the latest draft and submit again.') {
+    super(message);
     this.name = 'DraftConflictError';
   }
 }
 export type SubmittedDraft = { key: string; form: string; request: DraftRequest; cursor: DraftCursor };
 type DraftValue = Record<string, unknown> & { __submitted?: DraftRequest };
-type DraftRecord = { key: string; value: unknown; next_value?: unknown; banker_id: string; updated_at: number; kind?: 'acknowledged_operation'; replay_id?: string };
+type DraftRecord = { key: string; value: unknown; next_value?: unknown; banker_id: string; updated_at: number; kind?: 'operation_request' | 'acknowledged_operation' | 'recovered_edit'; replay_id?: string };
 const acknowledgedKey = (key: string, request: DraftRequest) => `${key.split('/')[0]}/_operations/confirmed/${String(request.body.op_id)}`;
+const operationKey = (banker: string, op: unknown) => `${banker}/_operations/requests/${String(op)}`;
+const operationMessage = 'An earlier save may already exist. Your edit is kept. Review the game before saving again.';
 type SnapshotRecord = { key: string; banker_id: string; state: SessionState };
 let database: Promise<IDBDatabase> | undefined;
 const draftWrites = new Map<string, Promise<void>>();
@@ -280,6 +284,54 @@ function assertDraftVersion(key: string, record: DraftRecord | undefined, expect
   const actual = draftVersion(record);
   if (expected === undefined ? record !== undefined : expected !== actual) throw new DraftConflictError(key, record?.value, actual);
 }
+function editableOperation(value: unknown, review = false): DraftValue | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const editable = value as DraftValue;
+  return typeof editable.op_id === 'string' && !editable.__submitted ? { ...editable, op_id: crypto.randomUUID(), ...(review ? { __operation_conflict: operationMessage } : {}) } : undefined;
+}
+function preserveEntryTime(value: DraftValue, body: Record<string, unknown>): DraftValue {
+  const time = typeof body.occurred_at === 'string' && Number.isFinite(Date.parse(body.occurred_at)) ? body.occurred_at : null;
+  return { ...value, __recovered_occurred_at: time };
+}
+function recoveredEntry(value: unknown, body: Record<string, unknown>, currency?: string): DraftValue {
+  if (value) return preserveEntryTime(editableOperation(value, true)!, body);
+  const exponent = currency ? new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits! : undefined;
+  const minor = typeof body.amount_minor === 'string' && /^-?\d+$/.test(body.amount_minor) ? BigInt(body.amount_minor) : undefined;
+  const scale = exponent === undefined ? undefined : 10n ** BigInt(exponent);
+  const amount = minor !== undefined && scale !== undefined ? `${minor / scale}${exponent ? `.${String(minor % scale).padStart(exponent, '0')}` : ''}` : '';
+  return preserveEntryTime(editableOperation({ ...body, amount, paid_now: body.paid_now ?? false, method: body.method ?? 'cash', occurred_at: '', note: body.note ?? '' }, true)!, body);
+}
+const entrySourceKey = (banker: string, session: string, body: Record<string, unknown>) => draftKey(banker, session, String(body.kind ?? 'entry-recovery'), String(body.player_id ?? ''));
+async function operationRecord(store: IDBObjectStore, banker: string, request: DraftRequest): Promise<DraftRecord | undefined> {
+  const current = await req(store.get(operationKey(banker, request.body.op_id))) as DraftRecord | undefined;
+  return current ?? await req(store.get(acknowledgedKey(banker, request))) as DraftRecord | undefined;
+}
+function operationRequest(record: DraftRecord | undefined): DraftRequest | undefined {
+  return (record?.value as { request?: DraftRequest } | undefined)?.request;
+}
+function operationSource(record: DraftRecord | undefined): { key: string; value: unknown } | undefined {
+  return (record?.value as { source?: { key: string; value: unknown } } | undefined)?.source;
+}
+function requestIdentity(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(requestIdentity).join(',')}]`;
+  return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${requestIdentity(item)}`).join(',')}}`;
+}
+const sameRequest = (left: unknown, right: unknown) => requestIdentity(JSON.parse(JSON.stringify(left))) === requestIdentity(JSON.parse(JSON.stringify(right)));
+function rememberOperation(store: IDBObjectStore, banker: string, request: DraftRequest, existing: DraftRecord | undefined, acknowledged = false, source?: { key: string; value: unknown }): void {
+  const previous = operationRequest(existing);
+  if (previous && !sameRequest(previous, request)) throw new Error('This operation belongs to a different request. Review the saved result before continuing.');
+  if (existing?.kind === 'acknowledged_operation' && !acknowledged) return;
+  store.put({ key: operationKey(banker, request.body.op_id), banker_id: banker, kind: acknowledged ? 'acknowledged_operation' : 'operation_request', value: { request, ...(operationSource(existing) || source ? { source: operationSource(existing) ?? source } : {}) }, updated_at: Date.now() } satisfies DraftRecord);
+}
+function operationNotice(key: string, value: unknown, version: string | null, cursor: DraftCursor): DraftConflictError {
+  const error = new DraftConflictError(key, value, version, operationMessage);
+  const notice = { key, value, error, cursor };
+  draftConflicts.set(cursor, notice);
+  draftConflictNotifications.set(key, notice);
+  changed();
+  return error;
+}
 function reserveDraft(cursor: DraftCursor, value?: unknown): DraftReservation {
   const reservation = { cursor, version: cursor.version, value, throughRevision: draftRevision };
   draftReservations.add(reservation);
@@ -323,21 +375,48 @@ export async function readDraft<T>(key: string, cursor?: DraftCursor): Promise<T
     const db = await storage();
     const record = await req(db.transaction('drafts').objectStore('drafts').get(key)) as DraftRecord | undefined;
     const intent = draftIntents.get(key);
+    const stored = record?.value as DraftValue | undefined;
+    if (record && !intent && stored?.op_id && !stored.__submitted) {
+      const claim = await operationRecord(db.transaction('drafts').objectStore('drafts'), key.split('/')[0]!, { path: '', method: '', body: { op_id: stored.op_id } });
+      if (claim && !draftIntents.has(key)) {
+        const observation = cursorFor(key, cursor);
+        observation.version = draftVersion(record);
+        const fresh = editableOperation(stored, true)!;
+        operationNotice(key, fresh, observation.version, observation);
+        await writeDraft(key, fresh, observation);
+        operationNotice(key, fresh, observation.version ?? null, observation);
+        return readDraft<T>(key, observation);
+      }
+    }
     if (!record && intent?.error !== undefined) {
       const previous = intent.expectedVersion;
+      const fresh = editableOperation(intent.value, true);
+      if (fresh) { intent.value = fresh; intent.revision = ++draftRevision; }
       intent.expectedVersion = null;
       if (intent.cursor.version === previous) intent.cursor.version = null;
+      if (fresh) operationNotice(key, fresh, null, intent.cursor);
+      try { await saveDraftIntent(key, intent); }
+      catch (problem) { if (!(problem instanceof DraftConflictError)) throw problem; }
+      return readDraft<T>(key, cursor);
     }
     const observation = cursorFor(key, cursor);
+    if (stored?.__operation_conflict && !draftConflictNotice(key)) operationNotice(key, stored, draftVersion(record), observation);
     if ((record?.value as DraftValue | undefined)?.__submitted) { observedDraftIntents.delete(observation); observation.version = draftVersion(record); return record!.value as T; }
     if (intent) observedDraftIntents.set(observation, { key, intent });
     else observedDraftIntents.delete(observation);
     observation.version = intent ? intent.expectedVersion : draftVersion(record);
     return (intent ? intent.value : record?.value) as T | undefined;
   } catch (problem) {
+    if (problem instanceof DraftConflictError) return readDraft<T>(key, cursor);
     const intent = draftIntents.get(key);
     if (intent) {
       const observation = cursorFor(key, cursor);
+      const fresh = editableOperation(intent.value, true);
+      if (fresh) {
+        intent.value = fresh;
+        intent.revision = ++draftRevision;
+        operationNotice(key, fresh, intent.expectedVersion ?? null, observation);
+      }
       observedDraftIntents.set(observation, { key, intent });
       observation.version = intent.expectedVersion;
       return intent.value as T;
@@ -382,10 +461,7 @@ function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
       let next: DraftRecord;
       if ((existing?.value as DraftValue | undefined)?.__submitted) next = { ...existing!, next_value: intent.value, updated_at: Date.now() };
       else {
-        const stored = existing?.value as DraftValue | undefined;
-        const incoming = intent.value as DraftValue | undefined;
-        const value = stored?.op_id && incoming?.op_id && stored.op_id !== incoming.op_id ? { ...incoming, op_id: stored.op_id } : intent.value;
-        next = { key, banker_id: banker, value, updated_at: Date.now() };
+        next = { key, banker_id: banker, value: intent.value, updated_at: Date.now() };
       }
       store.put(next);
       await done;
@@ -463,9 +539,9 @@ export async function prepareDraftSubmission<T extends object>(key: string, valu
   const store = transaction.objectStore('drafts');
   const existing = await req(store.get(key)) as DraftRecord | undefined;
   const previous = (existing?.value as DraftValue | undefined)?.__submitted;
-  const acknowledged = await req(store.get(acknowledgedKey(key, request))) as DraftRecord | undefined;
+  const claimedOperation = await operationRecord(store, banker, request);
   if (!current()) { await done; throw new Error('Account changed. Sign in to check this form.'); }
-  const priorRequest = (acknowledged?.value as { request: DraftRequest } | undefined)?.request;
+  const priorRequest = operationRequest(claimedOperation);
   const stored = existing?.value as DraftValue | undefined;
   if ((expected !== undefined && expected !== draftVersion(existing)) || (stored && !previous && JSON.stringify(stored) !== JSON.stringify(value))) {
     await done;
@@ -478,19 +554,20 @@ export async function prepareDraftSubmission<T extends object>(key: string, valu
     cursor.version = draftVersion(existing);
     return { request, first: false, value: fresh, previouslyConfirmed: true };
   }
-  if (!previous && priorRequest && JSON.stringify(priorRequest) !== JSON.stringify(request)) {
-    const fresh = { ...value, op_id: crypto.randomUUID() };
+  if (!previous && priorRequest && !sameRequest(priorRequest, request)) {
+    const fresh = { ...value, op_id: crypto.randomUUID(), __operation_conflict: operationMessage };
     const nextRecord = { key, banker_id: banker, value: fresh, updated_at: Date.now() } satisfies DraftRecord;
     store.put(nextRecord);
     await done;
     advanceDraftCursor(cursor, expected, draftVersion(nextRecord));
-    changed();
+    operationNotice(key, fresh, draftVersion(nextRecord), cursor);
     return { request, first: false, value: fresh, previouslyConfirmed: true };
   }
   const selected = previous ?? priorRequest ?? structuredClone(request);
   const next = previous ? existing!.value as T & { __submitted: DraftRequest } : { ...value, __submitted: selected };
   const nextRecord = previous ? existing : { key, banker_id: banker, value: next, updated_at: Date.now() };
   if (!previous) store.put(nextRecord!);
+  if (!claimedOperation) rememberOperation(store, banker, selected, claimedOperation, false, { key, value });
   await done;
   advanceDraftCursor(cursor, expected, draftVersion(nextRecord));
   changed();
@@ -516,27 +593,47 @@ async function claimDraftReplay(key: string, replayId: string, isCurrent: () => 
   advanceDraftCursor(cursor, expected, version);
   return { value, version };
 }
-async function finishDraftSubmission(key: string, request: DraftRequest, replayId: string, isCurrent: () => boolean, cursor: DraftCursor, expected: string | null, capturedIntent: DraftIntent | undefined, replacement?: object, acknowledge = false) {
+async function finishDraftSubmission(key: string, request: DraftRequest, replayId: string, isCurrent: () => boolean, cursor: DraftCursor, expected: string | null, capturedIntent: DraftIntent | undefined, replacement?: object, acknowledge = false, mismatch = false) {
   const db = await storage();
   if (!isCurrent()) throw new Error('Account changed. Sign in to check this form.');
-  const transaction = db.transaction('drafts', 'readwrite');
+  const transaction = db.transaction(['drafts', 'snapshots'], 'readwrite');
   const done = complete(transaction);
   const store = transaction.objectStore('drafts');
   const existing = await req(store.get(key)) as DraftRecord | undefined;
+  const operation = mismatch || acknowledge ? await operationRecord(store, key.split('/')[0]!, request) : undefined;
+  const session = /^\/api\/sessions\/([^/]+)\/entries$/.exec(request.path)?.[1];
+  const recoveredSource = mismatch && key.includes('/_operations/uncertain/') ? operationSource(operation)?.key ?? (session ? entrySourceKey(key.split('/')[0]!, session, request.body) : undefined) : undefined;
+  const recoveredExisting = recoveredSource ? await req(store.get(recoveredSource)) as DraftRecord | undefined : undefined;
+  const recoveredSnapshot = recoveredSource && session ? await req(transaction.objectStore('snapshots').get(snapshotKey(key.split('/')[0]!, session))) as SnapshotRecord | undefined : undefined;
   const previous = (existing?.value as DraftValue | undefined)?.__submitted;
   const matched = isCurrent() && existing?.banker_id === key.split('/')[0] && existing?.replay_id === replayId && !!previous && JSON.stringify(previous) === JSON.stringify(request);
   if (matched) {
     try { assertDraftVersion(key, existing, expected); } catch (problem) { await done; if (isCurrent()) rejectDraftIntent(key, cursor, capturedIntent, problem); throw problem; }
   }
-  const editable = existing?.next_value !== undefined ? { ...(existing.next_value as DraftValue), op_id: crypto.randomUUID() } : replacement;
+  const editable = existing?.next_value !== undefined ? { ...(existing.next_value as DraftValue), op_id: crypto.randomUUID(), ...(mismatch ? { __operation_conflict: operationMessage } : {}) } : replacement;
   let nextRecord: DraftRecord | undefined;
   if (matched) {
-    if (acknowledge) store.put({ key: acknowledgedKey(key, request), banker_id: key.split('/')[0]!, kind: 'acknowledged_operation', value: { request }, updated_at: Date.now() } satisfies DraftRecord);
-    if (editable) { nextRecord = { key, banker_id: key.split('/')[0]!, value: editable, updated_at: Date.now() }; store.put(nextRecord); }
+    if (acknowledge) rememberOperation(store, key.split('/')[0]!, request, operation, true);
+    if (editable && recoveredSource) {
+      const fresh = recoveredEntry(operationSource(operation)?.value, request.body, recoveredSnapshot?.state.session.currency);
+      nextRecord = recoveredExisting ?? { key: recoveredSource, banker_id: key.split('/')[0]!, value: fresh, updated_at: Date.now() };
+      if (!recoveredExisting) store.put(nextRecord);
+      else store.put({ key: `${key.split('/')[0]}/_operations/recovered/${String(request.body.op_id)}/${String(fresh.op_id)}`, banker_id: key.split('/')[0]!, kind: 'recovered_edit', value: { source_key: recoveredSource, editable: fresh }, updated_at: Date.now() } satisfies DraftRecord);
+      store.delete(key);
+    }
+    else if (editable) { nextRecord = { key, banker_id: key.split('/')[0]!, value: editable, updated_at: Date.now() }; store.put(nextRecord); }
     else store.delete(key);
+    const original = operationRequest(operation);
+    if (mismatch && original && operation?.kind !== 'acknowledged_operation' && !sameRequest(original, request)) {
+      const originalKey = `${key.split('/')[0]}/_operations/uncertain/${String(request.body.op_id)}`;
+      const retained = await req(store.get(originalKey));
+      if (!isCurrent()) { transaction.abort(); await done.catch(() => {}); throw new Error('Account changed. Sign in to check this form.'); }
+      if (!retained) store.put({ key: originalKey, banker_id: key.split('/')[0]!, value: { ...(operationSource(operation)?.value as DraftValue | undefined), op_id: original.body.op_id, __submitted: original }, updated_at: Date.now() } satisfies DraftRecord);
+    }
   }
   await done;
-  if (matched) advanceDraftCursor(cursor, expected, draftVersion(nextRecord));
+  if (matched) advanceDraftCursor(cursor, expected, recoveredSource ? null : draftVersion(nextRecord));
+  if (matched && mismatch && nextRecord) operationNotice(nextRecord.key, nextRecord.value, draftVersion(nextRecord), recoveredSource ? cursorFor(recoveredSource) : cursor);
   const intent = draftIntents.get(key);
   const retained = intent?.value as DraftValue | undefined;
   if (matched && isCurrent() && intent && retained && !retained.__submitted && retained.op_id === request.body.op_id && (replacement || acknowledge)) {
@@ -553,6 +650,51 @@ export async function listSubmittedDrafts(banker: string): Promise<SubmittedDraf
     cursorFor(record.key).version = version;
     return [{ key: record.key, form: record.key.split('/')[2] ?? 'form', request, cursor: { version } }];
   });
+}
+export type RecoveredDraft = { key: string; source_key: string; value: unknown; source_value: unknown; version: string | null; source_version: string | null };
+export async function listRecoveredDrafts(banker: string): Promise<RecoveredDraft[]> {
+  const records = await all<DraftRecord>('drafts');
+  const byKey = new Map(records.map(record => [record.key, record]));
+  return records.filter(record => record.banker_id === banker && record.kind === 'recovered_edit').flatMap(record => {
+    const retained = record.value as { source_key: string; editable: unknown };
+    if (!retained.source_key.startsWith(`${banker}/`)) return [];
+    const source = byKey.get(retained.source_key);
+    return [{ key: record.key, source_key: retained.source_key, value: retained.editable, source_value: source?.value, version: draftVersion(record), source_version: draftVersion(source) }];
+  });
+}
+export async function resolveRecoveredDraft(recovery: RecoveredDraft, useRecovered: boolean, isCurrent = () => true): Promise<void> {
+  const banker = recovery.key.split('/')[0]!;
+  const epoch = generation(banker);
+  const current = () => generation(banker) === epoch && !blockedOwners.has(banker) && isCurrent();
+  if (!current() || !recovery.source_key.startsWith(`${banker}/`)) throw new AccountChangedError(banker);
+  await flushOnlyDrafts();
+  const db = await storage();
+  if (!current()) throw new AccountChangedError(banker);
+  const transaction = db.transaction('drafts', 'readwrite');
+  const done = complete(transaction);
+  const store = transaction.objectStore('drafts');
+  const record = await req(store.get(recovery.key)) as DraftRecord | undefined;
+  const source = await req(store.get(recovery.source_key)) as DraftRecord | undefined;
+  if (!current()) { await done; throw new AccountChangedError(banker); }
+  try {
+    assertDraftVersion(recovery.key, record, recovery.version);
+    assertDraftVersion(recovery.source_key, source, recovery.source_version);
+  } catch (problem) { await done; throw problem; }
+  if (!record || record.kind !== 'recovered_edit' || record.banker_id !== banker) { await done; throw new Error('This recovered edit was already reviewed in another tab.'); }
+  const retained = record.value as { source_key: string; editable: unknown };
+  if (retained.source_key !== recovery.source_key || (source && source.banker_id !== banker)) { await done; throw new AccountChangedError(banker); }
+  if (useRecovered) {
+    if ((source?.value as DraftValue | undefined)?.__submitted) { await done; throw new Error('Check the submitted form\u2019s saved result before replacing its later draft.'); }
+    const editable = editableOperation(retained.editable, true);
+    if (!editable) { await done; throw new Error('This recovered edit is not an editable form.'); }
+    store.put({ key: recovery.source_key, banker_id: banker, value: editable, updated_at: Date.now() } satisfies DraftRecord);
+  }
+  store.delete(recovery.key);
+  await done;
+  if (!current()) return;
+  const notice = draftConflictNotice(recovery.source_key);
+  if (notice) forgetDraftConflict(notice);
+  changed();
 }
 export async function replaySubmittedDraft<T>(key: string, isCurrent = () => true, observation?: DraftCursor): Promise<T> {
   const cursor = cursorFor(key, observation);
@@ -579,10 +721,11 @@ export async function replaySubmittedDraft<T>(key: string, isCurrent = () => tru
     try { result = await ownerApi<T>(banker, request, current); }
     catch (problem) {
       ensureCurrent();
-      if (isProvenNotApplied(problem)) {
-        const editable = { ...value, op_id: crypto.randomUUID() };
+      const mismatch = problem instanceof ApiError && problem.status === 409 && problem.code === 'idempotency_mismatch';
+      if (isProvenNotApplied(problem) || mismatch) {
+        const editable = { ...value, op_id: crypto.randomUUID(), ...(mismatch ? { __operation_conflict: operationMessage } : {}) };
         delete editable.__submitted;
-        if (!await finishDraftSubmission(key, request, replayId, current, cursor, claimed!.version, capturedIntent, editable)) throw new Error('This submitted form was cleared or checked in another tab. Check your signed-in account.');
+        if (!await finishDraftSubmission(key, request, replayId, current, cursor, claimed!.version, capturedIntent, editable, false, mismatch)) throw new Error('This submitted form was cleared or checked in another tab. Check your signed-in account.');
       }
       throw problem;
     }
@@ -657,11 +800,13 @@ async function enqueueRecord(input: EnqueueInput): Promise<OutboxItem | DraftCon
   if (typeof op !== 'string') throw new Error('An entry needs its operation ID');
   const db = await storage();
   if (epoch !== generation(input.banker_id)) throw new Error('Sign in again before saving this draft');
-  const transaction = db.transaction(['outbox', 'drafts'], 'readwrite');
+  const transaction = db.transaction(['outbox', 'drafts', 'snapshots'], 'readwrite');
   const done = complete(transaction);
   const store = transaction.objectStore('outbox');
+  const drafts = transaction.objectStore('drafts');
+  let draft: DraftRecord | undefined;
   if (input.draft_key) {
-    const draft = await req(transaction.objectStore('drafts').get(input.draft_key)) as DraftRecord | undefined;
+    draft = await req(drafts.get(input.draft_key)) as DraftRecord | undefined;
     if ((draft !== undefined && expected === undefined) || (expected !== undefined && draftVersion(draft) !== expected) || (input.draft_value !== undefined && draft && JSON.stringify(draft.value) !== JSON.stringify(input.draft_value))) {
       await done;
       const problem = new DraftConflictError(input.draft_key, draft?.value, draftVersion(draft));
@@ -671,8 +816,25 @@ async function enqueueRecord(input: EnqueueInput): Promise<OutboxItem | DraftCon
   }
   const records = await req(store.getAll()) as OutboxItem[];
   const existing = records.find(item => item.op_id === op);
+  const request = { path: input.path, method: input.method ?? 'POST', body: input.body };
+  const claimed = await operationRecord(drafts, input.banker_id, request);
+  const prior = operationRequest(claimed) ?? (existing ? { path: existing.path, method: existing.method, body: existing.body } : undefined);
+  if (prior && !sameRequest(prior, request)) {
+    const key = input.draft_key ?? entrySourceKey(input.banker_id, input.session_id, input.body);
+    const snapshot = await req(transaction.objectStore('snapshots').get(snapshotKey(input.banker_id, input.session_id))) as SnapshotRecord | undefined;
+    const currentDraft = input.draft_key ? draft : await req(drafts.get(key)) as DraftRecord | undefined;
+    if (epoch !== generation(input.banker_id)) { await done; throw new AccountChangedError(input.banker_id); }
+    const fresh = recoveredEntry(input.draft_value ?? draft?.value, input.body, snapshot?.state.session.currency);
+    const next = !input.draft_key && currentDraft ? currentDraft : { key, banker_id: input.banker_id, value: fresh, updated_at: Date.now() } satisfies DraftRecord;
+    if (!input.draft_key && currentDraft) drafts.put({ key: `${input.banker_id}/_operations/recovered/${op}/${String(fresh.op_id)}`, banker_id: input.banker_id, kind: 'recovered_edit', value: { source_key: key, editable: fresh }, updated_at: Date.now() } satisfies DraftRecord);
+    else drafts.put(next);
+    await done;
+    if (cursor) advanceDraftCursor(cursor, expected, draftVersion(next));
+    const problem = operationNotice(key, next.value, draftVersion(next), cursor ?? cursorFor(key));
+    return { draft_conflict: true, key, value: next.value, version: problem.version, message: problem.message };
+  }
   if (existing) {
-    if (existing.banker_id !== input.banker_id || existing.path !== input.path || existing.method !== (input.method ?? 'POST') || JSON.stringify(existing.body) !== JSON.stringify(input.body)) {
+    if (existing.banker_id !== input.banker_id || existing.path !== input.path || existing.method !== (input.method ?? 'POST') || !sameRequest(existing.body, input.body)) {
       transaction.abort();
       await done.catch(() => {});
       throw new Error('This draft operation already has different content');
@@ -684,7 +846,9 @@ async function enqueueRecord(input: EnqueueInput): Promise<OutboxItem | DraftCon
     op_id: op, banker_id: input.banker_id, session_id: input.session_id, path: input.path, method: input.method ?? 'POST',
     body: input.body, label: input.label, order: records.reduce((maximum, item) => Math.max(maximum, item.order), 0) + 1,
     attempts: 0, next_attempt_at: 0, status: 'pending', delivery: 'not_sent',
+    ...(input.draft_key ? { draft_key: input.draft_key, draft_value: input.draft_value ?? draft?.value } : {}),
   };
+  if (!claimed) rememberOperation(drafts, input.banker_id, request, claimed, false, input.draft_key ? { key: input.draft_key, value: input.draft_value ?? draft?.value } : undefined);
   store.add(item);
   if (input.draft_key) transaction.objectStore('drafts').delete(input.draft_key);
   await done;
@@ -732,7 +896,7 @@ export async function hasUnsent(banker: string): Promise<boolean> {
 }
 export type BankerWork = { bankerId: string; fingerprint: string; hasUnsent: boolean };
 function workSnapshot(banker: string, drafts: DraftRecord[], outbox: OutboxItem[]): BankerWork {
-  const ownedDrafts = drafts.filter(record => record.banker_id === banker && record.kind !== 'acknowledged_operation').sort((a, b) => a.key.localeCompare(b.key));
+  const ownedDrafts = drafts.filter(record => record.banker_id === banker && !['operation_request', 'acknowledged_operation'].includes(record.kind ?? '')).sort((a, b) => a.key.localeCompare(b.key));
   const ownedOutbox = outbox.filter(item => item.banker_id === banker).sort((a, b) => a.op_id.localeCompare(b.op_id));
   const dirty = [...draftIntents].filter(([key]) => key.split('/')[0] === banker).map(([key, intent]) => ({ key, revision: intent.revision, value: intent.value })).sort((a, b) => a.key.localeCompare(b.key));
   return { bankerId: banker, fingerprint: JSON.stringify([ownedDrafts, ownedOutbox, dirty]), hasUnsent: ownedDrafts.length > 0 || ownedOutbox.length > 0 || dirty.length > 0 };
@@ -806,10 +970,33 @@ function sameClaim(current: OutboxItem | undefined, item: OutboxItem): current i
 }
 async function settleClaim(item: OutboxItem, isCurrent: () => boolean, error?: unknown): Promise<void> {
   const db = await storage();
-  const transaction = db.transaction('outbox', 'readwrite');
+  const transaction = db.transaction(['outbox', 'drafts', 'snapshots'], 'readwrite');
   const done = complete(transaction);
   const store = transaction.objectStore('outbox');
   const current = await req(store.get(item.op_id)) as OutboxItem | undefined;
+  if (sameClaim(current, item) && isCurrent() && error instanceof ApiError && error.status === 409 && error.code === 'idempotency_mismatch') {
+    const drafts = transaction.objectStore('drafts');
+    const request = { path: item.path, method: item.method, body: item.body };
+    const operation = await operationRecord(drafts, item.banker_id, request);
+    const key = item.draft_key ?? entrySourceKey(item.banker_id, item.session_id, item.body);
+    const existing = await req(drafts.get(key)) as DraftRecord | undefined;
+    const snapshot = await req(transaction.objectStore('snapshots').get(snapshotKey(item.banker_id, item.session_id))) as SnapshotRecord | undefined;
+    const earlier = operationRequest(operation);
+    const earlierKey = `${item.banker_id}/_operations/uncertain/${item.op_id}`;
+    const retained = earlier && !sameRequest(earlier, request) && operation?.kind !== 'acknowledged_operation' ? await req(drafts.get(earlierKey)) : undefined;
+    if (!isCurrent()) { await done; return; }
+    const fresh = recoveredEntry(item.draft_value, item.body, snapshot?.state.session.currency);
+    const next = existing ?? { key, banker_id: item.banker_id, value: fresh, updated_at: Date.now() } satisfies DraftRecord;
+    if (!existing) drafts.put(next);
+    else drafts.put({ key: `${item.banker_id}/_operations/recovered/${item.op_id}/${String(fresh.op_id)}`, banker_id: item.banker_id, kind: 'recovered_edit', value: { source_key: key, editable: fresh }, updated_at: Date.now() } satisfies DraftRecord);
+    if (!operation) rememberOperation(drafts, item.banker_id, request, operation);
+    if (earlier && !sameRequest(earlier, request) && operation?.kind !== 'acknowledged_operation' && !retained) drafts.put({ key: earlierKey, banker_id: item.banker_id, value: { op_id: earlier.body.op_id, __submitted: earlier }, updated_at: Date.now() } satisfies DraftRecord);
+    store.delete(item.op_id);
+    await done;
+    if (isCurrent()) operationNotice(key, next.value, draftVersion(next), cursorFor(key));
+    changed();
+    return;
+  }
   if (sameClaim(current, item)) {
     const valid = isCurrent();
     const rejected = valid && error instanceof ApiError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status);
@@ -825,16 +1012,19 @@ async function settleClaim(item: OutboxItem, isCurrent: () => boolean, error?: u
 async function acknowledge(banker: string, item: OutboxItem, state: SessionState, isCurrent: () => boolean) {
   const db = await storage();
   if (!isCurrent()) return;
-  const transaction = db.transaction(['snapshots', 'outbox'], 'readwrite');
+  const transaction = db.transaction(['snapshots', 'outbox', 'drafts'], 'readwrite');
   const done = complete(transaction);
   const queued = await req(transaction.objectStore('outbox').get(item.op_id)) as OutboxItem | undefined;
   if (!isCurrent() || !sameClaim(queued, item)) { await done; return undefined; }
   const store = transaction.objectStore('snapshots');
   const key = snapshotKey(banker, state.session.id);
   const existing = await req(store.get(key)) as SnapshotRecord | undefined;
+  const request = { path: item.path, method: item.method, body: item.body };
+  const operation = await operationRecord(transaction.objectStore('drafts'), banker, request);
   if (!isCurrent()) { await done; return undefined; }
   const latest = newerSnapshot(existing?.state, state);
   store.put({ key, banker_id: banker, state: latest } satisfies SnapshotRecord);
+  rememberOperation(transaction.objectStore('drafts'), banker, request, operation, true, item.draft_key ? { key: item.draft_key, value: item.draft_value } : undefined);
   transaction.objectStore('outbox').delete(item.op_id);
   await done;
   changed();
