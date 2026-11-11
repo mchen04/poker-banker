@@ -34,7 +34,7 @@ function assertOccurredAt(session: Pick<SessionSettings, 'started_at' | 'ended_a
 
 async function assertTimingEntries(db: Transaction, banker: string, id: string, start: string | null, end: string | null) {
   const outside = await db.query(`SELECT e.id FROM ledger_entries e
-    WHERE e.session_id = $1 AND e.banker_id = $2 AND e.voids_entry_id IS NULL
+    WHERE e.session_id = $1 AND e.banker_id = $2 AND e.kind IN ('buy_in', 'cash_out') AND e.voids_entry_id IS NULL
     AND NOT EXISTS (SELECT 1 FROM ledger_entries v WHERE v.voids_entry_id = e.id AND v.session_id = $1 AND v.banker_id = $2)
     AND (($3::timestamptz IS NOT NULL AND e.occurred_at < $3) OR ($4::timestamptz IS NOT NULL AND e.occurred_at > $4)) LIMIT 1`, [id, banker, start, end]);
   if (outside.rowCount) conflict('entries_outside_timing', 'Timing must include the effective entries');
@@ -173,7 +173,7 @@ export function createApp(pool: Database, config: Config = {}) {
     const seated = await db.query('SELECT player_id FROM session_players WHERE session_id = $1 AND player_id = $2 AND banker_id = $3', [id, input.player_id, banker]);
     if (!seated.rowCount) notFound();
     const occurredAt = input.occurred_at ?? null;
-    assertOccurredAt(row, occurredAt);
+    if (input.kind === 'buy_in' || input.kind === 'cash_out') assertOccurredAt(row, occurredAt);
     const revision = await bump(db, banker, id);
     if (input.kind === 'buy_in' && row.started_at === null) {
       const timerStart = occurredAt ?? await serverTime(db);
@@ -200,7 +200,7 @@ export function createApp(pool: Database, config: Config = {}) {
     if (input.replacement_method !== undefined && !payment) throw new ApiError(400, 'invalid_request', 'Only a payment has a method');
     const replacing = input.replacement_amount_minor !== undefined || input.replacement_method !== undefined || input.replacement_occurred_at !== undefined;
     const replacementTime = input.replacement_occurred_at === undefined ? original.occurred_at : input.replacement_occurred_at;
-    if (replacing) assertOccurredAt(row, replacementTime);
+    if (replacing && (original.kind === 'buy_in' || original.kind === 'cash_out')) assertOccurredAt(row, replacementTime);
     const revision = await bump(db, banker, id);
     await insertEntry(db, banker, id, revision, { ...original, voids_entry_id: original.id });
     if (replacing) await insertEntry(db, banker, id, revision, {

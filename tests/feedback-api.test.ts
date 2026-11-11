@@ -199,7 +199,7 @@ describe('persisted timers and participation', () => {
     expect(metrics.per_hour_minor.value).toEqual(exact('3000'));
     expect(metrics.big_blinds_per_hour.value).toEqual(exact('15'));
   });
-  it('corrects occurred time, re-derives intervals, and rejects entries or corrected timing outside bounds', async () => {
+  it('corrects occurred time, re-derives intervals, and rejects chip entries or corrected timing outside bounds', async () => {
     const owner = await account();
     let state = await session(owner);
     state = await write(owner, state, '/timing', { started_at: '2026-11-10T00:00:00Z', ended_at: '2026-11-10T06:00:00Z' }, 'PATCH');
@@ -210,7 +210,8 @@ describe('persisted timers and participation', () => {
     expect(state.players[0]).toMatchObject({ state: 'cashed_out', result_minor: '50', duration_ms: '5400000' });
     const last = state.entries.find(row => row.kind === 'cash_out')!;
     await rejects(await request(owner, `/sessions/${state.session.id}/entries/${last.id}/void`, 'POST', { op_id: randomUUID(), replacement_occurred_at: '2026-11-10T07:00:00Z' }), 400, 'outside_timer_bounds');
-    await rejects(await request(owner, `/sessions/${state.session.id}/entries`, 'POST', { op_id: randomUUID(), player_id: chip.player_id, kind: 'expense', amount_minor: '100', occurred_at: '2026-11-09T23:00:00Z' }), 400);
+    state = await entry(owner, state, 'expense', '100', '2026-11-09T23:00:00Z');
+    expect(state.entries.find(row => row.kind === 'expense')?.occurred_at).toBe('2026-11-09T23:00:00.000Z');
     await rejects(await request(owner, `/sessions/${state.session.id}/timing`, 'PATCH', { op_id: randomUUID(), started_at: '2026-11-10T01:00:00Z', ended_at: '2026-11-10T06:00:00Z' }), 409, 'entries_outside_timing');
     expect((await ok<SessionState>(await request(owner, `/sessions/${state.session.id}`))).revision).toBe(state.revision);
   });
