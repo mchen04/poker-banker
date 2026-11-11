@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DraftRequest } from '../src/client/data';
 
@@ -481,4 +484,107 @@ it.each(['discard', 'enqueue'] as const)('does not %s a saved draft without any 
   expect(storage.state()).toEqual(before);
   expect(storage.draft(key)).toEqual(newer);
   expect(await a.listOutbox(owner)).toEqual([]);
+});
+
+function draftForm(tab: Tab, formKey: string, initial: typeof original) {
+  const source = ts.transpileModule(readFileSync('src/client/views/common.tsx', 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText;
+  let position = 0;
+  const slots: unknown[] = [];
+  const effects: (() => unknown)[] = [];
+  const cleanup: (() => void)[] = [];
+  const hooks = {
+    createContext: () => null, useContext: () => null,
+    useRef(value: unknown) { const index = position++; return slots[index] ??= { current: value }; },
+    useState(value: unknown) {
+      const index = position++;
+      if (!(index in slots)) slots[index] = typeof value === 'function' ? value() : value;
+      return [slots[index], (next: unknown) => { slots[index] = typeof next === 'function' ? next(slots[index]) : next; }];
+    },
+    useEffect(effect: () => unknown, dependencies: unknown[]) {
+      const index = position++;
+      const previous = slots[index] as unknown[] | undefined;
+      if (!previous || dependencies.some((value, item) => value !== previous[item])) { slots[index] = dependencies; effects.push(effect); }
+    },
+    useLayoutEffect() {},
+  };
+  const exports: Record<string, unknown> = {};
+  runInNewContext(source, {
+    exports, require: (name: string) => name === 'react' ? hooks : name === '../data' ? tab : {},
+    window, crypto, structuredClone, Event, CustomEvent,
+  });
+  const useDraft = exports.useDraft as typeof import('../src/client/views/common').useDraft;
+  return {
+    render() {
+      position = 0;
+      const form = useDraft(formKey, initial);
+      while (effects.length) {
+        const result = effects.shift()!();
+        if (typeof result === 'function') cleanup.push(result as () => void);
+      }
+      return form;
+    },
+    close() { for (const stop of cleanup) stop(); },
+  };
+}
+
+it.each([false, true])('adopts the retained edit and clears a three-tab rejected value after frozen recovery (rejected=%s)', async rejected => {
+  const bus = new EventTarget();
+  vi.stubGlobal('window', { setTimeout, clearTimeout, dispatchEvent: bus.dispatchEvent.bind(bus), addEventListener: bus.addEventListener.bind(bus), removeEventListener: bus.removeEventListener.bind(bus) });
+  const storage = sharedStorage();
+  const editing = await freshTab();
+  const freezing = await freshTab();
+  const retaining = await freshTab();
+  const harness = draftForm(editing, key, original);
+  let form = harness.render();
+  try {
+    await vi.waitFor(() => { form = harness.render(); expect(form.ready).toBe(true); });
+    form.update(original);
+    await vi.waitFor(() => expect(storage.draft(key)).toEqual(original));
+    await editing.flushDraftWrites();
+    await editing.readDraft(key);
+    form = harness.render();
+    await freezing.readDraft(key);
+    const retainingCursor: import('../src/client/data').DraftCursor = {};
+    await retaining.readDraft(key, retainingCursor);
+    await freezing.prepareDraftSubmission(key, original, request);
+    await retaining.writeDraft(key, newer, retainingCursor);
+    form.update(edited);
+    await vi.waitFor(() => { form = harness.render(); expect(form.submitted).toBe(true); expect(form.error).toContain('edited in another tab'); });
+    const server = heldReply(rejected);
+    server.release();
+    if (rejected) await expect(form.reconcile()).rejects.toMatchObject({ code: 'already_seated' });
+    else await form.reconcile();
+    await vi.waitFor(() => {
+      form = harness.render();
+      expect(form.value.amount).toBe('25');
+      expect(form.submitted).toBe(false);
+      expect(form.error).toBe('');
+    });
+    expect((storage.draft(key) as typeof newer).amount).toBe('25');
+    expect(editing.draftSaveFailed(key)).toBe(false);
+    expect(editing.hasPendingLocalWrites()).toBe(false);
+    await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
+    await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
+    expect(server.fetch).toHaveBeenNthCalledWith(2, request.path, expect.objectContaining({ body: JSON.stringify(request.body) }));
+  } finally { harness.close(); }
+});
+
+it.each([false, true])('does not turn a rejected %s draft edit into a pending storage failure', async frozen => {
+  const storage = sharedStorage();
+  const editing = await freshTab();
+  await editing.writeDraft(key, original);
+  const other = await freshTab();
+  await other.readDraft(key);
+  if (frozen) await other.prepareDraftSubmission(key, original, request);
+  await other.writeDraft(key, newer);
+  await expect(editing.writeDraft(key, edited)).rejects.toBeInstanceOf(editing.DraftConflictError);
+  expect(editing.draftSaveFailed(key)).toBe(false);
+  expect(editing.hasPendingLocalWrites()).toBe(false);
+  await expect(editing.flushDraftWrites()).resolves.toBeUndefined();
+  expect(storage.state().get('outbox')!.size).toBe(0);
+  const value = storage.draft(key) as typeof original;
+  if (frozen) expect(value.amount).toBe('10');
+  else expect(value.amount).toBe('25');
 });
