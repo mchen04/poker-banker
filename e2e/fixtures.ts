@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { mkdir } from 'node:fs/promises';
+import { stopOwnedProcess } from '../scripts/owned-process';
 import { test as base, expect, type Page, type TestInfo } from '@playwright/test';
 
 async function availablePort() {
@@ -14,26 +15,22 @@ async function availablePort() {
 export const test = base.extend({
   baseURL: async ({}, use) => {
     const port = await availablePort();
-    const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     let output = '';
     try {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error(`Browser server did not start\n${output}`)), 30000);
-        child.stdout.on('data', chunk => {
+        child.stdout!.on('data', chunk => {
           output += String(chunk);
           if (output.includes('Poker banker ready at')) { clearTimeout(timeout); resolve(); }
         });
-        child.stderr.on('data', chunk => { output += String(chunk); });
+        child.stderr!.on('data', chunk => { output += String(chunk); });
         child.once('exit', code => { clearTimeout(timeout); reject(new Error(`Browser server exited ${code}\n${output}`)); });
         child.once('error', error => { clearTimeout(timeout); reject(error); });
       });
       await use(`https://127.0.0.1:${port}`);
     } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
-        child.kill('SIGTERM');
-        await exited;
-      }
+      await stopOwnedProcess(child);
     }
   },
   context: async ({ context }, use, testInfo) => {

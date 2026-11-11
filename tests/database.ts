@@ -1,9 +1,9 @@
-import { mkdtemp, mkdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
 import { migrate } from '../scripts/migrate';
+import { stopOwnedProcess } from '../scripts/owned-process';
 
 async function availablePort(): Promise<number> {
   const server = createServer();
@@ -13,19 +13,35 @@ async function availablePort(): Promise<number> {
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   return address.port;
 }
-
-export async function testDatabase() {
-  await mkdir('.cache', { recursive: true });
-  const directory = await mkdtemp(resolve('.cache/pg-'));
-  const port = await availablePort();
-  const database = new EmbeddedPostgres({
-    databaseDir: directory, port, user: 'poker', password: 'test-only', persistent: false,
-    initdbFlags: ['--encoding=UTF8', '--locale=C'],
-    postgresFlags: ['-h', '127.0.0.1', '-k', directory], onLog: () => {}, onError: () => {},
-  });
-  await database.initialise();
-  await database.start();
-  const pool = new pg.Pool({ connectionString: `postgresql://poker:test-only@127.0.0.1:${port}/postgres`, max: 25 });
-  try { await migrate(pool); } catch (error) { await pool.end(); await database.stop(); throw error; }
-  return { pool, stop: async () => { await pool.end(); await database.stop(); } };
+export async function testDatabase(options: { migrationDirectory?: string; postgresFlags?: string[] } = {}) {
+  let child: ReturnType<typeof spawn> | undefined;
+  let pool: pg.Pool | undefined;
+  let stopping: Promise<void> | undefined;
+  const stop = () => stopping ??= (async () => {
+    try { await pool?.end(); }
+    finally {
+      if (child?.pid) await stopOwnedProcess(child);
+    }
+  })();
+  try {
+    const port = await availablePort();
+    child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('../scripts/test-postgres.ts', import.meta.url)), String(port), JSON.stringify(options.postgresFlags ?? [])], { detached: true, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    let output = '';
+    child.stderr!.on('data', chunk => { output += String(chunk); });
+    const directory = await new Promise<string>((resolve, reject) => {
+      child!.once('error', reject);
+      child!.once('exit', (code, signal) => reject(new Error(`Owned Postgres exited ${code ?? signal}${output ? `: ${output}` : ''}`)));
+      child!.on('message', message => {
+        if (!message || typeof message !== 'object' || !('type' in message)) return;
+        if (message.type === 'pb-postgres-ready' && 'directory' in message && typeof message.directory === 'string') resolve(message.directory);
+        if (message.type === 'pb-postgres-error') reject(new Error('message' in message ? String(message.message) : 'Owned Postgres startup failed'));
+      });
+    });
+    pool = new pg.Pool({ connectionString: `postgresql://poker:test-only@127.0.0.1:${port}/postgres`, max: 25 });
+    await migrate(pool, options.migrationDirectory);
+    return { pool, directory, stop };
+  } catch (error) {
+    try { await stop(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Owned database startup and cleanup failed'); }
+    throw error;
+  }
 }
