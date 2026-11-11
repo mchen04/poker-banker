@@ -34,6 +34,8 @@ import { fixtureSession } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, runId, step, checkState }: RecipeContext) {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   const first = await fixtureSession(page, undefined, { name: 'Verify report one', day: '2026-11-10', result: '6000', hours: 2, blind: '200', expense: '300' });
   const player = first.players[0]!.id;
   await fixtureSession(page, player, { name: 'Verify report two', day: '2026-11-17', result: '-2000', hours: 1, blind: '100', expense: '500' });

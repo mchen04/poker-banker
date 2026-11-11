@@ -33,6 +33,8 @@ import { addPlayer, current, money, newSession, openMoney } from '../e2e/helpers
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, runId, step, checkState }: RecipeContext) {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   await newSession(page, 'Verify payment methods');
   const player = await addPlayer(page, `Pay ${runId.slice(-8)}`);
   await money(page, player.id, '40', { method: 'venmo' });

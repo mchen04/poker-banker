@@ -36,6 +36,8 @@ import { addPlayer, current, menu, newSession, openMoney, workerReady } from '..
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, context, baseURL, runId, step, checkState }: RecipeContext) {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   const session = await newSession(page, 'Verify offline queue');
   const player = await addPlayer(page, `Offline ${runId.slice(-8)}`);
   await workerReady(page);
@@ -87,13 +89,18 @@ export default async function ({ page, context, baseURL, runId, step, checkState
 - **Prove rejection, Retry and Discard.** Save the next block as `.cache/verify-rejected.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-rejected.ts --run RUN_ID --context iphone-webkit`. A second owned context closes the game while the first is offline. The visible rejection is therefore produced by the real server lifecycle.
 
 ```ts
+import { randomUUID } from 'node:crypto';
 import { expect } from '@playwright/test';
 import { addPlayer, closeSession, menu, money, newSession, openMoney } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, context, browser, baseURL, runId, step, checkState }: RecipeContext) {
-  const session = await newSession(page, 'Verify rejected queue');
-  const player = await addPlayer(page, `Reject ${runId.slice(-8)}`);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  const tag = `${runId.slice(-8)}-${randomUUID().slice(0, 6)}`;
+  const sessionName = `Verify rejected queue ${tag}`;
+  const session = await newSession(page, sessionName);
+  const player = await addPlayer(page, `Reject ${tag}`);
   await money(page, player.id, '100');
   await money(page, player.id, '100', { kind: 'Cash out' });
   const otherContext = await browser.newContext({ baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', locale: 'en-US', timezoneId: 'UTC' });
@@ -101,7 +108,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     await otherContext.addCookies(await context.cookies());
     const other = await otherContext.newPage();
     await other.goto(`/?session=${session.session.id}`);
-    await expect(other.getByRole('heading', { name: 'Verify rejected queue', exact: true })).toBeVisible();
+    await expect(other.getByRole('heading', { name: sessionName, exact: true })).toBeVisible();
     await context.setOffline(true);
     for (const amount of ['20', '30']) {
       await openMoney(page, player.id);
@@ -119,10 +126,14 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     await menu(other, 'Correct times');
     await other.getByLabel('Ended at', { exact: true }).fill('');
     await other.getByRole('button', { name: 'Save timing', exact: true }).click();
+    await expect(other.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Retry', exact: true }).click();
     await expect(page.getByTestId(`player-${player.id}`)).toContainText('in $150.00');
-    expect((await checkState()).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor)).toEqual(['10000', '2000', '3000']);
+    await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
+    const buyIns = (await checkState()).entries.filter(entry => entry.kind === 'buy_in').sort((left, right) => BigInt(left.revision) < BigInt(right.revision) ? -1 : BigInt(left.revision) > BigInt(right.revision) ? 1 : 0);
+    expect(buyIns.map(entry => entry.amount_minor)).toEqual(['10000', '2000', '3000']);
+    expect(new Set(buyIns.map(entry => entry.revision)).size).toBe(3);
     await context.setOffline(true);
     await openMoney(page, player.id);
     await page.getByLabel('Amount', { exact: true }).fill('99');
@@ -146,6 +157,8 @@ import type { RecipeContext } from '../.claude/skills/verify-poker-banker/script
 
 export default async function ({ page, context, baseURL, runId, step, checkState }: RecipeContext) {
   if (new URL(baseURL).hostname !== '127.0.0.1') throw new Error('A/B update proof requires an owned local server; no deployment is authorized');
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   await newSession(page, 'Verify update preservation');
   const player = await addPlayer(page, `Update ${runId.slice(-8)}`);
   await workerReady(page);
@@ -156,8 +169,8 @@ export default async function ({ page, context, baseURL, runId, step, checkState
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }).click();
   await step('updates-draft-before-new-release');
   await page.evaluate(() => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
     document.dispatchEvent(new Event('visibilitychange'));
   });
   const releaseB = `verify-B-${runId}`;
@@ -166,8 +179,8 @@ export default async function ({ page, context, baseURL, runId, step, checkState
   await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/'))?.waiting)).toBe(true);
   expect(await page.locator('meta[name="pb-release"]').getAttribute('content')).toBe(releaseA);
   await page.evaluate(() => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
-    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await expect(page.getByText('Update ready', { exact: true })).toBeVisible();
@@ -182,6 +195,7 @@ export default async function ({ page, context, baseURL, runId, step, checkState
   expect((await checkState()).players.some(row => row.id === player.id)).toBe(true);
   expect((await page.request.get(`${baseURL}/api/auth/me`)).status()).toBe(200);
   await step('updates-new-release-draft-and-data-preserved');
+  await page.getByLabel('Amount', { exact: true }).fill('37');
   const releaseC = `verify-C-${runId}`;
   execFileSync('pnpm', ['build'], { env: { ...process.env, RELEASE_VERSION: releaseC }, stdio: 'inherit' });
   await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration('/'); if (!registration) throw new Error('No service worker'); await registration.update(); });
@@ -207,9 +221,10 @@ export default async function ({ page, context, baseURL, runId, step, checkState
 ## Gotchas
 
 - `RELEASE_VERSION` stamps the local build. Serialize builds with other runs because they share `dist/`; do not run another browser suite or benchmark while changing it.
-- Visibility overrides emulate browser suspension signals. They do not prove actual iOS suspension, Home Screen installation or a real keyboard.
+- Visibility overrides use scalar properties so tsx does not inject a function-name helper into a serialized getter. They emulate browser suspension signals. They do not prove actual iOS suspension, Home Screen installation or a real keyboard.
 - Run update verification last. Doctor pins the launch release, so it intentionally reports a build mismatch after this recipe changes the local build; clean up and relaunch before other features.
 - The current client is one statically imported bundle. A genuine lazy-chunk failure entry point is absent, so that proof reports an unmet prerequisite until one exists. Dispatching an internal failure event is not a real-user proof.
 - Playwright API requests can bypass browser offline emulation. A successful API request is not offline-browser proof; use the actual offline reload and perform stored-state checks after reconnection.
-- Retry needs the reopened timer end cleared. Reopen alone intentionally preserves the old end.
+- Retry needs the reopened timer end cleared. Wait for Save timing to close the sheet before retrying; Reopen alone preserves the old end.
+- Activity is returned newest first. The queue-order proof orders buy-ins by ascending revision before checking their submission order.
 - Service-worker or certificate failure is a failed prerequisite. Do not bypass the worker requirement or replace an offline reload with an online one.

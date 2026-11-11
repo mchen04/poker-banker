@@ -7,7 +7,7 @@ This directory is the maintained source for checking user-facing poker banker be
 - Launch from the repository root with `.claude/skills/verify-poker-banker/scripts/verify.sh launch --local`, or the mini runner prefix shown in [SKILL.md](../SKILL.md).
 - Keep the returned run ID and evidence directory. Require `doctor --run RUN_ID` to identify this run's banker, build and base URL.
 - Use only the owned browser contexts. Each recipe operates on the run's unique banker; additional accounts must be newly created test accounts.
-- Start a fresh run for a feature whose prerequisites say empty banker. Prior feature mutations are not a substitute for the specified fixture.
+- Every recipe returns its primary page to Workspace before setup. The nine recipes can share one run and banker; each creates its own fixture and closes its extra contexts. Run sessions alone on a fresh run as well to prove the welcome creation entry point.
 - In live mode, use only a supplied `PB_BASE_URL` and newly created test accounts. Never read credential files, use another account, deploy or delete remote records.
 
 ## Driving conventions
@@ -26,7 +26,7 @@ This directory is the maintained source for checking user-facing poker banker be
 - A mutation needs a visible outcome and an independent read-only saved-state check.
 - Keep account passwords, cookies and recovery codes out of artifacts. They belong only in the owned browser or daemon memory.
 - Run `evidence --run RUN_ID`, then `cleanup --run RUN_ID`, even after failure. Confirm the evidence survives cleanup.
-- Recipes are mapped until their own execution artifacts prove them. The required initial end-to-end execution covers the ledger feature only.
+- Recipes are mapped until their own execution artifacts prove them. Keep the sequential run and each isolated run's actual command results; a successful ledger drive does not prove another recipe.
 
 ## Features
 

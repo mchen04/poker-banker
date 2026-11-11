@@ -8,6 +8,8 @@ import { addPlayer, newSession, openMoney, call } from '../../../../e2e/helpers'
 import type { SessionState } from '../../../../src/domain/session';
 
 export async function ledger({ page, runId, evidence, step, checkState }: RecipeContext) {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   const tag = `${runId.slice(-8)}-${randomUUID().slice(0, 6)}`;
   const session = await newSession(page, `Verify ledger ${tag}`);
   const player = await addPlayer(page, `Ledger Justin ${tag}`);
