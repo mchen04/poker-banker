@@ -4,7 +4,7 @@ import type { Rational } from '../../domain/rational';
 import { formatRational, formatSquareRoot as formatSquareRootForReport } from '../../domain/rational';
 import type { PlayerState, SessionSettings } from '../../domain/session';
 import { api, draftKey } from '../data';
-import { currencyDecimal, duration, ErrorText, money, resultMoney, resultCurrencyDecimal, resultNumber, sessionLabel, Sheet, useClient, useDraft, useFormBusy } from './common';
+import { currencyDecimal, duration, DraftRecovery, ErrorText, money, resultMoney, resultCurrencyDecimal, resultNumber, sessionLabel, Sheet, useClient, useDraft, useFormBusy } from './common';
 
 type CurrencyResult = { currency: string; result_minor: string };
 type Outstanding = { currency: string; owed_to_banker_minor: string; owed_by_banker_minor: string };
@@ -90,9 +90,10 @@ function RenameForm({ player, saved }: { player: { id: string; display_name: str
   const [error, setError] = useState('');
   useFormBusy(busy);
   if (!draft.ready) return draft.error ? <ErrorText text={draft.error} /> : <p>Restoring draft…</p>;
+  if (draft.submitted) return <DraftRecovery pending={busy} recover={() => draft.reconcile()} recovered={() => saved()} />;
   return <form onSubmit={event => {
     event.preventDefault(); if (busy) return; setBusy(true); setError('');
-    void api(`/api/players/${player.id}`, 'PATCH', { op_id: draft.value.op_id, display_name: draft.value.name })
-      .then(async () => { await draft.clear(); saved(); }).catch(problem => { setError(problem.message); setBusy(false); });
+    void draft.submit(`/api/players/${player.id}`, { op_id: draft.value.op_id, display_name: draft.value.name }, 'PATCH')
+      .then(async () => { saved(); }).catch(problem => { setError(problem.message); setBusy(false); });
   }}><label>Player name<input value={draft.value.name} onChange={event => draft.update({ ...draft.value, name: event.target.value })} required /></label><ErrorText text={error || draft.error} /><button className="primary wide" disabled={busy}>Save name</button></form>;
 }

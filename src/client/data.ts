@@ -21,7 +21,11 @@ export type OutboxItem = {
   next_attempt_at: number;
   lease_until?: number;
 };
-type DraftRecord = { key: string; value: unknown; banker_id: string; updated_at: number };
+export type DraftRequest = { path: string; method: string; body: Record<string, unknown> };
+export type SubmittedDraft = { key: string; form: string; request: DraftRequest };
+type DraftValue = Record<string, unknown> & { __submitted?: DraftRequest };
+type DraftRecord = { key: string; value: unknown; banker_id: string; updated_at: number; kind?: 'acknowledged_operation' };
+const acknowledgedKey = (key: string, request: DraftRequest) => `${key.split('/')[0]}/_operations/confirmed/${String(request.body.op_id)}`;
 type SnapshotRecord = { key: string; banker_id: string; state: SessionState };
 let database: Promise<IDBDatabase> | undefined;
 const draftWrites = new Map<string, Promise<void>>();
@@ -92,22 +96,6 @@ async function all<T>(name: string): Promise<T[]> {
   const transaction = db.transaction(name, 'readonly');
   return req(transaction.objectStore(name).getAll()) as Promise<T[]>;
 }
-async function put(name: string, value: unknown): Promise<void> {
-  const db = await storage();
-  const transaction = db.transaction(name, 'readwrite');
-  const done = complete(transaction);
-  transaction.objectStore(name).put(value);
-  await done;
-  changed();
-}
-async function remove(name: string, key: string): Promise<void> {
-  const db = await storage();
-  const transaction = db.transaction(name, 'readwrite');
-  const done = complete(transaction);
-  transaction.objectStore(name).delete(key);
-  await done;
-  changed();
-}
 async function http<T>(path: string, method: string, body: unknown, consume: (response: Response) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15000);
@@ -152,9 +140,88 @@ function draftWrite(key: string, action: () => Promise<void>): Promise<void> {
 export function writeDraft(key: string, value: unknown): Promise<void> {
   const banker = key.split('/')[0]!;
   const epoch = generation(banker);
-  return draftWrite(key, () => generation(banker) === epoch ? put('drafts', { key, banker_id: banker, value, updated_at: Date.now() } satisfies DraftRecord) : Promise.resolve());
+  return draftWrite(key, async () => {
+    if (generation(banker) !== epoch) return;
+    const db = await storage();
+    const transaction = db.transaction('drafts', 'readwrite');
+    const done = complete(transaction);
+    const store = transaction.objectStore('drafts');
+    const existing = await req(store.get(key)) as DraftRecord | undefined;
+    if (!(existing?.value as DraftValue | undefined)?.__submitted) store.put({ key, banker_id: banker, value, updated_at: Date.now() } satisfies DraftRecord);
+    await done; changed();
+  });
 }
-export function deleteDraft(key: string): Promise<void> { return draftWrite(key, () => remove('drafts', key)); }
+export function deleteDraft(key: string): Promise<void> {
+  return draftWrite(key, async () => {
+    const db = await storage();
+    const transaction = db.transaction('drafts', 'readwrite');
+    const done = complete(transaction);
+    const store = transaction.objectStore('drafts');
+    const existing = await req(store.get(key)) as DraftRecord | undefined;
+    if ((existing?.value as DraftValue | undefined)?.__submitted) { await done; throw new Error('Check the saved result before discarding this submitted form'); }
+    store.delete(key); await done; changed();
+  });
+}
+export async function prepareDraftSubmission<T extends object>(key: string, value: T, request: DraftRequest) {
+  const banker = key.split('/')[0]!;
+  const epoch = generation(banker);
+  await draftWrites.get(key);
+  const db = await storage();
+  if (generation(banker) !== epoch) throw new Error('Account changed. Sign in to check this form.');
+  const transaction = db.transaction('drafts', 'readwrite');
+  const done = complete(transaction);
+  const store = transaction.objectStore('drafts');
+  const existing = await req(store.get(key)) as DraftRecord | undefined;
+  const previous = (existing?.value as DraftValue | undefined)?.__submitted;
+  const acknowledged = await req(store.get(acknowledgedKey(key, request))) as DraftRecord | undefined;
+  const priorRequest = (acknowledged?.value as { request: DraftRequest } | undefined)?.request;
+  if (!previous && priorRequest && JSON.stringify(priorRequest) !== JSON.stringify(request)) {
+    const fresh = { ...value, op_id: crypto.randomUUID() };
+    store.put({ key, banker_id: banker, value: fresh, updated_at: Date.now() } satisfies DraftRecord);
+    await done; changed();
+    return { request, first: false, value: fresh, previouslyConfirmed: true };
+  }
+  const selected = previous ?? priorRequest ?? structuredClone(request);
+  const next = previous ? existing!.value as T & { __submitted: DraftRequest } : { ...value, __submitted: selected };
+  if (!previous) store.put({ key, banker_id: banker, value: next, updated_at: Date.now() } satisfies DraftRecord);
+  await done; changed();
+  return { request: selected, first: !previous && !priorRequest, value: next, previouslyConfirmed: false };
+}
+async function finishDraftSubmission(key: string, request: DraftRequest, replacement?: object, acknowledge = false, expectedGeneration?: number) {
+  const db = await storage();
+  if (expectedGeneration !== undefined && generation(key.split('/')[0]!) !== expectedGeneration) throw new Error('Account changed. Sign in to check this form.');
+  const transaction = db.transaction('drafts', 'readwrite');
+  const done = complete(transaction);
+  const store = transaction.objectStore('drafts');
+  const existing = await req(store.get(key)) as DraftRecord | undefined;
+  const previous = (existing?.value as DraftValue | undefined)?.__submitted;
+  const matched = existing?.banker_id === key.split('/')[0] && !!previous && JSON.stringify(previous) === JSON.stringify(request);
+  if (matched) {
+    if (acknowledge) store.put({ key: acknowledgedKey(key, request), banker_id: key.split('/')[0]!, kind: 'acknowledged_operation', value: { request }, updated_at: Date.now() } satisfies DraftRecord);
+    if (replacement) store.put({ ...existing, value: replacement, updated_at: Date.now() });
+    else store.delete(key);
+  }
+  await done; changed();
+  return matched;
+}
+export async function releaseRejectedDraft(key: string, request: DraftRequest, value: object) { if (!await finishDraftSubmission(key, request, value)) throw new Error('This submitted form was cleared in another tab. Check your signed-in account.'); }
+export async function listSubmittedDrafts(banker: string): Promise<SubmittedDraft[]> {
+  return (await all<DraftRecord>('drafts')).filter(record => record.banker_id === banker).flatMap(record => {
+    const request = (record.value as DraftValue | null)?.__submitted;
+    return request ? [{ key: record.key, form: record.key.split('/')[2] ?? 'form', request }] : [];
+  });
+}
+export async function replaySubmittedDraft<T>(key: string): Promise<T> {
+  const epoch = generation(key.split('/')[0]!);
+  const value = await readDraft<DraftValue>(key);
+  const request = value?.__submitted;
+  if (!request || !request.path.startsWith('/api/') || !['POST', 'PATCH'].includes(request.method)) throw new Error('There is no submitted form to check');
+  const identity = await api<{ banker: Banker }>('/api/auth/me');
+  if (identity.banker.id !== key.split('/')[0]) throw new Error('Account changed. Sign in to check this form.');
+  const result = await api<T>(request.path, request.method, request.body);
+  if (!await finishDraftSubmission(key, request, undefined, true, epoch)) throw new Error('This submitted form was cleared in another tab. Check your signed-in account.');
+  return result;
+}
 async function flushOnlyDrafts(): Promise<void> {
   while (draftWrites.size) await Promise.all([...draftWrites.values()]);
 }
@@ -269,7 +336,7 @@ export async function discardItem(op: string, acceptMayExist = false): Promise<v
 }
 export async function hasUnsent(banker: string): Promise<boolean> {
   await flushDraftWrites();
-  return (await listOutbox(banker)).length > 0 || (await all<DraftRecord>('drafts')).some(record => record.banker_id === banker);
+  return (await listOutbox(banker)).length > 0 || (await all<DraftRecord>('drafts')).some(record => record.banker_id === banker && record.kind !== 'acknowledged_operation');
 }
 export async function clearBankerData(banker: string): Promise<void> {
   generations.set(banker, generation(banker) + 1);

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { EntryKind, LedgerEntry, PaymentMethod, PlayerState, SessionState } from '../../domain/session';
 import { currencyExponent, parseMoney } from '../../domain/money';
 import { api, draftKey, enqueue } from '../data';
-import { decimal, duration, entryLabels, ErrorText, methodLabel, money, resultCurrencyDecimal, resultMoney, resultNumber, Sheet, useClient, useDraft, useFormBusy } from './common';
+import { decimal, duration, entryLabels, DraftRecovery, ErrorText, methodLabel, money, resultCurrencyDecimal, resultMoney, resultNumber, Sheet, useClient, useDraft, useFormBusy } from './common';
 
 type RosterPlayer = { id: string; display_name: string };
 export type DisplayMode = 'total' | 'hourly' | 'blinds';
@@ -138,7 +138,7 @@ export function MoneySheet({ title, playerId, kind: initialKind }: { title: stri
     <details><summary>Record an earlier time or note</summary><label>Entry time<input type="datetime-local" step="1" value={draft.value.occurred_at} onChange={event => draft.update({ ...draft.value, occurred_at: event.target.value })} /></label>{initialKind !== 'expense' && <label>Note<input value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}</details><ErrorText text={error || draft.error} /><p className="hint">Only confirmed entries change the totals.</p></div><footer className="money-actions"><button className="primary wide" disabled={saving || !draft.ready}>{saving ? 'Saving…' : 'Save entry'}</button></footer></form>}</Sheet>;
 }
 export function AddPlayerSheet() {
-  const { banker, state, mutate, open } = useClient();
+  const { banker, state, open } = useClient();
   const savedSearch = useDraft(draftKey(banker!.id, state!.session.id, 'add-player'), { op_id: crypto.randomUUID(), search: '' });
   const search = savedSearch.value.search;
   const setSearch = (search: string) => savedSearch.update({ ...savedSearch.value, search });
@@ -149,16 +149,17 @@ export function AddPlayerSheet() {
   useEffect(() => { let active = true; void api<{ players: RosterPlayer[] }>(`/api/players?q=${encodeURIComponent(search)}`).then(result => { if (active) setPlayers(result.players); }).catch(error => setError(error.message)); return () => { active = false; }; }, [search]);
   async function add(body: Record<string, unknown>) {
     if (busy) return; setBusy(true); setError('');
-    try { await mutate(`/api/sessions/${state!.session.id}/players`, { op_id: savedSearch.value.op_id, ...body }); await savedSearch.clear(); open(null); }
+    try { await savedSearch.submit(`/api/sessions/${state!.session.id}/players`, { op_id: savedSearch.value.op_id, ...body }, 'POST'); open(null); }
     catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not add player'); setBusy(false); }
   }
   const exact = players.some(player => player.display_name.trim().toLowerCase() === search.trim().toLowerCase());
   const [confirmed, setConfirmed] = useState(false);
   if (!savedSearch.ready) return savedSearch.error ? <ErrorText text={savedSearch.error} /> : <p>Restoring draft…</p>;
+  if (savedSearch.submitted) return <DraftRecovery pending={busy} recover={() => savedSearch.reconcile()} recovered={() => open(null)} />;
   return <><label>Search players<input defaultValue={search} onChange={event => { setSearch(event.target.value); setConfirmed(false); }} placeholder="Name" /></label><p className="hint">Choose an existing player to keep their history together.</p><ul className="choice-list">{players.map(player => <li key={player.id}><button disabled={busy || state!.players.some(seated => seated.id === player.id)} onClick={() => { void add({ player_id: player.id }); }}>{player.display_name}{state!.players.some(seated => seated.id === player.id) ? ' · Already seated' : ''}</button></li>)}</ul>{search.trim() && <>{exact && <><p className="warning">An exact name match already exists. Add the existing player unless this is a different person.</p><label className="check"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />This is a different person</label></>}<button className="primary wide" disabled={busy || (exact && !confirmed)} onClick={() => { void add({ new_player_name: search.trim() }); }}>Add '{search.trim()}' as new</button></>}<ErrorText text={error} /></>;
 }
 export function CorrectionSheet({ entryId }: { entryId: string }) {
-  const { banker, state, mutate, open } = useClient();
+  const { banker, state, open } = useClient();
   const entry = state!.entries.find(row => row.id === entryId)!;
   const draft = useDraft(draftKey(banker!.id, state!.session.id, 'correction', entryId), { op_id: crypto.randomUUID(), amount: decimal(entry.amount_minor, state!.session.currency), method: entry.method ?? 'cash', time: '' });
   const { amount, method, time } = draft.value;
@@ -180,10 +181,10 @@ export function CorrectionSheet({ entryId }: { entryId: string }) {
         if (payment) body.replacement_method = method;
         if (time) body.replacement_occurred_at = new Date(time).toISOString();
       }
-      await mutate(`/api/sessions/${state!.session.id}/entries/${entryId}/void`, body);
-      await draft.clear(); open(null);
+      await draft.submit(`/api/sessions/${state!.session.id}/entries/${entryId}/void`, body, 'POST'); open(null);
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not correct entry'); setBusy(false); }
   }
   if (!draft.ready) return draft.error ? <ErrorText text={draft.error} /> : <p>Restoring draft…</p>;
+  if (draft.submitted) return <DraftRecovery pending={busy} recover={() => draft.reconcile()} recovered={() => open(null)} />;
   return <form onSubmit={event => { event.preventDefault(); void save(true); }}><p>{entryLabels[entry.kind]} · {money(entry.amount_minor, state!.session.currency)}{entry.method ? ` · ${methodLabel(entry.method)}` : ''}</p><p>The original stays in the ledger, marked Voided, with a replacement alongside it.</p><label>Replacement amount<input inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} required /></label>{payment && <PaymentMethods label="Replacement method" value={method} change={setMethod} />}<label>Entry time<input type="datetime-local" step="1" value={time} onChange={event => setTime(event.target.value)} /></label><ErrorText text={error} /><button className="primary wide" disabled={busy}>Save correction</button><button className="danger wide" type="button" disabled={busy} onClick={() => { void save(false); }}>Void entry</button></form>;
 }

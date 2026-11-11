@@ -1,0 +1,169 @@
+import { test, expect } from './fixtures';
+import { addPlayer, call, closeSession, createAccount, current, menu, money, newSession, signOut } from './helpers';
+import type { SessionState } from '../src/domain/session';
+import { readFile } from 'node:fs/promises';
+import ts from 'typescript';
+
+test.use({ serviceWorkers: 'block' });
+
+test('a lost create response reconciles the submitted draft before a fresh session operation', async ({ page }) => {
+  await createAccount(page);
+  const bodies: { op_id: string; name: string }[] = [];
+  let drop = true;
+  await page.route('**/api/sessions', async route => {
+    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    bodies.push(route.request().postDataJSON());
+    if (!drop) { await route.continue(); return; }
+    drop = false;
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    await route.abort('failed');
+  });
+  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  await page.getByLabel('Session name', { exact: true }).fill('First committed game');
+  await page.getByRole('button', { name: 'Create session', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
+  await expect(page.getByLabel('Session name', { exact: true })).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'First committed game', exact: true })).toBeVisible();
+  await newSession(page, 'Second distinct game');
+  expect(bodies).toHaveLength(3);
+  expect(bodies[0]).toEqual(bodies[1]);
+  expect(bodies[2]!.op_id).not.toBe(bodies[0]!.op_id);
+  const response = await page.request.get('/api/sessions');
+  const history = await response.json() as { sessions: { name: string }[] };
+  expect(history.sessions.map(session => session.name).sort()).toEqual(['First committed game', 'Second distinct game']);
+});
+
+test('a committed reopen stays recoverable after reload changes the available lifecycle controls', async ({ page }) => {
+  await createAccount(page);
+  await newSession(page, 'Recover lifecycle');
+  const player = await addPlayer(page, 'Justin');
+  await money(page, player.id, '100');
+  await money(page, player.id, '100', { kind: 'Cash out', paid: true });
+  await closeSession(page);
+  const state = await current(page);
+  const bodies: string[] = [];
+  let drop = true;
+  await page.route(`**/api/sessions/${state.session.id}/reopen`, async route => {
+    bodies.push(route.request().postData()!);
+    if (!drop) { await route.continue(); return; }
+    drop = false;
+    expect((await route.fetch()).status()).toBe(200);
+    await route.abort('failed');
+  });
+  await menu(page, 'Reopen session');
+  await page.getByLabel('Reason', { exact: true }).fill('Review the saved payout');
+  await page.getByRole('button', { name: 'Reopen session', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
+  await page.reload();
+  await page.getByRole('button', { name: 'Check saved form: Reopen session', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toHaveCount(0);
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0]).toBe(bodies[1]);
+  expect((await current(page)).events.filter(event => event.kind === 'reopened')).toHaveLength(1);
+});
+
+test('a committed correction stays recoverable after its original entry becomes voided', async ({ page }) => {
+  await createAccount(page);
+  await newSession(page, 'Recover correction');
+  const player = await addPlayer(page, 'Justin');
+  const state = await money(page, player.id, '100');
+  const original = state.entries.find(entry => entry.kind === 'buy_in')!;
+  const bodies: string[] = [];
+  let drop = true;
+  await page.route(`**/api/sessions/${state.session.id}/entries/${original.id}/void`, async route => {
+    bodies.push(route.request().postData()!);
+    if (!drop) { await route.continue(); return; }
+    drop = false;
+    expect((await route.fetch()).status()).toBe(200);
+    await route.abort('failed');
+  });
+  await page.getByTestId(`entry-${original.id}`).getByRole('button', { name: 'Correct', exact: false }).click();
+  await page.getByLabel('Replacement amount', { exact: true }).fill('200');
+  await page.getByRole('button', { name: 'Save correction', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
+  await page.reload();
+  await page.getByRole('button', { name: 'Check saved form: Entry correction', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toHaveCount(0);
+  expect(bodies).toHaveLength(2); expect(bodies[0]).toBe(bodies[1]);
+  const after = await current(page);
+  expect(after.players[0]!.bought_in_minor).toBe('20000');
+  expect(after.entries).toHaveLength(4);
+});
+
+test('concurrent preparations preserve the first submitted payload and later draft edits cannot overwrite it', async ({ page }) => {
+  const account = await createAccount(page);
+  const source = await readFile('src/client/data.ts', 'utf8');
+  const compile = (value: string) => ts.transpileModule(value, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+  const compiled = compile(source);
+  for (const match of source.matchAll(/from ['"](\.\/[^'"]+)['"]/g)) {
+    const modulePath = match[1]!.slice(2);
+    const dependency = await readFile(`src/client/${modulePath}.ts`, 'utf8');
+    await page.route(`**/${modulePath}`, route => route.fulfill({ contentType: 'text/javascript', body: compile(dependency) }));
+  }
+  await page.route('**/draft-probe.js', route => route.fulfill({ contentType: 'text/javascript', body: compiled }));
+  const result = await page.evaluate(async banker => {
+    const modulePath = '/draft-probe.js';
+    const data = await import(modulePath) as typeof import('../src/client/data');
+    const key = `${banker}/new/new-session/`;
+    const op_id = crypto.randomUUID();
+    const first = { path: '/api/sessions', method: 'POST', body: { op_id, name: 'First snapshot', played_on: '2026-11-10', currency: 'USD' } };
+    const second = { ...first, body: { ...first.body, name: 'Conflicting snapshot' } };
+    await data.writeDraft(key, { op_id, name: 'Typed draft' });
+    const submitted = await Promise.all([data.prepareDraftSubmission(key, { op_id, name: 'First snapshot' }, first), data.prepareDraftSubmission(key, { op_id, name: 'Conflicting snapshot' }, second)]);
+    await data.writeDraft(key, { op_id, name: 'Changed after submission' });
+    const retained = await data.readDraft<{ __submitted: typeof first }>(key);
+    await data.replaySubmittedDraft(key);
+    const cleared = await data.readDraft(key) === undefined;
+    const stale = await data.prepareDraftSubmission(key, { op_id, name: 'Next reviewed intent' }, { ...first, body: { ...first.body, name: 'Next reviewed intent' } });
+    const fresh = await data.readDraft<{ op_id: string; name: string }>(key);
+    await data.prepareDraftSubmission(key, fresh!, { ...first, body: { ...first.body, op_id: fresh!.op_id, name: fresh!.name } });
+    await data.replaySubmittedDraft(key);
+    return { submitted, retained, cleared, stale, fresh, unsent: await data.hasUnsent(banker), originalOp: op_id };
+  }, account.banker.id);
+  expect(result.submitted.map(item => item.first).sort()).toEqual([false, true]);
+  expect(result.submitted[0]!.request).toEqual(result.submitted[1]!.request);
+  expect(result.retained!.__submitted).toEqual(result.submitted[0]!.request);
+  expect(result.cleared).toBe(true);
+  expect(result.stale.previouslyConfirmed).toBe(true);
+  expect(result.fresh!.name).toBe('Next reviewed intent');
+  expect(result.fresh!.op_id).not.toBe(result.originalOp);
+  expect(result.unsent).toBe(false);
+  const history = await call<{ sessions: { name: string }[] }>(page, '/sessions');
+  expect(history.sessions.map(session => session.name).sort()).toEqual(['First snapshot', 'Next reviewed intent']);
+});
+
+test('a late form acknowledgement after another tab signs out cannot restore private local records', async ({ page, context }) => {
+  await createAccount(page);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let committed!: () => void;
+  const committedRequest = new Promise<void>(resolve => { committed = resolve; });
+  await page.route('**/api/sessions', async route => {
+    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    const response = await route.fetch();
+    expect(response.status()).toBe(200); committed();
+    await held; await route.fulfill({ response });
+  });
+  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  await page.getByLabel('Session name', { exact: true }).fill('Held server acknowledgement');
+  await page.getByRole('button', { name: 'Create session', exact: true }).click();
+  await committedRequest;
+  const other = await context.newPage(); await other.goto('/');
+  await expect(other.getByRole('button', { name: 'Players', exact: true })).toBeVisible();
+  await signOut(other);
+  const delivered = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/sessions');
+  release(); await (await delivered).finished();
+  await expect.poll(async () => await page.getByLabel('Username', { exact: true }).isVisible() || await page.getByRole('button', { name: 'Check saved result', exact: true }).isVisible() && await page.getByRole('button', { name: 'Check saved result', exact: true }).isEnabled()).toBe(true);
+  const counts = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const opening = indexedDB.open('poker-banker'); opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
+    const values: number[] = [];
+    for (const name of ['drafts', 'outbox', 'snapshots']) values.push(await new Promise<number>((resolve, reject) => { const reading = db.transaction(name).objectStore(name).count(); reading.onsuccess = () => resolve(reading.result); reading.onerror = () => reject(reading.error); }));
+    db.close(); return values;
+  });
+  expect(counts).toEqual([0, 0, 0]);
+});

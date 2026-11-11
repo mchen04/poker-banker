@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { SessionState } from '../domain/session';
-import { api, clearBankerData, discardItem, outboxUncertain, flushDraftWrites, hasUnsent, listOutbox, listSnapshots, pollSession, readDraft, readSnapshot, requestPersistence, retryItem, storeSnapshot, syncOutbox, type Banker, type OutboxItem } from './data';
+import { api, clearBankerData, discardItem, outboxUncertain, flushDraftWrites, hasUnsent, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, retryItem, storeSnapshot, syncOutbox, type Banker, type OutboxItem, type SubmittedDraft } from './data';
 import { usePwaUpdate } from './pwa';
 import { Auth } from './views/Auth';
 import { AddPlayerSheet, CorrectionSheet, MoneySheet, PlayerSheet, SessionView } from './views/Session';
@@ -17,6 +17,9 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | null>(new URLSearchParams(location.search).get('session'));
   const [state, setState] = useState<SessionState | null>(null);
   const [pending, setPending] = useState<OutboxItem[]>([]);
+  const [submittedForms, setSubmittedForms] = useState<SubmittedDraft[]>([]);
+  const [checkingForm, setCheckingForm] = useState(false);
+  const [formsRevision, setFormsRevision] = useState(0);
   const [sheet, setSheet] = useState<SheetState>(null);
   const [childDialog, setChildDialog] = useState(false);
   const [screen, setScreen] = useState<'workspace' | 'players'>('workspace');
@@ -50,7 +53,7 @@ export function App() {
     epoch.current++;
     stopSync.current?.(); stopSync.current = null;
     activeBanker.current = null; current.current = null; chosen.current = null; initialSession.current = null;
-    setBanker(null); setState(null); setSessionId(null); setSessions([]); setPending([]);
+    setBanker(null); setState(null); setSessionId(null); setSessions([]); setPending([]); setSubmittedForms([]);
     setSheet(null); setChildDialog(false); setFormBusy(false); setNotice(''); setError(''); setScreen('workspace'); setLastUpdated(null);
     if (options.clearIdentity !== false) {
       let stored: Banker | null = null;
@@ -135,7 +138,7 @@ export function App() {
     if (!banker || loggingOut) return;
     const account = banker;
     const generation = epoch.current;
-    const changed = () => { void listOutbox(account.id).then(items => { if (epoch.current === generation) { setPending(items); if (!items.length) setNotice(current => current === 'Not saved yet' ? '' : current); } }).catch(storageFailure); };
+    const changed = () => { void Promise.all([listOutbox(account.id), listSubmittedDrafts(account.id)]).then(([items, forms]) => { if (epoch.current === generation) { setPending(items); setSubmittedForms(forms); if (!items.length) setNotice(current => current === 'Not saved yet' ? '' : current); } }).catch(storageFailure); };
     changed();
     const stop = syncOutbox(account.id, (next, item) => {
       if (epoch.current !== generation) return;
@@ -197,6 +200,24 @@ export function App() {
       throw problem;
     }
   }
+  async function checkSubmittedForm(form: SubmittedDraft) {
+    if (checkingForm || !banker) return;
+    const generation = epoch.current;
+    const account = banker.id;
+    setCheckingForm(true); setError('');
+    try {
+      const result = await replaySubmittedDraft<unknown>(form.key);
+      if (epoch.current !== generation || activeBanker.current?.id !== account) return;
+      if (result && typeof result === 'object' && 'session' in result) {
+        const saved = result as SessionState;
+        update(saved);
+        if (form.form === 'new-session') choose(saved.session.id);
+      }
+      setFormsRevision(value => value + 1);
+      setNotice('Saved form confirmed');
+    } catch (problem) { if (epoch.current === generation) setError(problem instanceof Error ? problem.message : 'Could not check the saved form'); }
+    finally { setCheckingForm(false); }
+  }
   async function signOut() {
     setLoggingOut(true); epoch.current++; stopSync.current?.();
     try {
@@ -241,7 +262,8 @@ export function App() {
     {!sheet && !childDialog && updateBanner}
     {!online && <p className="offline-banner" role="status">Offline. Saved totals are read only. New entries wait to sync.</p>}
     {notice && <div className="notice" role="status" data-testid={notice.startsWith('Saved ') ? 'saved-confirmation' : 'save-status'}>{notice}</div>}<ErrorText text={error} />
-    {viewerToken ? <main className="workspace viewer"><p className="viewer-label">View only, updated {lastUpdated ? new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'when connected'}</p>{state ? <SessionView state={state} viewer /> : !error && <p>Loading shared session…</p>}</main> : screen === 'players' ? <main className="workspace"><PlayersScreen chooseSession={choose} dialogChange={dialogChange} /><section className="account-section" aria-label="Account"><h2>Account</h2><p>{banker?.username}</p><button onClick={() => setSheet({ kind: 'signout' })}>Sign out</button></section></main> : <><div className="session-strip" data-testid="session-strip"><div className="session-tabs" role="tablist" aria-label="Sessions">{tabSessions.map(session => <button key={session.id} ref={session.id === sessionId ? activeSessionTab : undefined} role="tab" aria-selected={session.id === sessionId} data-testid={`session-tab-${session.id}`} onClick={() => choose(session.id)}>{sessionLabel(session)}</button>)}</div><div className="session-actions" data-testid="session-actions"><button onClick={() => setSheet({ kind: 'history' })}>History</button><button onClick={() => setSheet({ kind: 'new' })}>New session</button></div></div><main className="workspace">{state ? <SessionView state={state} /> : !sessionId && <div className="empty welcome"><p className="eyebrow">Ready for game night</p><h1>Start with a session</h1><p>A separate ledger for each game. Your players and history stay together.</p><button className="primary" onClick={() => setSheet({ kind: 'new' })}>Create your first session</button></div>}{pending.filter(item => item.session_id === sessionId).length > 0 && <section className="outbox" aria-label="Unsent entries"><h2>Not saved yet</h2><p>Only server-confirmed entries count in totals. An unconfirmed save may already be included.</p><ul>{pending.filter(item => item.session_id === sessionId).map(item => <li key={item.op_id} data-testid={`pending-${item.op_id}`}><strong>{item.label}</strong><span>{item.status === 'rejected' ? item.error : outboxUncertain(item) ? 'Save not confirmed. This entry may already exist on the server.' : 'Not saved yet'}</span>{(item.status === 'rejected' || outboxUncertain(item)) && <button disabled={item.status === 'sending'} onClick={() => { void retryItem(item.op_id); }}>{outboxUncertain(item) ? 'Check saved entry' : 'Retry'}</button>}<button disabled={item.status === 'sending'} onClick={() => { const accepted = outboxUncertain(item) && window.confirm('This entry may already exist on the server. Discarding it does not undo a saved entry. Re-entering it may record it twice. Discard anyway?'); if (!outboxUncertain(item) || accepted) void discardItem(item.op_id, accepted).catch(problem => setError(problem.message)); }}>Discard</button></li>)}</ul></section>}</main></>}
+    {submittedForms.length > 0 && <section className="outbox" aria-label="Unconfirmed forms"><h2>Unconfirmed forms</h2><p>These forms may already have been saved. Check their saved results before starting another copy.</p><ul>{submittedForms.map(form => <li key={form.key}><button disabled={checkingForm || formBusy} onClick={() => { void checkSubmittedForm(form); }}>Check saved form: {({ 'new-session': 'New session', settings: 'Session settings', reopen: 'Reopen session', timing: 'Correct times', correction: 'Entry correction', 'add-player': 'Add player', rename: 'Rename player' } as Record<string, string>)[form.form] ?? 'Saved form'}</button></li>)}</ul></section>}
+    {viewerToken ? <main className="workspace viewer"><p className="viewer-label">View only, updated {lastUpdated ? new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'when connected'}</p>{state ? <SessionView state={state} viewer /> : !error && <p>Loading shared session…</p>}</main> : screen === 'players' ? <main className="workspace"><PlayersScreen key={formsRevision} chooseSession={choose} dialogChange={dialogChange} /><section className="account-section" aria-label="Account"><h2>Account</h2><p>{banker?.username}</p><button onClick={() => setSheet({ kind: 'signout' })}>Sign out</button></section></main> : <><div className="session-strip" data-testid="session-strip"><div className="session-tabs" role="tablist" aria-label="Sessions">{tabSessions.map(session => <button key={session.id} ref={session.id === sessionId ? activeSessionTab : undefined} role="tab" aria-selected={session.id === sessionId} data-testid={`session-tab-${session.id}`} onClick={() => choose(session.id)}>{sessionLabel(session)}</button>)}</div><div className="session-actions" data-testid="session-actions"><button onClick={() => setSheet({ kind: 'history' })}>History</button><button onClick={() => setSheet({ kind: 'new' })}>New session</button></div></div><main className="workspace">{state ? <SessionView state={state} /> : !sessionId && <div className="empty welcome"><p className="eyebrow">Ready for game night</p><h1>Start with a session</h1><p>A separate ledger for each game. Your players and history stay together.</p><button className="primary" onClick={() => setSheet({ kind: 'new' })}>Create your first session</button></div>}{pending.filter(item => item.session_id === sessionId).length > 0 && <section className="outbox" aria-label="Unsent entries"><h2>Not saved yet</h2><p>Only server-confirmed entries count in totals. An unconfirmed save may already be included.</p><ul>{pending.filter(item => item.session_id === sessionId).map(item => <li key={item.op_id} data-testid={`pending-${item.op_id}`}><strong>{item.label}</strong><span>{item.status === 'rejected' ? item.error : outboxUncertain(item) ? 'Save not confirmed. This entry may already exist on the server.' : 'Not saved yet'}</span>{(item.status === 'rejected' || outboxUncertain(item)) && <button disabled={item.status === 'sending'} onClick={() => { void retryItem(item.op_id); }}>{outboxUncertain(item) ? 'Check saved entry' : 'Retry'}</button>}<button disabled={item.status === 'sending'} onClick={() => { const accepted = outboxUncertain(item) && window.confirm('This entry may already exist on the server. Discarding it does not undo a saved entry. Re-entering it may record it twice. Discard anyway?'); if (!outboxUncertain(item) || accepted) void discardItem(item.op_id, accepted).catch(problem => setError(problem.message)); }}>Discard</button></li>)}</ul></section>}</main></>}
     {sheet && content && (moneySheet ? content : <Sheet key={`${sheet.kind}/${sheet.player ?? ''}/${sheet.entry ?? ''}`} title={title} close={() => setSheet(null)}>{content}</Sheet>)}
   </div></ClientContext.Provider>;
 }
@@ -249,5 +271,5 @@ function SignoutSheet({ banker, busy, signOut }: { banker: Banker; busy: boolean
   const [unsent, setUnsent] = useState<boolean | null>(null);
   const [discard, setDiscard] = useState(false);
   useEffect(() => { void hasUnsent(banker.id).then(setUnsent); }, [banker.id]);
-  return <><p>Signing out clears this account's local drafts and offline snapshots on this device.</p>{unsent && <><p className="warning">You have unsent work. Some entries may already exist on the server. Discarding local work will not undo saved entries. Check saved results first, or explicitly discard it.</p><label className="check"><input type="checkbox" checked={discard} onChange={event => setDiscard(event.target.checked)} />Discard unsent entries and drafts</label></>}<button className="primary wide" disabled={busy || unsent === null || (unsent && !discard)} onClick={() => { void signOut(); }}>{busy ? 'Signing out…' : 'Confirm sign out'}</button></>;
+  return <><p>Signing out clears this account's local drafts and offline snapshots on this device.</p>{unsent && <><p className="warning">You have unsent work. Some entries or forms may already exist on the server. Discarding local work will not undo saved entries. Check saved results first, or explicitly discard it.</p><label className="check"><input type="checkbox" checked={discard} onChange={event => setDiscard(event.target.checked)} />Discard unsent entries and drafts</label></>}<button className="primary wide" disabled={busy || unsent === null || (unsent && !discard)} onClick={() => { void signOut(); }}>{busy ? 'Signing out…' : 'Confirm sign out'}</button></>;
 }

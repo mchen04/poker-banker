@@ -46,8 +46,11 @@ export async function signOut(page: Page) {
   await page.getByRole('button', { name: 'Players', exact: true }).click();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   const discard = page.getByLabel('Discard unsent entries and drafts', { exact: true });
+  const confirm = page.getByRole('button', { name: 'Confirm sign out', exact: true });
+  await expect(confirm).toBeVisible();
+  await expect.poll(async () => await discard.isVisible() || await confirm.isEnabled()).toBe(true);
   if (await discard.isVisible()) await discard.check();
-  await page.getByRole('button', { name: 'Confirm sign out', exact: true }).click();
+  await confirm.click();
   await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
 }
 export async function newSession(page: Page, name: string, testInfo?: TestInfo) {
