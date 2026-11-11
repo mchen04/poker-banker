@@ -58,7 +58,7 @@ type SnapshotRecord = { key: string; banker_id: string; state: SessionState };
 let database: Promise<IDBDatabase> | undefined;
 const draftWrites = new Map<string, Promise<void>>();
 const enqueueWrites = new Set<Promise<OutboxItem | DraftConflict>>();
-type DraftIntent = { value: unknown; revision: number; cursor: DraftCursor; expectedVersion?: string | null; error?: unknown };
+type DraftIntent = { value: unknown; revision: number; cursor: DraftCursor; expectedVersion?: string | null; error?: unknown; observations?: Set<DraftCursor> };
 type DraftConflictNotice = { key: string; value: unknown; error: DraftConflictError; cursor: DraftCursor };
 const draftConflicts = new WeakMap<DraftCursor, DraftConflictNotice>();
 const draftConflictNotifications = new Map<string, DraftConflictNotice>();
@@ -401,12 +401,18 @@ function reserveDraft(cursor: DraftCursor, value?: unknown): DraftReservation {
   return reservation;
 }
 function advanceDraftCursor(cursor: DraftCursor, previous: string | null | undefined, next: string | null, revision?: number): void {
-  if (cursor.version === previous) cursor.version = next;
-  for (const reservation of draftReservations) {
-    if (revision !== undefined && revision <= reservation.throughRevision && reservation.cursor === cursor && reservation.version === previous && (previous === undefined || reservation.value === undefined || draftVersion({ value: reservation.value } as DraftRecord) === next)) reservation.version = next;
+  const intents = new Set([...queuedDraftIntents, ...draftIntents.values()]);
+  const observations = new Set([cursor]);
+  for (const intent of intents) {
+    if (intent.cursor !== cursor || intent.expectedVersion !== previous) continue;
+    for (const observation of intent.observations ?? []) if (observedDraftIntents.get(observation)?.intent === intent) observations.add(observation);
   }
-  for (const intent of new Set([...queuedDraftIntents, ...draftIntents.values()])) {
-    if (intent.cursor === cursor && intent.expectedVersion === previous) intent.expectedVersion = next;
+  for (const observation of observations) if (observation.version === previous) observation.version = next;
+  for (const reservation of draftReservations) {
+    if (revision !== undefined && revision <= reservation.throughRevision && observations.has(reservation.cursor) && reservation.version === previous) reservation.version = next;
+  }
+  for (const intent of intents) {
+    if (observations.has(intent.cursor) && intent.expectedVersion === previous) intent.expectedVersion = next;
   }
 }
 export function acceptDraftConflict(key: string, cursor: DraftCursor, conflict: Pick<DraftConflict, 'value' | 'version'>): void {
@@ -469,7 +475,7 @@ export async function readDraft<T>(key: string, cursor?: DraftCursor, options?: 
       if (options?.includeNext && record!.next_value !== undefined) { observation.submitted = stored!.__submitted; return record!.next_value as T; }
       return record!.value as T;
     }
-    if (intent) observedDraftIntents.set(observation, { key, intent });
+    if (intent) { observedDraftIntents.set(observation, { key, intent }); (intent.observations ??= new Set()).add(observation); }
     else observedDraftIntents.delete(observation);
     observation.version = intent ? intent.expectedVersion : draftVersion(record);
     return (intent ? intent.value : record?.value) as T | undefined;
@@ -485,6 +491,7 @@ export async function readDraft<T>(key: string, cursor?: DraftCursor, options?: 
         operationNotice(key, fresh, intent.expectedVersion ?? null, observation);
       }
       observedDraftIntents.set(observation, { key, intent });
+      (intent.observations ??= new Set()).add(observation);
       observation.version = intent.expectedVersion;
       return intent.value as T;
     }
