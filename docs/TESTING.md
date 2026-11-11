@@ -19,3 +19,10 @@ Emulation does not prove a real iOS Home Screen installation, iOS process suspen
 ## Visual checks
 
 Screenshots are written under ignored `evidence/screenshots/` in phone and desktop projects, in light and dark color schemes. Basic checks reject buttons without accessible names, visible text below 11 px and horizontal page overflow at 375 px. These checks do not replace a complete accessibility audit or a physical-device review.
+
+
+## Vercel production-build check
+
+Round 5 was built from a clean source archive on this Mac with Node 22, a fresh frozen-lockfile install and `vercel build --prod`. Only the explicitly supplied `.vercel/project.json` link metadata was copied; no environment files were copied, read or downloaded. The clean copy received nonsecret local build settings (Vite, `pnpm build`, `pnpm install --frozen-lockfile`, `dist`, Node `22.x`) so the check did not need `vercel pull` or `--yes`. Receipts and exact source/patch hashes are in `evidence/vercel/r5-integrated/`.
+
+`cle1` is the function region. Existing locked optional dependencies now include the Linux ARM64 binding required by the emitted function. Server/domain/API relative imports use explicit `.js` suffixes so the emitted ESM loads under plain Node 22. The artifact check imported the complete handler, loaded bundled `pg`, and hashed/verified Argon2id with zero database queries. It verified the matching Linux GNU ELF binding is present; this Mac cannot prove that binary executes on Linux. No deploy or remote database was used. The mini runner excludes `.vercel/` along with environment files.

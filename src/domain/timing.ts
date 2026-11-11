@@ -1,4 +1,4 @@
-import type { LedgerEntry } from './session';
+import type { LedgerEntry } from './session.js';
 
 export type PlayingInterval = { started_at: string; ended_at: string | null };
 

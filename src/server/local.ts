@@ -3,8 +3,8 @@ import { createServer as createHttpsServer } from 'node:https';
 import { serve } from '@hono/node-server';
 import { compress } from 'hono/compress';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { createApp } from './app';
-import { createPool } from './db';
+import { createApp } from './app.js';
+import { createPool } from './db.js';
 
 const tlsKey = process.env.LOCAL_TLS_KEY;
 const tlsCert = process.env.LOCAL_TLS_CERT;

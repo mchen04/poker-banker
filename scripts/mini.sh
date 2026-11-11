@@ -11,6 +11,7 @@ python3 "$HOME/.local/share/my-ai-skills/main/skills/supervise/scripts/fleetcapa
 ssh mini 'mkdir -p "$HOME/worktrees/poker-banker" "$HOME/tools"'
 rsync -az --delete \
   --exclude='.git/' \
+  --exclude='.vercel/' \
   --exclude='node_modules/' \
   --exclude='dist/' \
   --exclude='.env*' \

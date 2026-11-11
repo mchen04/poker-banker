@@ -42,5 +42,21 @@
     "typescript": "^5.9.3",
     "vite": "^7.2.0",
     "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "supportedArchitectures": {
+      "os": [
+        "current",
+        "linux"
+      ],
+      "cpu": [
+        "current",
+        "arm64"
+      ],
+      "libc": [
+        "current",
+        "glibc"
+      ]
+    }
   }
 }

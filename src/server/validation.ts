@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { currencyExponent, MAX_MINOR } from '../domain/money';
+import { currencyExponent, MAX_MINOR } from '../domain/money.js';
 
 export const id = z.uuid();
 export const opId = z.uuidv4();

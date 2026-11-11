@@ -1,9 +1,9 @@
 import { randomUUID, createHash } from 'node:crypto';
-import type { Database, Transaction } from './db';
-import { transaction } from './db';
-import { conflict, notFound } from './errors';
-import { effectiveEntries } from '../domain/timing';
-import { deriveSession, type LedgerEntry, type PaymentMethod, type SessionEvent, type SessionSettings } from '../domain/session';
+import type { Database, Transaction } from './db.js';
+import { transaction } from './db.js';
+import { conflict, notFound } from './errors.js';
+import { effectiveEntries } from '../domain/timing.js';
+import { deriveSession, type LedgerEntry, type PaymentMethod, type SessionEvent, type SessionSettings } from '../domain/session.js';
 
 type SessionRow = SessionSettings & { banker_id: string; revision: string };
 type Queryable = Pick<Transaction, 'query'>;

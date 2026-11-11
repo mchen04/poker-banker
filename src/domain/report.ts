@@ -1,4 +1,4 @@
-import { add, divide, multiply, rational, subtract, type Rational } from './rational';
+import { add, divide, multiply, rational, subtract, type Rational } from './rational.js';
 
 export type PlayerReportSession = {
   id: string;

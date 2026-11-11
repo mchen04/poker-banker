@@ -1,4 +1,4 @@
-import { effectiveEntries, playingTime, type PlayingInterval } from './timing';
+import { effectiveEntries, playingTime, type PlayingInterval } from './timing.js';
 
 export type EntryKind = 'buy_in' | 'cash_out' | 'payment_in' | 'payment_out' | 'expense';
 export type PaymentMethod = 'cash' | 'venmo' | 'zelle';

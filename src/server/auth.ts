@@ -3,11 +3,11 @@ import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { hash, verify, Algorithm } from '@node-rs/argon2';
 import { z } from 'zod';
-import type { Database, Transaction } from './db';
-import { transaction } from './db';
-import { ApiError } from './errors';
-import type { AppContext, AppEnv, Banker } from './context';
-import { username, password, loginPassword } from './validation';
+import type { Database, Transaction } from './db.js';
+import { transaction } from './db.js';
+import { ApiError } from './errors.js';
+import type { AppContext, AppEnv, Banker } from './context.js';
+import { username, password, loginPassword } from './validation.js';
 
 const lifetime = 180 * 24 * 60 * 60;
 const options = { algorithm: Algorithm.Argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 };
