@@ -74,7 +74,8 @@ it('forces the child after a synchronous dispatch failure', async () => {
 it('uses a process group only when explicitly requested', async () => {
   vi.useFakeTimers();
   const { child, kill } = ownedProcess();
-  const groupKill = vi.spyOn(process, 'kill').mockImplementation(() => {
+  const groupKill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+    if (signal === 0) throw Object.assign(new Error('No owned group'), { code: 'ESRCH' });
     Object.assign(child, { signalCode: 'SIGKILL' });
     child.emit('exit', null, 'SIGKILL');
     return true;
@@ -82,8 +83,58 @@ it('uses a process group only when explicitly requested', async () => {
   const rejection = expect(stopOwnedProcess(child, 'ipc', true)).rejects.toThrow('SIGKILL');
   await vi.advanceTimersByTimeAsync(SHUTDOWN_GRACE_MS);
   await rejection;
-  expect(groupKill).toHaveBeenCalledExactlyOnceWith(-12345, 'SIGKILL');
+  expect(groupKill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([[-12345, 'SIGKILL']]);
   expect(kill).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('bounds group disappearance after a wrapper exits and stops polling after the deadline', async () => {
+  vi.useFakeTimers();
+  const { child, send } = ownedProcess();
+  send.mockImplementation(() => {
+    Object.assign(child, { exitCode: 1 });
+    child.emit('exit', 1, null);
+  });
+  const groupKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+  const rejected = expect(stopOwnedProcess(child, 'ipc', true)).rejects.toThrow('Owned process exited 1; Owned process group exit exceeded shutdown deadline');
+  await vi.advanceTimersByTimeAsync(SHUTDOWN_GRACE_MS);
+  await rejected;
+  await vi.runAllTimersAsync();
+  expect(groupKill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([[-12345, 'SIGKILL']]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('accepts an already-gone owned group without signalling a different process', async () => {
+  const { child, send } = ownedProcess();
+  send.mockImplementation(() => {
+    Object.assign(child, { exitCode: 0 });
+    child.emit('exit', 0, null);
+  });
+  const groupKill = vi.spyOn(process, 'kill').mockImplementation(() => {
+    throw Object.assign(new Error('No owned group'), { code: 'ESRCH' });
+  });
+  await expect(stopOwnedProcess(child, 'ipc', true)).resolves.toBeUndefined();
+  expect(groupKill).toHaveBeenCalledExactlyOnceWith(-12345, 0);
+});
+
+it('waits through a transient permission result while its killed group disappears', async () => {
+  vi.useFakeTimers();
+  const { child, send } = ownedProcess();
+  send.mockImplementation(() => {
+    Object.assign(child, { exitCode: 1 });
+    child.emit('exit', 1, null);
+  });
+  let checks = 0;
+  const groupKill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+    if (signal !== 0) return true;
+    checks++;
+    if (checks === 1) return true;
+    throw Object.assign(new Error('Owned group state'), { code: checks === 2 ? 'EPERM' : 'ESRCH' });
+  });
+  const rejected = expect(stopOwnedProcess(child, 'ipc', true)).rejects.toThrow('Owned process exited 1; Owned process group required SIGKILL');
+  await vi.advanceTimersByTimeAsync(10);
+  await rejected;
+  expect(groupKill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([[-12345, 'SIGKILL']]);
   expect(vi.getTimerCount()).toBe(0);
 });
 

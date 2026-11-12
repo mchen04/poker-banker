@@ -31,6 +31,7 @@ export function stopOwnedProcess(child: ChildProcess, mode: 'ipc' | 'signal' = '
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => resolveExit({ code, signal });
     const onError = (error: Error) => resolveError(error);
     let sentSignal = false;
+    let groupKillSent = false;
     let acceptingDispatch = true;
     child.once('exit', onExit);
     child.on('error', onError);
@@ -39,6 +40,32 @@ export function stopOwnedProcess(child: ChildProcess, mode: 'ipc' | 'signal' = '
       sentSignal = child.kill('SIGTERM');
       if (!sentSignal && running()) throw new Error('Owned process could not receive SIGTERM');
     };
+    const groupExists = () => {
+      try { process.kill(-child.pid!, 0); return true; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+        if ((error as NodeJS.ErrnoException).code === 'EPERM') return true;
+        throw error;
+      }
+    };
+    const finishGroup = async () => {
+      if (!groupExists()) return false;
+      const forced = !groupKillSent;
+      if (forced) {
+        try {
+          if (!process.kill(-child.pid!, 'SIGKILL')) throw new Error('Owned process group could not receive SIGKILL');
+          groupKillSent = true;
+        } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+      }
+      let waiting = true;
+      try {
+        await withShutdownDeadline('Owned process group exit', async () => {
+          while (waiting && groupExists()) await new Promise<void>(resolve => setTimeout(resolve, 10));
+        });
+      } finally { waiting = false; }
+      return forced;
+    };
+    let stopError: unknown;
     try {
       let result: Exit;
       try {
@@ -65,6 +92,7 @@ export function stopOwnedProcess(child: ChildProcess, mode: 'ipc' | 'signal' = '
         let killFailure = '';
         try {
           const killed = processGroup ? process.kill(-child.pid, 'SIGKILL') : child.kill('SIGKILL');
+          if (processGroup && killed) groupKillSent = true;
           if (!killed) killFailure = '; SIGKILL could not be sent';
         } catch (killError) {
           killFailure = `; SIGKILL failed: ${killError instanceof Error ? killError.message : String(killError)}`;
@@ -79,10 +107,21 @@ export function stopOwnedProcess(child: ChildProcess, mode: 'ipc' | 'signal' = '
         acceptingDispatch = false;
       }
       if (result.code !== 0 && !(sentSignal && result.signal === 'SIGTERM')) throw new Error(`Owned process exited ${result.code ?? result.signal}`);
+    } catch (error) {
+      stopError = error;
     } finally {
       child.removeListener('exit', onExit);
       child.removeListener('error', onError);
     }
+    if (processGroup) {
+      try {
+        if (await finishGroup()) throw new Error('Owned process group required SIGKILL after wrapper exit');
+      } catch (error) {
+        if (stopError) throw new Error(`${stopError instanceof Error ? stopError.message : String(stopError)}; ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
+    }
+    if (stopError) throw stopError;
   });
   stopping.set(child, pending);
   return pending;
