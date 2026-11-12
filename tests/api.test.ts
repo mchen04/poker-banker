@@ -8,7 +8,7 @@ import { migrate } from '../scripts/migrate';
 let database: Awaited<ReturnType<typeof testDatabase>>;
 let app: ReturnType<typeof createApp>;
 const origin = 'https://poker.test';
-const secret = 'a-secure-home-game-password';
+const secret = randomUUID();
 const errors: unknown[] = [];
 type Account = { banker: { id: string; username: string }; recovery_codes: string[]; cookie: string; ip: string };
 type History = { player: { id: string; display_name: string }; cumulative: { currency: string; result_minor: string }[]; outstanding: { currency: string; owed_to_banker_minor: string; owed_by_banker_minor: string }[]; sessions: unknown[] };
@@ -90,18 +90,18 @@ describe('accounts and recovery', () => {
   });
   it('rejects wrong passwords and locks a username after five failures even across IPs', async () => {
     const account = await signup();
-    for (let i = 1; i <= 5; i++) await error(await request('/auth/login', 'POST', { username: account.banker.username, password: 'wrong' }, { cookie: '', ip: randomUUID() }), i === 5 ? 429 : 401);
+    for (let i = 1; i <= 5; i++) await error(await request('/auth/login', 'POST', { username: account.banker.username, password: `invalid-${randomUUID()}` }, { cookie: '', ip: randomUUID() }), i === 5 ? 429 : 401);
     await error(await request('/auth/login', 'POST', { username: account.banker.username, password: secret }, { cookie: '', ip: randomUUID() }), 429, 'auth_locked');
     const locked = await database.pool.query('SELECT failures, locked_until > now() AS locked FROM login_throttle WHERE key = $1', [`username:${account.banker.username}`]);
     expect(locked.rows[0]).toEqual({ failures: 5, locked: true });
     await database.pool.query("UPDATE login_throttle SET locked_until = now() - interval '1 second', window_started_at = now() - interval '16 minutes' WHERE key = $1", [`username:${account.banker.username}`]);
-    for (let i = 0; i < 5; i++) await request('/auth/login', 'POST', { username: account.banker.username, password: 'wrong' }, { cookie: '', ip: randomUUID() });
+    for (let i = 0; i < 5; i++) await request('/auth/login', 'POST', { username: account.banker.username, password: `invalid-${randomUUID()}` }, { cookie: '', ip: randomUUID() });
     const doubled = await database.pool.query("SELECT failures, locked_until > now() + interval '29 minutes' AS doubled FROM login_throttle WHERE key = $1", [`username:${account.banker.username}`]);
     expect(doubled.rows[0]).toEqual({ failures: 10, doubled: true });
   });
   it('locks an IP across unknown usernames and uses the same credential error', async () => {
     const ip = randomUUID();
-    for (let i = 0; i < 5; i++) await error(await request('/auth/login', 'POST', { username: `unknown-${randomUUID().slice(0, 8)}`, password: 'wrong' }, { cookie: '', ip }), i === 4 ? 429 : 401, i === 4 ? 'auth_locked' : 'invalid_credentials');
+    for (let i = 0; i < 5; i++) await error(await request('/auth/login', 'POST', { username: `unknown-${randomUUID().slice(0, 8)}`, password: `invalid-${randomUUID()}` }, { cookie: '', ip }), i === 4 ? 429 : 401, i === 4 ? 'auth_locked' : 'invalid_credentials');
     const account = await signup();
     await error(await request('/auth/login', 'POST', { username: account.banker.username, password: secret }, { cookie: '', ip }), 429);
   });
@@ -110,17 +110,18 @@ describe('accounts and recovery', () => {
     const login = await request('/auth/login', 'POST', { username: account.banker.username, password: secret }, account);
     await ok(login);
     const second = { ...account, cookie: login.headers.get('set-cookie')!.split(';')[0]! };
-    const recovered = await request('/auth/recover', 'POST', { username: account.banker.username, recovery_code: account.recovery_codes[0], new_password: 'new-secure-home-password' }, account);
+    const newPassword = randomUUID();
+    const recovered = await request('/auth/recover', 'POST', { username: account.banker.username, recovery_code: account.recovery_codes[0], new_password: newPassword }, account);
     expect(await ok(recovered)).toEqual({ banker: account.banker });
     for (const session of [account, second]) await error(await request('/auth/me', 'GET', undefined, session), 401);
     expect((await database.pool.query('SELECT id FROM auth_sessions WHERE banker_id = $1', [account.banker.id])).rowCount).toBe(0);
     await error(await request('/auth/recover', 'POST', { username: account.banker.username, recovery_code: account.recovery_codes[0], new_password: secret }, account), 401);
     await error(await request('/auth/login', 'POST', { username: account.banker.username, password: secret }, account), 401);
-    await ok(await request('/auth/login', 'POST', { username: account.banker.username, password: 'new-secure-home-password' }, account));
+    await ok(await request('/auth/login', 'POST', { username: account.banker.username, password: newPassword }, account));
   });
   it('consumes one recovery code only once under concurrent recovery', async () => {
     const account = await signup();
-    const payload = { username: account.banker.username, recovery_code: account.recovery_codes[0], new_password: 'concurrent-new-password' };
+    const payload = { username: account.banker.username, recovery_code: account.recovery_codes[0], new_password: randomUUID() };
     const responses = await Promise.all([request('/auth/recover', 'POST', payload, account), request('/auth/recover', 'POST', payload, account)]);
     expect(responses.map(response => response.status).sort()).toEqual([200, 401]);
     const used = await database.pool.query('SELECT id FROM recovery_codes WHERE banker_id = $1 AND used_at IS NOT NULL', [account.banker.id]);
@@ -128,14 +129,15 @@ describe('accounts and recovery', () => {
   });
   it('requires the current password for code regeneration and password change', async () => {
     const account = await signup();
-    await error(await request('/auth/recovery-codes', 'POST', { password: 'wrong' }, account), 401);
+    const newPassword = randomUUID();
+    await error(await request('/auth/recovery-codes', 'POST', { password: `invalid-${randomUUID()}` }, account), 401);
     const regenerated = await ok<{ recovery_codes: string[] }>(await request('/auth/recovery-codes', 'POST', { password: secret }, account));
     expect(regenerated.recovery_codes).toHaveLength(10);
-    await error(await request('/auth/recover', 'POST', { username: account.banker.username, recovery_code: account.recovery_codes[0], new_password: 'a-new-secure-password' }, account), 401);
-    await error(await request('/auth/password', 'POST', { current_password: 'wrong', new_password: 'a-new-secure-password' }, account), 401);
-    await ok(await request('/auth/password', 'POST', { current_password: secret, new_password: 'a-new-secure-password' }, account));
+    await error(await request('/auth/recover', 'POST', { username: account.banker.username, recovery_code: account.recovery_codes[0], new_password: newPassword }, account), 401);
+    await error(await request('/auth/password', 'POST', { current_password: `invalid-${randomUUID()}`, new_password: newPassword }, account), 401);
+    await ok(await request('/auth/password', 'POST', { current_password: secret, new_password: newPassword }, account));
     await error(await request('/auth/login', 'POST', { username: account.banker.username, password: secret }, account), 401);
-    await ok(await request('/auth/login', 'POST', { username: account.banker.username, password: 'a-new-secure-password' }, account));
+    await ok(await request('/auth/login', 'POST', { username: account.banker.username, password: newPassword }, account));
     await ok(await request('/auth/logout', 'POST', {}, account));
     await error(await request('/auth/me', 'GET', undefined, account), 401);
   });

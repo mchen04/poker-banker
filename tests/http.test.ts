@@ -28,7 +28,7 @@ it('serves real HTTP via the Vercel Node adapter and preserves secure cookies', 
   const username = `http-${randomUUID().slice(0, 12)}`;
   const response = await fetch(`${url}/api/auth/signup`, {
     method: 'POST', headers: { origin: url, 'content-type': 'application/json' },
-    body: JSON.stringify({ username, password: 'a-secure-http-password' }),
+    body: JSON.stringify({ username, password: randomUUID() }),
   });
   expect(response.status).toBe(200);
   const cookie = response.headers.get('set-cookie')!;
@@ -45,7 +45,7 @@ it('checks the HTTPS Origin behind Vercel TLS termination', async () => {
   const previous = process.env.VERCEL;
   process.env.VERCEL = '1';
   try {
-    const body = JSON.stringify({ username: `tls-${randomUUID().slice(0, 12)}`, password: 'a-secure-http-password' });
+    const body = JSON.stringify({ username: `tls-${randomUUID().slice(0, 12)}`, password: randomUUID() });
     const response = await fetch(`${url}/api/auth/signup`, { method: 'POST', headers: { origin: url.replace('http:', 'https:'), 'content-type': 'application/json' }, body });
     expect(response.status).toBe(200);
     const rejected = await fetch(`${url}/api/auth/signup`, { method: 'POST', headers: { origin: url, 'content-type': 'application/json' }, body });
@@ -60,7 +60,7 @@ it('throttles the socket IP even if a client spoofs X-Forwarded-For', async () =
   for (let i = 0; i < 5; i++) {
     const response = await fetch(`${url}/api/auth/login`, {
       method: 'POST', headers: { origin: url, 'content-type': 'application/json', 'x-forwarded-for': `192.0.2.${i}` },
-      body: JSON.stringify({ username: `missing-${randomUUID().slice(0, 12)}`, password: 'invalid-password' }),
+      body: JSON.stringify({ username: `missing-${randomUUID().slice(0, 12)}`, password: randomUUID() }),
     });
     expect(response.status).toBe(i === 4 ? 429 : 401);
   }

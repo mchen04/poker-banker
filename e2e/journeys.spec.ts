@@ -6,6 +6,7 @@ import { addPlayer, call, closeSession, createAccount, current, fixtureSession, 
 test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
   const user = await createAccount(page, testInfo);
   const signupCookie = (await page.context().cookies()).find(cookie => cookie.name === 'pb_session')!;
+  const recoveredPassword = randomUUID();
   await signOut(page);
   expect((await page.context().cookies()).find(cookie => cookie.name === 'pb_session')).toEqual(signupCookie);
   expect((await page.request.get('/api/auth/me')).status()).toBe(401);
@@ -28,17 +29,17 @@ test('account signup acknowledgement, sign-in and one-use recovery revoke old co
     await recover.getByRole('button', { name: 'Recover account', exact: true }).click();
     await typeInput(recover.getByLabel('Username', { exact: true }), user.username);
     await typeInput(recover.getByLabel('Recovery code', { exact: true }), user.codes[0]!);
-    await typeInput(recover.getByLabel('New password', { exact: true }), 'a-new-browser-game-password');
+    await typeInput(recover.getByLabel('New password', { exact: true }), recoveredPassword);
     await screen(recover, testInfo, 'recover');
     await recover.getByRole('button', { name: 'Reset password', exact: true }).click();
     await expect(recover.getByText('Password reset. Sign in with your new password.', { exact: true })).toBeVisible();
-    const reused = await recover.request.post('/api/auth/recover', { headers: { origin: new URL(recover.url()).origin }, data: { username: user.username, recovery_code: user.codes[0], new_password: 'another-browser-game-password' } });
+    const reused = await recover.request.post('/api/auth/recover', { headers: { origin: new URL(recover.url()).origin }, data: { username: user.username, recovery_code: user.codes[0], new_password: randomUUID() } });
     expect(reused.status()).toBe(401);
     expect((await old.request.get(`${baseURL}/api/auth/me`)).status()).toBe(401);
     await page.bringToFront();
     await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
     await typeInput(page.getByLabel('Username', { exact: true }), user.username);
-    await typeInput(page.getByLabel('Password', { exact: true }), 'a-new-browser-game-password');
+    await typeInput(page.getByLabel('Password', { exact: true }), recoveredPassword);
     await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
     await expect(page.getByTestId(`session-tab-${state.session.id}`)).toBeVisible();
     await page.getByTestId(`session-tab-${state.session.id}`).click();

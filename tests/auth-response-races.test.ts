@@ -11,7 +11,7 @@ let database: Awaited<ReturnType<typeof testDatabase>>;
 let server: Server;
 let base: string;
 let hold: { path: string; ready: () => void; release: Promise<void> } | undefined;
-const password = 'a-secure-race-test-password';
+const password = randomUUID();
 type Account = { banker: { id: string; username: string }; recovery_codes: string[] };
 
 class CookieJar {

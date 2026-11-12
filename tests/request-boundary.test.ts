@@ -13,7 +13,7 @@ let database: Awaited<ReturnType<typeof testDatabase>>;
 let server: Server;
 let origin: string;
 const nativeFetch = globalThis.fetch;
-const password = 'a-secure-request-boundary-password';
+const password = randomUUID();
 
 type Account = { id: string; cookie: string };
 const privateClient = (banker: string) => data.bankerClient(banker);

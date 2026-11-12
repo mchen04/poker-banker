@@ -4,7 +4,7 @@ import type { Page, TestInfo } from '@playwright/test';
 import type { SessionState } from '../src/domain/session';
 import { expect, screen } from './fixtures';
 
-export const password = 'a-secure-browser-game-password';
+export const password = randomUUID();
 export async function call<T>(page: Page, path: string, method = 'GET', body?: unknown): Promise<T> {
   const origin = new URL(page.url()).origin;
   const response = await page.request.fetch(`${origin}/api${path}`, { method, headers: { origin, 'content-type': 'application/json' }, ...(body === undefined ? {} : { data: body }) });

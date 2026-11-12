@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -205,7 +206,7 @@ async function run(entry: Entry, code: string, target: number | 'ready') {
     mkdtemp: async (prefix: string) => { const directory = `${prefix}fixture`; scratch.add(directory); return directory; },
     rm: async (path: string) => { if (scratch.has(path)) scratch.delete(path); },
     readFile: async () => 'fixture', resolve, join, fileURLToPath: (value: URL) => value.pathname,
-    testDatabase: async () => database, seedBenchmark: async () => ({ username: 'fixture', password: 'fixture' }),
+    testDatabase: async () => database, seedBenchmark: async () => ({ username: 'fixture', password: randomUUID() }),
     createServer: () => server, createHttpsServer: () => server, closeOwnedServer: async () => {},
     createWriteStream: () => { queueMicrotask(() => log.emit('open')); return log; },
     LocalClient: class { async request() { return { status: 200, body: { entries: [], session: { name: 'fixture' }, players: [], totals: { total_in_minor: '0' } } }; } cookie() { return 'fixture'; } close() {} },

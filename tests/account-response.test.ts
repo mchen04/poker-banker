@@ -37,7 +37,7 @@ function request(path: string, cookie = '', method = 'GET', body?: unknown, clai
 }
 
 async function signup() {
-  const response = await request('/auth/signup', '', 'POST', { username: `proof-${randomUUID().slice(0, 12)}`, password: 'a-secure-response-proof-password' });
+  const response = await request('/auth/signup', '', 'POST', { username: `proof-${randomUUID().slice(0, 12)}`, password: randomUUID() });
   expect(response.status).toBe(200);
   const value = await response.json() as { banker: { id: string } };
   return { id: value.banker.id, cookie: response.headers.get('set-cookie')!.split(';')[0]! };

@@ -63,7 +63,7 @@ it.each(['{"username":"x","password":"y"}', '{'])('returns validation errors pro
 
 it('signs up through the real entry and authenticates the returned cookie against disposable PostgreSQL', async () => {
   const username = `vercel-${randomUUID().slice(0, 12)}`;
-  const result = await invoke(JSON.stringify({ username, password: 'a-secure-vercel-password' }));
+  const result = await invoke(JSON.stringify({ username, password: randomUUID() }));
   expect(result.poolsEnded).toBe(true);
   expect(result.methods).toEqual(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT']);
   expect(result.status).toBe(200);
