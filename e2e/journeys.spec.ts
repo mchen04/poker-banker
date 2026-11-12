@@ -11,7 +11,7 @@ test('account signup acknowledgement, sign-in and one-use recovery revoke old co
   expect((await page.context().cookies()).find(cookie => cookie.name === 'pb_session')).toEqual(signupCookie);
   expect((await page.request.get('/api/auth/me')).status()).toBe(401);
   await page.reload();
-  await expect(page.getByRole('button', { name: 'Sign in to workspace', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign in to table', exact: true })).toBeVisible();
   await screen(page, testInfo, 'signin');
   await signIn(page, user.username);
   const state = await newSession(page, 'Recovery preserves draft');
@@ -40,7 +40,7 @@ test('account signup acknowledgement, sign-in and one-use recovery revoke old co
     await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
     await typeInput(page.getByLabel('Username', { exact: true }), user.username);
     await typeInput(page.getByLabel('Password', { exact: true }), recoveredPassword);
-    await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
+    await page.getByRole('button', { name: 'Sign in to table', exact: true }).click();
     await expect(page.getByTestId(`session-tab-${state.session.id}`)).toBeVisible();
     await switchSession(page, state.session.id);
     await expect(page.getByRole('heading', { name: 'Recovery preserves draft', exact: true })).toBeVisible();
@@ -115,7 +115,7 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   await expect(page.getByTestId(`result-${player.id}`)).toHaveText('Playing');
   await money(page, player.id, '180', { kind: 'Cash out', testInfo });
   await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$30.00 up');
-  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Pay $180.00');
+  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Owed $180.00');
   await money(page, player.id, '20', { paid: false });
   await expect(page.getByTestId(`result-${player.id}`)).toHaveText('Playing');
   let state = await money(page, player.id, '10', { kind: 'Cash out' });
@@ -142,7 +142,7 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   await page.getByRole('button', { name: 'Save name', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Justin Tan', exact: true })).toBeVisible();
   await expect(page.getByText('Saturday table', { exact: false })).toBeVisible();
-  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'Table', exact: true }).click();
   const balanced = await newSession(page, 'Balanced table');
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
   await typeInput(page.getByLabel('Search players', { exact: true }), 'Justin Tan');

@@ -6,7 +6,9 @@ import { Auth, type PendingRecoveryCodes } from './views/Auth';
 import { AddPlayerSheet, CorrectionSheet, MoneySheet, PlayerSheet, SessionView } from './views/Session';
 import { CloseSheet, HistorySheet, MenuSheet, ReopenSheet, SessionForm, ShareSheet, TimingSheet, type SessionSummary } from './views/Settings';
 import { PlayersScreen } from './views/Players';
-import { ClientContext, DraftSaveStatus, ErrorText, money, Sheet, storageFailure, type SheetState } from './views/common';
+import { ClientContext, DraftSaveStatus, entryLabels, ErrorText, money, Sheet, storageFailure, type SheetState } from './views/common';
+
+type UndoSave = { bankerId: string; sessionId: string; entries: { id: string; opId: string }[] };
 
 const viewerToken = location.pathname.startsWith('/v/') ? location.pathname.split('/')[2] : null;
 export function App() {
@@ -24,6 +26,8 @@ export function App() {
   const [childDialog, setChildDialog] = useState(false);
   const [screen, setScreen] = useState<'workspace' | 'players'>('workspace');
   const [notice, setNotice] = useState('');
+  const [undoSave, setUndoSave] = useState<UndoSave | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -41,9 +45,15 @@ export function App() {
   const renderEpoch = epoch.current;
   const client = useMemo(() => banker ? bankerClient(banker.id) : null, [banker, renderEpoch]);
   current.current = state; chosen.current = sessionId; activeBanker.current = banker;
-  const pwa = usePwaUpdate({ sheetOpen: sheet !== null || childDialog || checking || loggingOut || formBusy || recovery !== null || authCodesVisible || accountChanged || checkingForm || (!banker && !viewerToken), outboxCount: pending.length, busy: checking || loggingOut || formBusy || reloadingAccount || checkingForm });
+  const pwa = usePwaUpdate({ sheetOpen: sheet !== null || childDialog || checking || loggingOut || formBusy || recovery !== null || authCodesVisible || accountChanged || checkingForm || (!banker && !viewerToken), outboxCount: pending.length, busy: checking || loggingOut || formBusy || undoBusy || reloadingAccount || checkingForm });
   const dialogChange = useCallback((open: boolean) => { if (epoch.current === renderEpoch) setChildDialog(open); }, [renderEpoch]);
-  const notify = useCallback((text: string) => setNotice(text), []);
+  const notify = useCallback((text: string) => { setNotice(text); setUndoSave(null); }, []);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => { setNotice(''); setUndoSave(null); }, 7000);
+    return () => window.clearTimeout(timer);
+  }, [notice, undoSave]);
+  useEffect(() => { setNotice(''); setUndoSave(null); }, [screen, sessionId]);
   const open = useCallback((next: SheetState) => setSheet(next), []);
   useEffect(() => {
     function connection() { setOnline(navigator.onLine); }
@@ -59,7 +69,7 @@ export function App() {
     stopSync.current?.(); stopSync.current = null;
     activeBanker.current = null; current.current = null; chosen.current = null; initialSession.current = null;
     setBanker(null); setState(null); setSessionId(null); setSessions([]); setPending([]); setSubmittedForms([]); setCheckingForm(false);
-    setSheet(null); setChildDialog(false); setFormBusy(false); setNotice(''); setError(''); setScreen('workspace'); setLastUpdated(null);
+    setSheet(null); setChildDialog(false); setFormBusy(false); setNotice(''); setUndoSave(null); setUndoBusy(false); setError(''); setScreen('workspace'); setLastUpdated(null);
     setAccountChanged(false);
     setRecovery(null); setAuthCodesVisible(false);
     if (options.clearIdentity !== false) {
@@ -180,11 +190,14 @@ export function App() {
     const generation = epoch.current;
     const changed = () => { void Promise.all([listOutbox(account.id), listSubmittedDrafts(account.id)]).then(([items, forms]) => { if (epoch.current === generation) { setPending(items); setSubmittedForms(forms); if (!items.length) setNotice(current => current === 'Not saved yet' ? '' : current); } }).catch(storageFailure); };
     changed();
-    const stop = syncOutbox(account.id, (next, item) => {
+    const stop = syncOutbox(account.id, (next, item, receipt) => {
       if (epoch.current !== generation) return;
       update(next);
-      const saved = next.entries.find(entry => entry.player_id === item.body.player_id && entry.kind === item.body.kind && entry.amount_minor === item.body.amount_minor && !entry.voids_entry_id);
-      notify(saved ? `Saved ${money(saved.amount_minor, next.session.currency)}` : `Saved ${item.label}`);
+      const created = receipt.entries.filter(entry => entry.revision === receipt.revision && entry.player_id === item.body.player_id && !entry.voids_entry_id);
+      const saved = created.find(entry => entry.kind === item.body.kind && entry.amount_minor === item.body.amount_minor);
+      const player = receipt.players.find(player => player.id === item.body.player_id);
+      notify(saved ? `Saved ${entryLabels[saved.kind].toLowerCase()} · ${player?.display_name ?? 'Player'} · ${money(saved.amount_minor, receipt.session.currency)}` : `Saved ${item.label}`);
+      if (saved && created.every(entry => entry.id === saved.id || ((saved.kind === 'buy_in' && entry.kind === 'payment_in') || (saved.kind === 'cash_out' && entry.kind === 'payment_out')) && entry.amount_minor === saved.amount_minor)) setUndoSave({ bankerId: account.id, sessionId: receipt.session.id, entries: created.map(entry => ({ id: entry.id, opId: crypto.randomUUID() })) });
       void refreshSessions(account);
     }, changed);
     stopSync.current = stop;
@@ -241,8 +254,25 @@ export function App() {
       throw problem;
     }
   }
+  async function undoConfirmedSave() {
+    const saved = undoSave;
+    if (!saved || undoBusy || formBusy || !sameAccount() || saved.bankerId !== activeBanker.current?.id || saved.sessionId !== chosen.current || current.current?.session.status !== 'open') return;
+    const startingEpoch = epoch.current;
+    setUndoBusy(true); setError('');
+    try {
+      for (const entry of saved.entries) {
+        if (epoch.current !== startingEpoch || !sameAccount()) return;
+        await mutate(`/api/sessions/${saved.sessionId}/entries/${entry.id}/void`, { op_id: entry.opId });
+      }
+      if (epoch.current === startingEpoch) notify('Entry undone. The original remains in activity.');
+    } catch (problem) {
+      if (epoch.current === startingEpoch) setError(problem instanceof Error ? problem.message : 'Could not confirm Undo. Check activity before trying again.');
+    } finally {
+      if (epoch.current === startingEpoch) { setUndoBusy(false); }
+    }
+  }
   async function checkSubmittedForm(form: SubmittedDraft) {
-    if (checkingForm || !banker) return;
+    if (checkingForm || undoBusy || !banker) return;
     const generation = epoch.current;
     const account = banker.id;
     const isCurrent = () => epoch.current === generation && activeBanker.current?.id === account;
@@ -261,7 +291,7 @@ export function App() {
     finally { if (isCurrent()) setCheckingForm(false); }
   }
   async function signOut(consent?: BankerWork) {
-    if (!client || !sameAccount()) return;
+    if (!client || !sameAccount() || undoBusy) return;
     const account = client.bankerId;
     const startingEpoch = epoch.current;
     setLoggingOut(true); setError('');
@@ -313,31 +343,34 @@ export function App() {
     title = sheet.kind === 'money' ? 'Buy-in' : sheet.kind === 'cash_out' ? 'Cash out' : sheet.kind === 'expense' ? 'Tips and meals' : 'Record payment';
     content = <MoneySheet key={`${state?.session.id}/${sheet.player}/${sheet.kind}`} title={title} playerId={sheet.player!} kind={sheet.kind === 'money' ? 'buy_in' : sheet.kind} initialAmount={sheet.amount} />;
   } else if (sheet?.kind === 'player') { title = state?.players.find(player => player.id === sheet.player)?.display_name ?? 'Player'; content = <PlayerSheet playerId={sheet.player!} />; }
+  else if (sheet?.kind === 'choose-player') { title = 'Choose player'; content = <><p>Who is buying chips?</p><ul className="choice-list">{state?.players.map(player => <li key={player.id}><button data-testid={`choose-buy-in-${player.id}`} aria-label={`Buy-in for ${player.display_name}`} onClick={() => boundOpen({ kind: 'money', player: player.id })}><strong>{player.display_name}</strong><small>{player.state === 'playing' ? 'Playing' : player.state === 'cashed_out' ? 'Cashed out · re-entry' : 'Not bought in'}</small></button></li>)}</ul><button className="wide" onClick={() => boundOpen({ kind: 'add' })}>Add player</button></>; }
   else if (sheet?.kind === 'add') { title = 'Add player'; content = <AddPlayerSheet />; }
   else if (sheet?.kind === 'new') { title = 'New session'; content = <SessionForm creating created={next => { if (sameAccount()) { update(next); choose(next.session.id); } }} />; }
   else if (sheet?.kind === 'settings') { title = 'Session settings'; content = <SessionForm creating={false} created={boundUpdate} />; }
-  else if (sheet?.kind === 'history') { title = 'History'; content = <HistorySheet choose={choose} />; }
+  else if (sheet?.kind === 'history') { title = 'Sessions'; content = <HistorySheet choose={choose} />; }
   else if (sheet?.kind === 'menu') { title = 'Session menu'; content = <MenuSheet />; }
-  else if (sheet?.kind === 'close') { title = 'Close game'; content = <CloseSheet />; }
-  else if (sheet?.kind === 'reopen') { title = 'Reopen game'; content = <ReopenSheet />; }
+  else if (sheet?.kind === 'close') { title = 'Close session'; content = <CloseSheet />; }
+  else if (sheet?.kind === 'reopen') { title = 'Reopen session'; content = <ReopenSheet />; }
   else if (sheet?.kind === 'timing') { title = 'Correct times'; content = <TimingSheet />; }
   else if (sheet?.kind === 'share') { title = 'Share session'; content = <ShareSheet />; }
   else if (sheet?.kind === 'correction') { title = 'Correct entry'; content = <CorrectionSheet entryId={sheet.entry!} />; }
   else if (sheet?.kind === 'signout') { title = 'Sign out'; content = <SignoutSheet banker={banker!} busy={loggingOut} signOut={signOut} />; }
+  const readyToClose = !!state?.players.some(player => player.state === 'cashed_out') && state.players.every(player => player.state !== 'playing' && !(player.state === 'seated' && (player.payment_in_minor !== '0' || player.payment_out_minor !== '0' || player.expense_minor !== '0')));
+  const transaction = screen !== 'workspace' || !state ? { label: 'New session', kind: 'new' } : state.session.status === 'closed' ? { label: 'Reopen session', kind: 'reopen' } : !state.players.length ? { label: 'Add player', kind: 'add' } : readyToClose ? { label: 'Close session', kind: 'close' } : { label: 'Buy-in', kind: 'choose-player' };
   const moneySheet = ['money', 'cash_out', 'payment_in', 'payment_out', 'expense'].includes(sheet?.kind ?? '');
-  const updateBanner = pwa.waiting ? <div className="update-banner" role="status"><span>Update ready</span><button data-testid="update-reload" disabled={pending.length > 0 || formBusy || loggingOut} onClick={() => { void pwa.activate().catch(problem => setError(problem.message)); }}>Reload</button></div> : null;
-  const provider = { banker: viewerToken ? null : banker, client, state, online, pending, open: boundOpen, update: boundUpdate, notify: boundNotify, mutate: boundMutate, updateBanner, formBusy: formBusy || loggingOut, setFormBusy, isCurrent: sameAccount };
+  const updateBanner = pwa.waiting ? <div className="update-banner" role="status"><span>Update ready</span><button data-testid="update-reload" disabled={pending.length > 0 || formBusy || undoBusy || loggingOut} onClick={() => { void pwa.activate().catch(problem => setError(problem.message)); }}>Reload</button></div> : null;
+  const provider = { banker: viewerToken ? null : banker, client, state, online, pending, open: boundOpen, update: boundUpdate, notify: boundNotify, mutate: boundMutate, updateBanner, formBusy: formBusy || undoBusy || loggingOut, setFormBusy, isCurrent: sameAccount };
   if (checking) return <main className="auth"><DraftSaveStatus /><div className="brand-mark">PB</div><p>Opening your bank…</p></main>;
   if (accountChanged) return <main className="auth"><DraftSaveStatus /><div className="brand-mark">PB</div><h1>Account changed</h1><p>Reload account state to continue. Saved drafts and entries stay with their account.</p><ErrorText text={error} /><button className="primary wide" disabled={reloadingAccount} onClick={() => { void reloadAccount(); }}>{reloadingAccount ? 'Reloading…' : 'Reload account state'}</button></main>;
-  if (recovery?.kind === 'unresolved' && !viewerToken) return <main className="auth"><div className="brand-mark">PB</div><h1>Restore your recovery codes</h1><p>Could not check this device for {recovery.banker.username}'s unacknowledged recovery codes. Retry before opening the workspace.</p><ErrorText text={recovery.error} /><ErrorText text={error} /><button className="primary wide" disabled={reloadingAccount} onClick={() => { void reloadAccount(); }}>{reloadingAccount ? 'Restoring…' : 'Retry restoring recovery codes'}</button></main>;
+  if (recovery?.kind === 'unresolved' && !viewerToken) return <main className="auth"><div className="brand-mark">PB</div><h1>Restore your recovery codes</h1><p>Could not check this device for {recovery.banker.username}'s unacknowledged recovery codes. Retry before opening the table.</p><ErrorText text={recovery.error} /><ErrorText text={error} /><button className="primary wide" disabled={reloadingAccount} onClick={() => { void reloadAccount(); }}>{reloadingAccount ? 'Restoring…' : 'Retry restoring recovery codes'}</button></main>;
   if (!banker && !viewerToken) return <>{updateBanner}{!authCodesVisible && recovery?.kind !== 'codes' && <DraftSaveStatus />}<ErrorText text={error} /><Auth signedIn={account => { const generation = epoch.current; void restoreAccount(account, () => epoch.current === generation); }} pendingCodes={recovery?.kind === 'codes' ? recovery.value : undefined} pendingCursor={recovery?.kind === 'codes' ? recovery.cursor : undefined} codesVisible={setAuthCodesVisible} busyChanged={setFormBusy} /></>;
-  return <ClientContext.Provider value={provider}><div className={`app-shell${!viewerToken ? ' banker-shell' : ''}${!viewerToken && screen === 'workspace' && state?.session.status === 'open' ? ' has-transactions' : ''}`}>{!viewerToken && <header className="app-bar"><a className="wordmark" href="/" onClick={event => { event.preventDefault(); setScreen('workspace'); }}>Poker banker</a><span className="app-context">{screen === 'players' ? 'Your players & results' : 'Game workspace'}</span></header>}
+  return <ClientContext.Provider value={provider}><div className={`app-shell${!viewerToken ? ' banker-shell' : ''}`}>{!viewerToken && <header className="app-bar"><a className="wordmark" href="/" onClick={event => { event.preventDefault(); setScreen('workspace'); }}>Poker banker</a><span className="app-context">{screen === 'players' ? 'Your players & results' : 'Your session'}</span></header>}
     {!sheet && !childDialog && <>{updateBanner}<DraftSaveStatus /></>}
     {!online && <p className="offline-banner" role="status">Offline. Saved totals are read only. New entries wait to sync.</p>}
-    {notice && <div className="notice" role="status" data-testid={notice.startsWith('Saved ') ? 'saved-confirmation' : 'save-status'}>{notice}</div>}<ErrorText text={error} />
-    {submittedForms.length > 0 && <section className="outbox" aria-label="Unconfirmed forms"><h2>Unconfirmed forms</h2><p>These forms may already have been saved. Check their saved results before starting another copy.</p><ul>{submittedForms.map(form => <li key={form.key}><button disabled={checkingForm || formBusy} onClick={() => { void checkSubmittedForm(form); }}>Check saved form: {({ 'new-session': 'New session', settings: 'Session settings', reopen: 'Reopen session', timing: 'Correct times', correction: 'Entry correction', 'add-player': 'Add player', rename: 'Rename player' } as Record<string, string>)[form.form] ?? 'Saved form'}</button></li>)}</ul></section>}
-    {viewerToken ? <main className="workspace viewer"><p className="viewer-label">View only, updated {lastUpdated ? new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'when connected'}</p>{state ? <SessionView state={state} viewer /> : !error && <p>Loading shared session…</p>}</main> : screen === 'players' ? <main className="workspace"><PlayersScreen key={formsRevision} chooseSession={choose} dialogChange={dialogChange} /><section className="account-section" aria-label="Account"><h2>Account</h2><p>{banker?.username}</p><button onClick={() => setSheet({ kind: 'signout' })}>Sign out</button></section></main> : <><div className="session-switcher" data-testid="session-strip"><button className="switch-session" aria-label="Switch session" aria-haspopup="dialog" data-testid={sessionId && sheet?.kind !== 'history' ? `session-tab-${sessionId}` : undefined} onClick={() => setSheet({ kind: 'history' })}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14m-4-4 4 4-4 4M19 17H5m4-4-4 4 4 4" /></svg><span>Switch session</span><span aria-hidden="true">⌄</span></button></div><main className="workspace">{state ? <SessionView state={state} /> : !sessionId && <div className="empty welcome"><p className="eyebrow">Ready for game night</p><h1>Start with a session</h1><p>A separate ledger for each game. Your players and history stay together.</p><button className="primary" onClick={() => setSheet({ kind: 'new' })}>Create your first session</button></div>}{pending.filter(item => item.session_id === sessionId).length > 0 && <section className="outbox" aria-label="Unsent entries"><h2>Not saved yet</h2><p>Only server-confirmed entries count in totals. An unconfirmed save may already be included.</p><ul>{pending.filter(item => item.session_id === sessionId).map(item => <li key={item.op_id} data-testid={`pending-${item.op_id}`}><strong>{item.label}</strong><span>{item.status === 'rejected' ? item.error : outboxUncertain(item) ? 'Save not confirmed. This entry may already exist on the server.' : 'Not saved yet'}</span>{(item.status === 'rejected' || outboxUncertain(item)) && <button disabled={item.status === 'sending'} onClick={() => { void retryItem(item.op_id); }}>{outboxUncertain(item) ? 'Check saved entry' : 'Retry'}</button>}<button disabled={item.status === 'sending'} onClick={() => { const accepted = outboxUncertain(item) && window.confirm('This entry may already exist on the server. Discarding it does not undo a saved entry. Re-entering it may record it twice. Discard anyway?'); if (!outboxUncertain(item) || accepted) void discardItem(item.op_id, accepted).catch(problem => setError(problem.message)); }}>Discard</button></li>)}</ul></section>}</main></>}
-    {!viewerToken && <nav className="bottom-navigation" aria-label="Workspace navigation"><button aria-pressed={screen === 'workspace'} onClick={() => { setScreen('workspace'); setSheet(null); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 10h16M10 10v10" /></svg><span>Workspace</span></button><button aria-pressed={screen === 'players'} onClick={() => { setScreen('players'); setSheet(null); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2m18 0v-2a4 4 0 0 0-3-3.87M13 3.13a4 4 0 0 1 0 7.75" /><circle cx="9.5" cy="7" r="4" /></svg><span>Players</span></button></nav>}
+    {notice && <div className="notice" role="status" data-testid={notice.startsWith('Saved ') ? 'saved-confirmation' : 'save-status'}><span>{notice}</span>{undoSave && undoSave.sessionId === sessionId && state?.session.status === 'open' && <button type="button" disabled={undoBusy || formBusy || !online} onClick={() => { void undoConfirmedSave(); }}>{undoBusy ? 'Undoing…' : 'Undo'}</button>}</div>}<ErrorText text={error} />
+    {submittedForms.length > 0 && <section className="outbox" aria-label="Unconfirmed forms"><h2>Unconfirmed forms</h2><p>These forms may already have been saved. Check their saved results before starting another copy.</p><ul>{submittedForms.map(form => <li key={form.key}><button disabled={checkingForm || formBusy || undoBusy} onClick={() => { void checkSubmittedForm(form); }}>Check saved form: {({ 'new-session': 'New session', settings: 'Session settings', reopen: 'Reopen session', timing: 'Correct times', correction: 'Entry correction', 'add-player': 'Add player', rename: 'Rename player' } as Record<string, string>)[form.form] ?? 'Saved form'}</button></li>)}</ul></section>}
+    {viewerToken ? <main className="workspace viewer">{state && !error && <p className="viewer-label">View only, updated {lastUpdated ? new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'when connected'}</p>}{state ? <SessionView state={state} viewer /> : !error && <p>Loading shared session…</p>}</main> : screen === 'players' ? <main className="workspace"><PlayersScreen key={formsRevision} chooseSession={choose} dialogChange={dialogChange} /><section className="account-section" aria-label="Account"><h2>Account</h2><p>{banker?.username}</p><button onClick={() => setSheet({ kind: 'signout' })}>Sign out</button></section></main> : <><main className="workspace">{state ? <SessionView state={state} /> : !sessionId && <div className="empty welcome"><p className="eyebrow">Ready for your session</p><h1>Start a session</h1><p>A separate ledger for each session. Your players and history stay together.</p><button onClick={() => setSheet({ kind: 'new' })}>Create your first session</button></div>}{pending.filter(item => item.session_id === sessionId).length > 0 && <section className="outbox" aria-label="Unsent entries"><h2>Not saved yet</h2><p>These entries are awaiting confirmation. A lost reply can mean an entry is already saved and included in totals. Check its saved result before entering it again.</p><ul>{pending.filter(item => item.session_id === sessionId).map(item => <li key={item.op_id} data-testid={`pending-${item.op_id}`}><strong>{item.label}</strong><span>{item.status === 'rejected' ? item.error : outboxUncertain(item) ? 'Save not confirmed. This entry may already exist on the server.' : 'Not saved yet'}</span>{(item.status === 'rejected' || outboxUncertain(item)) && <button disabled={item.status === 'sending'} onClick={() => { void retryItem(item.op_id); }}>{outboxUncertain(item) ? 'Check saved entry' : 'Retry'}</button>}<button disabled={item.status === 'sending'} onClick={() => { const accepted = outboxUncertain(item) && window.confirm('This entry may already exist on the server. Discarding it does not undo a saved entry. Re-entering it may record it twice. Discard anyway?'); if (!outboxUncertain(item) || accepted) void discardItem(item.op_id, accepted).catch(problem => setError(problem.message)); }}>Discard</button></li>)}</ul></section>}</main></>}
+    {!viewerToken && <nav className="bottom-navigation" aria-label="Table navigation"><button aria-pressed={screen === 'workspace'} onClick={() => { setScreen('workspace'); setSheet(null); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 10h16M10 10v10" /></svg><span>Table</span></button><div className="transaction-slot" data-testid="session-bottom-bar" aria-label="Session actions"><button data-testid={transaction.kind === 'close' ? 'session-close' : undefined} className="primary" disabled={formBusy || undoBusy || loggingOut} onClick={() => { setScreen('workspace'); boundOpen({ kind: transaction.kind }); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d={transaction.kind === 'close' ? 'M5 12l4 4L19 6' : 'M12 5v14M5 12h14'} /></svg><span>{transaction.label}</span></button></div><button aria-pressed={screen === 'players'} onClick={() => { setScreen('players'); setSheet(null); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2m18 0v-2a4 4 0 0 0-3-3.87M13 3.13a4 4 0 0 1 0 7.75" /><circle cx="9.5" cy="7" r="4" /></svg><span>Players</span></button></nav>}
     {sheet && content && (moneySheet ? content : <Sheet key={`${sheet.kind}/${sheet.player ?? ''}/${sheet.entry ?? ''}`} title={title} close={() => setSheet(null)}>{content}</Sheet>)}
   </div></ClientContext.Provider>;
 }

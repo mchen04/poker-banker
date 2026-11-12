@@ -50,7 +50,7 @@ function mount(data: Tab, pendingCodes: PendingRecoveryCodes, pendingCursor: Dra
     ready: () => vi.waitFor(() => { render(); expect(busy).toBe(false); }),
     confirm: () => {
       render().find(node => node.type === 'input' && node.props.type === 'checkbox')!.props.onChange({ target: { checked: true } });
-      render().find(node => node.props.children === 'Continue to workspace')!.props.onClick();
+      render().find(node => node.props.children === 'Continue to table')!.props.onClick();
     },
   };
 }
@@ -121,7 +121,7 @@ it('requires fresh confirmation before deleting a different recovery-code backup
   expect(storage.draft(key)).toEqual(newer);
   expect(auth.render().filter(node => node.type === 'code').map(node => node.props.children)).toEqual(newer.codes);
   expect(auth.render().find(node => node.type === 'input' && node.props.type === 'checkbox')?.props.checked).toBe(false);
-  expect(auth.render().find(node => node.props.children === 'Continue to workspace')?.props.disabled).toBe(true);
+  expect(auth.render().find(node => node.props.children === 'Continue to table')?.props.disabled).toBe(true);
   auth.confirm();
   await vi.waitFor(() => expect(auth.signedIn).toHaveBeenCalledWith(value.banker));
   expect(storage.draft(key)).toBeUndefined();
@@ -184,7 +184,7 @@ it('reviews a backup changed between the fresh acknowledgement read and delete',
   expect(auth.render().some(node => node.props.children === 'Retry saving draft')).toBe(false);
   expect(auth.render().some(node => typeof node.props.text === 'string' && node.props.text.includes('Not saved'))).toBe(false);
   expect(auth.render().some(node => node.props.role === 'status' && node.props.children.includes('changed in another tab'))).toBe(true);
-  auth.render().find(node => node.props.children === 'Continue to workspace')!.props.onClick();
+  auth.render().find(node => node.props.children === 'Continue to table')!.props.onClick();
   await auth.ready();
   expect(auth.render().filter(node => node.type === 'code').map(node => node.props.children)).toEqual(newer.codes);
   expect(auth.render().find(node => node.type === 'input' && node.props.type === 'checkbox')?.props.checked).toBe(false);

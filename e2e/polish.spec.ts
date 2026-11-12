@@ -26,7 +26,7 @@ test('money cancellation, last buy-in, method selection and compact controls pre
   expect(focus).toMatchObject({ width: '2px', offset: '-2px', shadow: 'none' });
   expect(focus.outline).toBe(focus.border);
   await screen(page, info, 'focused-amount');
-  await page.getByRole('button', { name: 'Last buy-in $60.00', exact: true }).click();
+  await page.getByRole('button', { name: 'Last $60.00', exact: true }).click();
   await expect(amount).toHaveValue('60.00');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByText('Discard this typed amount?', { exact: true })).toBeVisible();
@@ -53,26 +53,19 @@ test('money cancellation, last buy-in, method selection and compact controls pre
   await expect(amount).toHaveValue('17.');
   await keepMoneyDraft(page);
   expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(2);
-  for (const name of ['Total', 'Per hour', 'BB']) {
-    const button = page.getByRole('button', { name, exact: true });
-    const fits = await button.evaluate(button => {
-      const range = document.createRange(); range.selectNodeContents(button);
-      return range.getClientRects().length === 1 && button.scrollWidth <= button.clientWidth;
-    });
-    expect(fits, `${name} is a single line at 375px`).toBe(true);
-  }
-  await expect(page.getByRole('navigation', { name: 'Workspace navigation' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Per hour', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: 'Table navigation' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Switch session', exact: true })).toBeVisible();
   await page.getByTestId('activity').locator('li').last().scrollIntoViewIfNeeded();
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   const last = await page.getByTestId('activity').locator('li').last().boundingBox();
-  const bar = await page.locator('.bottom-bar').boundingBox();
+  const bar = await page.getByRole('navigation', { name: 'Table navigation', exact: true }).boundingBox();
   expect(last && bar && last.y + last.height <= bar.y).toBe(true);
   await screen(page, info, 'polished-workspace');
   await page.getByRole('button', { name: 'Players', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Account', exact: true })).toBeVisible();
   await screen(page, info, 'account');
-  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'Table', exact: true }).click();
   const early = await newSession(page, 'A long early session name that keeps its complete selected border');
   const later = await newSession(page, 'A long later session name that keeps its complete selected border');
   await switchSession(page, early.session.id);
@@ -93,5 +86,15 @@ test('money cancellation, last buy-in, method selection and compact controls pre
   await page.reload();
   await openMoney(page, player.id);
   await expect(amount).toHaveValue('60.00');
+  await keepMoneyDraft(page);
+  await money(page, player.id, '100', { kind: 'Cash out' });
+  for (const name of ['Total', 'Per hour', 'BB']) {
+    const button = page.getByRole('button', { name, exact: true });
+    const fits = await button.evaluate(button => {
+      const range = document.createRange(); range.selectNodeContents(button);
+      return range.getClientRects().length === 1 && button.scrollWidth <= button.clientWidth;
+    });
+    expect(fits, `${name} is a single line at 375px`).toBe(true);
+  }
 
 });

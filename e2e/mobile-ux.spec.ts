@@ -57,15 +57,17 @@ test('mobile chrome clears the last row and keyboard sheets keep their actions v
   await createAccount(page);
   await newSession(page, 'A long friendly Friday game name that wraps without pushing the menu off screen');
   const player = await addPlayer(page, 'Alexandra Montgomery with a very long name');
-  const nav = page.getByRole('navigation', { name: 'Workspace navigation' });
-  await expect(nav.getByRole('button', { name: 'Workspace', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const nav = page.getByRole('navigation', { name: 'Table navigation' });
+  await expect(nav.getByRole('button', { name: 'Table', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const geometry = await page.evaluate(() => {
     const nav = document.querySelector('.bottom-navigation')!.getBoundingClientRect();
-    const actions = document.querySelector('.bottom-bar')!.getBoundingClientRect();
-    return { navBottom: nav.bottom, navTop: nav.top, actionBottom: actions.bottom, height: innerHeight };
+    const action = document.querySelector('[data-testid="session-bottom-bar"]')!.getBoundingClientRect();
+    return { navBottom: nav.bottom, navTop: nav.top, actionTop: action.top, actionBottom: action.bottom, height: innerHeight, extraBar: !!document.querySelector('.bottom-bar') };
   });
   expect(geometry.navBottom).toBe(geometry.height);
-  expect(geometry.actionBottom).toBeLessThanOrEqual(geometry.navTop);
+  expect(geometry.actionTop).toBeGreaterThanOrEqual(geometry.navTop);
+  expect(geometry.actionBottom).toBeLessThanOrEqual(geometry.navBottom);
+  expect(geometry.extraBar).toBe(false);
   await page.getByTestId(`repeat-buy-in-${player.id}`).count().then(count => expect(count).toBe(0));
   await page.getByTestId(`buy-in-${player.id}`).click();
   const viewport = page.viewportSize()!;
@@ -82,7 +84,7 @@ test('mobile chrome clears the last row and keyboard sheets keep their actions v
   await page.setViewportSize(viewport);
   await page.evaluate(() => scrollTo(0, document.body.scrollHeight));
   const last = await page.getByTestId('activity').locator('li').last().boundingBox();
-  const bar = await page.getByTestId('session-bottom-bar').boundingBox();
+  const bar = await page.getByRole('navigation', { name: 'Table navigation', exact: true }).boundingBox();
   expect(last && bar && last.y + last.height <= bar.y).toBe(true);
   const tooSmall = await nav.getByRole('button').evaluateAll(buttons => buttons.filter(button => button.getBoundingClientRect().height < 44).length);
   expect(tooSmall).toBe(0);

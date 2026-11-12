@@ -119,7 +119,7 @@ test('a mismatched entry and a newer saved draft both remain reviewable and pres
   const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
   await openMoney(page, player.id);
   await typeInput(page.getByTestId('money-amount'), '50');
-  await page.getByLabel('Paid now', { exact: true }).uncheck();
+  await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Unpaid', exact: true }).click();
   await expect.poll(() => storedAmount(page, key)).toBe('50');
   const operation = await page.evaluate(async key => {
     const opening = indexedDB.open('poker-banker');

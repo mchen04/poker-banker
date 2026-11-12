@@ -24,7 +24,7 @@ export type ClientState = {
 export const ClientContext = createContext<ClientState | null>(null);
 export function useClient() {
   const value = useContext(ClientContext);
-  if (!value) throw new Error('Workspace is unavailable');
+  if (!value) throw new Error('Table is unavailable');
   return value;
 }
 export function money(value: string, currency: string) { return formatMoney(BigInt(value), currency); }
@@ -431,8 +431,8 @@ export function DraftSaveStatus() {
     {recoveries.length > 0 && <section aria-label="Needs review"><h2>Needs review</h2>{recoveries.filter(recovery => bankerId && recovery.key.startsWith(`${bankerId}/`)).map(recovery => recovery.collision ? <details className="warning" key={recovery.key} data-testid="recovered-draft"><summary>Review recovered edit</summary><p>A saved draft and your recovered edit are both kept. Check the game for an earlier save before choosing.</p><h3>Saved draft</h3><RecoveredDraftFields value={recovery.source_value} /><h3>Your recovered edit</h3><RecoveredDraftFields value={recovery.value} /><button type="button" disabled={busy} onClick={() => { void resolve(recovery, true); }}>Use recovered edit</button><button type="button" disabled={busy} onClick={() => { void resolve(recovery, false); }}>Keep saved edit</button></details> : <RecoveredDraftEditor key={recovery.key} recovery={recovery} busy={busy} act={edit} />)}</section>}
     <ErrorText text={recoveryError} />{failed && <div className="warning" role="alert"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
 }
-export function ErrorText({ text }: { text: string }) { return text ? <p role="alert" className="error">{text}</p> : null; }
-export function Sheet({ title, children, close, leadingClose = false, closeLabel = 'Done', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
+export function ErrorText({ text, id }: { text: string; id?: string }) { return text ? <p id={id} role="alert" className="error" tabIndex={-1}>{text}</p> : null; }
+export function Sheet({ title, children, close, leadingClose = true, closeLabel = 'Cancel', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const shownError = useRef('');
   const client = useContext(ClientContext);
@@ -449,7 +449,7 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
     const available = (element: HTMLElement) => element.getClientRects().length > 0 && !element.matches(':disabled') && getComputedStyle(element).visibility !== 'hidden';
     function focusEditor() {
       if (focused || !panel) return;
-      const editors = [...panel.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input:not([type="checkbox"]),select,textarea')].filter(available);
+      const editors = [...panel.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input:not([type="checkbox"]),select,textarea')].filter(editor => available(editor) && editor.dataset.autofocus !== 'false');
       const editor = editors.find(editor => editor.dataset.testid === 'money-amount') ?? editors[0];
       if (editor) { editor.focus(); focused = document.activeElement === editor; }
     }
@@ -482,6 +482,7 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
       frame = requestAnimationFrame(() => {
         if (!panel || !backdrop) return;
         const height = viewport?.height ?? window.innerHeight;
+        backdrop.dataset.compact = String(height < 480);
         backdrop.style.height = `${height}px`;
         backdrop.style.setProperty('--sheet-viewport-height', `${height}px`);
         backdrop.style.top = `${viewport?.offsetTop ?? 0}px`;
@@ -515,6 +516,8 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
       const error = panel?.querySelector<HTMLElement>('.error');
       const message = error?.textContent ?? '';
       if (message && message !== shownError.current && error) {
+        const invalid = panel?.querySelector<HTMLElement>('[aria-invalid="true"]');
+        (invalid ?? error).focus({ preventScroll: true });
         const body = error.closest<HTMLElement>('.form-body,.money-fields,.sheet-fields,.sheet-status');
         if (body) {
           const bounds = body.getBoundingClientRect();
@@ -530,7 +533,7 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
     revealError();
     return () => observer.disconnect();
   }, []);
-  const closeButton = <button type="button" aria-label={leadingClose ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
+  const closeButton = <button type="button" aria-label={className.includes('money-sheet') ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
   return <div className="sheet-backdrop"><div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
     <div className="sheet-status">{updateBanner}<DraftSaveStatus /></div><div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><div className="sheet-fields"><fieldset className="sheet-controls" disabled={busy}>{children}</fieldset></div>
   </div></div>;

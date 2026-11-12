@@ -1189,7 +1189,7 @@ async function acknowledge(banker: string, item: OutboxItem, state: SessionState
   changed();
   return latest;
 }
-export function syncOutbox(banker: string, onSaved: (state: SessionState, item: OutboxItem) => void, onChange: () => void): () => void {
+export function syncOutbox(banker: string, onSaved: (state: SessionState, item: OutboxItem, receipt: SessionState) => void, onChange: () => void): () => void {
   const epoch = generation(banker);
   const run = Symbol();
   syncRuns.set(banker, run);
@@ -1222,7 +1222,7 @@ export function syncOutbox(banker: string, onSaved: (state: SessionState, item: 
         if (!isCurrent()) { await settleClaim(item, isCurrent); break; }
         const latest = await acknowledge(banker, item, state, isCurrent);
         if (!isCurrent()) { await settleClaim(item, isCurrent); break; }
-        if (latest) { onSaved(latest, item); if (isCurrent()) onChange(); }
+        if (latest) { onSaved(latest, item, state); if (isCurrent()) onChange(); }
       }
     } finally { running = false; }
   };
