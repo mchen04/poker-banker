@@ -1,9 +1,16 @@
 const currencies = new Set(Intl.supportedValuesOf('currency'));
+const exponents = new Map<string, number>();
+const formatters = new Map<string, Intl.NumberFormat>();
 export const MAX_MINOR = 9223372036854775807n;
 
 export function currencyExponent(currency: string): number {
   if (!currencies.has(currency)) throw new Error('Unsupported ISO currency');
-  return new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits!;
+  let exponent = exponents.get(currency);
+  if (exponent === undefined) {
+    exponent = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits!;
+    exponents.set(currency, exponent);
+  }
+  return exponent;
 }
 
 export function parseMoney(input: string, currency: string): bigint {
@@ -40,6 +47,13 @@ export function formatMoney(minor: bigint, currency: string, locale = 'en-US'): 
   const absolute = minor < 0n ? -minor : minor;
   const scale = 10n ** BigInt(exponent);
   const fraction = (absolute % scale).toString().padStart(exponent, '0');
-  const parts = new Intl.NumberFormat(locale, { style: 'currency', currency }).formatToParts(absolute / scale);
+  const key = `${currency}\0${locale}`;
+  let formatter = formatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(locale, { style: 'currency', currency });
+    if (formatters.size >= 64) formatters.delete(formatters.keys().next().value!);
+    formatters.set(key, formatter);
+  }
+  const parts = formatter.formatToParts(absolute / scale);
   return (minor < 0n ? '−' : '') + parts.map(part => part.type === 'fraction' ? fraction : part.value).join('');
 }
