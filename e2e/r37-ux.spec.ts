@@ -18,7 +18,7 @@ test('session, correction, timing and filter errors retain and focus their inval
   const player = await addPlayer(page, 'Reviewable fields');
   await money(page, player.id, '10');
   await menu(page, 'Close session');
-  await page.getByRole('button', { name: `${player.display_name} is still playing. Cash out`, exact: true }).click();
+  await page.getByRole('dialog', { name: 'Close session', exact: true }).getByRole('button', { name: `Cash out ${player.display_name}`, exact: true }).click();
   await expect(page.getByTestId('money-player')).toHaveText(player.display_name);
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -59,6 +59,45 @@ test('session, correction, timing and filter errors retain and focus their inval
 
 test.describe('Undo with a held HTTP response', () => {
   test.use({ serviceWorkers: 'block' });
+
+  test('a late Undo response never offers timing correction for another selected session', async ({ page }) => {
+    await createAccount(page);
+    const previous = await newSession(page, 'Other session for late Undo');
+    const player = await addPlayer(page, 'Shared history player');
+    await money(page, player.id, '10', { paid: false });
+    await money(page, player.id, '10', { kind: 'Cash out', paid: false });
+    const previousEntries = (await current(page)).entries;
+    const target = await newSession(page, 'First buy-in to undo');
+    await page.getByRole('button', { name: 'Add player', exact: true }).click();
+    await typeInput(page.getByLabel('Search players', { exact: true }), player.display_name);
+    await page.getByRole('dialog').getByRole('button', { name: player.display_name, exact: true }).click();
+    await money(page, player.id, '10', { paid: false });
+    let release!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    let held = false;
+    const pattern = '**/entries/*/undo';
+    const hold = async (route: Route) => {
+      const response = await route.fetch(); held = true; await released; await route.fulfill({ response });
+    };
+    await page.route(pattern, hold);
+    try {
+      await page.getByRole('button', { name: 'Undo', exact: true }).click();
+      await expect.poll(() => held).toBe(true);
+      await page.getByRole('navigation', { name: 'Table navigation' }).getByRole('button', { name: 'Players', exact: true }).click();
+      await page.getByTestId(`roster-player-${player.id}`).click();
+      await page.getByRole('button', { name: /Other session for late Undo/ }).click();
+      await expect(page.getByRole('heading', { name: 'Other session for late Undo', exact: true })).toBeVisible();
+      const reply = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/undo'));
+      release(); await reply;
+      await expect(page.getByTestId('session-bottom-bar').getByRole('button')).toBeEnabled();
+      expect((await page.getByTestId('save-status').allTextContents()).join(' ')).not.toContain('Timer still running from');
+      await expect(page.getByRole('button', { name: 'Correct times', exact: true })).toHaveCount(0);
+      expect((await current(page)).session.id).toBe(previous.session.id);
+      expect((await current(page)).entries).toEqual(previousEntries);
+      expect((await current(page, target.session.id)).entries.filter(entry => entry.voids_entry_id)).toHaveLength(1);
+    } finally { release(); await page.unroute(pattern, hold); }
+  });
+
   test('Undo keeps another form disabled until its atomic paid-entry reversal is confirmed', async ({ page }) => {
   await createAccount(page);
   const session = await newSession(page, 'Undo while reviewing a player');

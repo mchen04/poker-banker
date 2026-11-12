@@ -50,8 +50,7 @@ export function currencyDecimal(value: Rational, currency: string, squareRoot = 
   const scale = 10n ** BigInt(exponent);
   const scaled = { numerator: value.numerator, denominator: String(BigInt(value.denominator) * (squareRoot ? scale * scale : scale)) };
   const text = squareRoot ? formatSquareRoot(scaled, exponent) : formatRational(scaled, exponent);
-  const symbol = new Intl.NumberFormat('en-US', { style: 'currency', currency }).formatToParts(0n).find(part => part.type === 'currency')?.value ?? currency;
-  return `${text.startsWith('−') ? '−' : ''}${symbol}${text.replace('−', '')}`;
+  return money(text.replace('−', '-').replace('.', ''), currency);
 }
 export function duration(value: string | null, showSeconds = false) {
   if (value === null) return 'No time recorded';

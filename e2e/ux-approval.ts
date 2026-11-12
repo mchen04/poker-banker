@@ -18,7 +18,7 @@ async function keyboard(page: Page, height: number | null) {
   }, height);
 }
 
-async function capture(page: Page, evidence: string, name: string) {
+export async function capture(page: Page, evidence: string, name: string) {
   await page.screenshot({ path: join(evidence, `${name}.png`), fullPage: false });
   await writeFile(join(evidence, `${name}.aria.txt`), await page.locator('body').ariaSnapshot());
   await writeFile(join(evidence, `${name}.geometry.json`), JSON.stringify(await page.evaluate(() => {
@@ -133,6 +133,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
   await money(page, playerId, '20', { kind: 'Cash out', paid: true, method: 'cash' });
   expect((await current(page)).totals.discrepancy_minor).toBe('0');
   await measure('Close a balanced session', async tap => {
+    await tap(page.getByRole('button', { name: 'Session menu', exact: true }));
     await tap(page.getByTestId('session-close'));
     await tap(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })); await saved();
   });

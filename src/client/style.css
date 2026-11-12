@@ -73,13 +73,16 @@ ul { padding-left: 1.25rem; }
 .player-card { display: flex; align-items: center; min-width: 0; border: 1px solid var(--line); border-radius: .6rem; background: var(--surface); overflow: hidden; }
 .player-row { display: block; flex: 1 1 auto; width: 100%; min-width: 0; text-align: left; padding: .55rem .65rem; min-height: 68px; border: 0; border-radius: 0; background: transparent; }
 .player-row:disabled { opacity: 1; color: var(--text); }
-.player-main { display: flex; justify-content: space-between; align-items: baseline; gap: .4rem; min-width: 0; }
-.player-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: .9375rem; font-weight: 650; line-height: 1.35; }
+.player-main { display: flex; justify-content: space-between; align-items: flex-start; gap: .4rem; min-width: 0; }
+.player-main strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; min-width: 0; font-size: .9375rem; font-weight: 650; line-height: 1.35; }
 .player-main .player-state { flex-shrink: 0; max-width: 44%; text-align: right; font-size: .8125rem; font-weight: 500; color: var(--muted); line-height: 1.35; }
-.player-balance { display: block; font-size: .875rem; font-weight: 600; margin-top: .1rem; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player-balance { display: block; color: var(--warning); font-size: .875rem; font-weight: 700; margin-top: .1rem; line-height: 1.35; white-space: nowrap; }
+.player-summary .player-balance { display: inline; }
 .player-detail { display: flex; gap: .25rem .5rem; justify-content: space-between; flex-wrap: wrap; font-size: .8125rem; line-height: 1.35; color: var(--muted); font-weight: 400; margin-top: .1rem; }
 .player-detail > :last-child { font-variant-numeric: tabular-nums; }
-.player-shortcuts { display: flex; flex-shrink: 0; align-items: center; gap: .15rem; padding: .25rem .3rem .25rem 0; flex-wrap: nowrap; }
+.player-shortcuts { display: flex; flex-direction: column; flex-shrink: 0; align-items: center; gap: .1rem; padding: .2rem .3rem .2rem 0; }
+.player-shortcuts > .player-state { color: var(--muted); font-size: .75rem; line-height: 1.2; font-weight: 500; }
+.player-row-actions { display: flex; align-items: center; gap: .15rem; flex-wrap: nowrap; }
 .player-shortcuts button { min-width: 44px; max-width: 84px; min-height: 44px; font-size: .8125rem; line-height: 1.2; background: transparent; padding: .3rem .4rem; color: var(--accent); }
 .player-shortcuts button span { display: block; font-variant-numeric: tabular-nums; }
 .activity ul, .choice-list, .roster-list, .event-list, .outbox ul { list-style: none; padding: 0; margin: .5rem 0; }
@@ -128,6 +131,11 @@ ul { padding-left: 1.25rem; }
 .action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin: 1rem 0 1.5rem; }
 .menu-list { display: grid; gap: .5rem; }
 .menu-list button { text-align: left; }
+.close-blockers { list-style: none; padding: 0; margin: .75rem 0 1rem; display: grid; gap: .5rem; }
+.close-blocker { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: .75rem; text-align: left; }
+.close-blocker > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.close-blocker small { margin-top: .2rem; }
+.close-blocker-action { flex-shrink: 0; color: var(--accent); border: 1px solid var(--line); border-radius: .4rem; padding: .6rem .65rem; font-size: .875rem; }
 .choice-list button, .roster-list button { width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 1rem .2rem; background: transparent; overflow-wrap: anywhere; }
 .choice-list button[aria-current='true'] { color: var(--accent); border-left: 3px solid var(--accent); padding-left: .8rem; background: var(--soft); }
 .choice-list small, .roster-list span, .roster-list small { display: block; margin-top: .3rem; }
@@ -233,7 +241,7 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--soft)
   :root { --navigation-height: 0px; }
   .app-bar { min-height: 72px; padding: .6rem 1.5rem; }
   .app-context { display: none; }
-  .bottom-navigation { position: absolute; top: 0; bottom: auto; left: auto; right: 1rem; width: min(32rem, 65%); height: 72px; padding: 8px; border: 0; gap: .6rem; }
+  .bottom-navigation { position: absolute; top: env(safe-area-inset-top); bottom: auto; left: auto; right: 1rem; width: min(32rem, 65%); height: 71px; padding: 8px; border: 0; background: transparent; gap: .6rem; }
   .bottom-navigation > button { flex-direction: row; min-height: 48px; gap: .4rem; font-size: .9375rem; }
   .transaction-slot { grid-column: 3; grid-row: 1; }
   .bottom-navigation > button:last-child { grid-column: 2; grid-row: 1; }

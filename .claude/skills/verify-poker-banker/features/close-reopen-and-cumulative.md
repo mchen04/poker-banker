@@ -13,8 +13,8 @@ The banker closes only after everyone with entries has cashed out. A mismatch ne
 
 ## How to get to it (user POV)
 
-- In an open session, choose `Session menu` → `Close session`, or use the footer’s `Close session` when everyone has cashed out.
-- Cash out blockers through their player sheets. Save or discard Not saved yet entries before closing.
+- In an open session, choose `Session menu` → `Close session`. The centre action remains Buy-in on Table and Players; closing never replaces it.
+- Tap a full-width blocker row to open that player’s cash-out. Save or discard Not saved yet entries before closing.
 - If chip totals differ, check `Accept discrepancy of …`, then choose `Close session`.
 - In a closed game, choose `Session menu` → `Reopen session`, enter `Reason`, then choose `Reopen session`.
 - Choose `Players` and a player to inspect finalized and outstanding amounts and Past sessions.
