@@ -235,3 +235,110 @@ Live A/B of the Round 12 players aggregation: side A was the deployed production
 | 5 | A,B | 447.38 | 135.59 |
 
 Overall median 447.38 → 139.76 ms (−307.6 ms, −68.8%); MAD 41.78 ms before, 4.18 ms after. Every pair improves and the improvement exceeds both MADs, so the change is kept. Evidence: `evidence/bench/live/players-ab/` on the test machine.
+
+## Turn 3 baseline
+
+Round 43 measures the approved phone UI/update code, without a layout change. Frozen measurement source `ccec480`; retained formatter change `7c6c895`. Raw evidence: `evidence/bench/turn3/baseline-final-{small,large,long}/`, `baseline-diagnostics.json`, `compare-formatter/`, memory runs and `final-scoped.log`. Failed setup/smoke campaigns are separate and excluded. Procedures and exact commands are in [performance verification](../.claude/skills/verify-poker-banker/features/performance.md).
+
+Two database datasets, three selected banker workloads:
+
+| Workload | Primary closed sessions | Open players / ledger rows | Reusable players | Global database |
+| --- | ---: | ---: | ---: | --- |
+| Small | 10 | 6 / 20 | 6 | One banker, 11 sessions |
+| Standard large | 300 | 9 / 60 | 40 | 22 bankers, 320 players, 1,602 sessions, 63,402 ledger rows |
+| Long-history, in large dataset | 1,000 | 25 / 400 | 40 | Same scale; includes standard banker and 20 smaller accounts |
+
+Five fresh databases per workload, one ordinary observation per metric per repetition: **median/range only; no UI p95**. Ten concurrent writes per repetition give 50 correlated request observations in five batches. In total: **555 timed observations, zero unexplained errors**. Sign-in precedes disposable session creation; other journey/API order alternates. Switching pins seeded history; closing uses a different player from the report fixture. Exact amounts, players, revisions, once-only writes, offline exclusion/replay and read-only viewers are checked. Historical idempotency response bodies are not fabricated.
+
+Mini: Apple M4, 10 cores, arm64 Node 22.23.4; React 19.3.1, Vite 7.3.8, Playwright 1.65.0, embedded PostgreSQL 18.1 (reported x86_64 binary). iPhone 15 WebKit standalone emulation; 60 ms added latency, 2 Mbps aggregate down / 512 Kbps up. Requested CPU duty is 25%; observed per-run duty was **21.3–22.5%**. Only individually verified processes under the exclusive byte-identical engine copy are paused, including networking/GPU XPC processes. This is not a physical iPhone or Vercel/Neon measurement.
+
+Installed cold retains HTTP/IndexedDB/worker caches but opens a new document; warm return times the existing DOM becoming visible, not completed HTTP revalidation. First viewer starts empty. Readiness checks expected financial content and two animation frames. Update timing is foreground discovery/adoption after A’s initial worker check drains; B is adopted automatically. It does not measure the separate 60-second idle discovery cadence. Short diagnostic notes avoid timing a generated UUID typing backlog. The raw request-start observations retain late response metadata, bytes, duplicate/refetched requests and per-request `Server-Timing` query count/elapsed time. WebKit heap, Event Timing and Long Tasks are explicitly unavailable; supplementary Chromium provides the supported resource diagnostic below.
+
+Host noise stayed in the results; no generator saturation was flagged. The threshold is five other cores, based on lifetime-decayed `ps` observations. Expected WebKit unload diagnostics are retained with matching GET status/navigation timestamps and confirmed new-release proof; unmatched errors and write failures fail the run.
+
+| Workload | Noisy runs / 5 | Other CPU cores, median [range] | Unexplained errors / observations |
+| --- | ---: | ---: | ---: |
+| Small | 2 | 0.73 [0.19–9.50] | 0 / 185 |
+| Standard large | 0 | 0.27 [0.18–3.46] | 0 / 185 |
+| Long-history | 0 | 0.35 [0.17–2.84] | 0 / 185 |
+
+All values below are milliseconds: median [minimum–maximum]. API rows are app processing durations; browser rows are confirmed useful-content/render times under the profile. Each row has five samples per workload except `api.write10`, which has 50.
+
+| Metric | Small ms: median [range] | Standard large ms | Long-history ms |
+| --- | ---: | ---: | ---: |
+| auth.signin | 705.0 [595.0–723.0] | 722.0 [710.0–818.0] | 1597.0 [1585.0–1606.0] |
+| cash_out.confirm | 335.0 [249.0–352.0] | 591.0 [385.0–594.0] | 1723.0 [1697.0–1966.0] |
+| entry.confirm | 354.0 [263.0–455.0] | 588.0 [471.0–717.0] | 1598.0 [1454.0–1703.0] |
+| nav.players | 215.0 [135.0–253.0] | 248.0 [244.0–263.0] | 250.0 [245.0–364.0] |
+| offline.replay | 380.0 [373.0–397.0] | 521.0 [493.0–626.0] | 1835.0 [1611.0–1890.0] |
+| payment.confirm | 354.0 [279.0–364.0] | 478.0 [388.0–487.0] | 1687.0 [1471.0–1738.0] |
+| report.filter | 228.0 [150.0–240.0] | 382.0 [378.0–482.0] | 1115.0 [1098.0–1343.0] |
+| report.open | 247.0 [139.0–343.0] | 488.0 [382.0–495.0] | 1229.0 [1114.0–1338.0] |
+| session.close | 231.0 [138.0–258.0] | 240.0 [144.0–248.0] | 141.0 [137.0–243.0] |
+| session.switch | 242.0 [235.0–340.0] | 358.0 [265.0–370.0] | 475.0 [474.0–486.0] |
+| share.enable | 140.0 [127.0–234.0] | 136.0 [130.0–138.0] | 138.0 [137.0–233.0] |
+| ui.open.cold | 393.0 [280.0–398.0] | 391.0 [382.0–396.0] | 649.0 [629.0–744.0] |
+| ui.return.warm | 17.0 [13.0–28.0] | 19.0 [12.0–25.0] | 19.0 [11.0–27.0] |
+| undo.confirm | 242.0 [134.0–251.0] | 244.0 [239.0–342.0] | 1365.0 [867.0–1475.0] |
+| update.adoption | 1979.0 [1958.0–2093.0] | 2090.0 [1977.0–3985.0] | 3554.0 [3535.0–4942.0] |
+| viewer.delay.1 | 1600.0 [1549.0–1731.0] | 1699.0 [1617.0–1807.0] | 2683.0 [2604.0–2797.0] |
+| viewer.first | 1124.0 [985.0–1217.0] | 1133.0 [1102.0–1231.0] | 2032.0 [1967.0–2096.0] |
+| viewer.open | 491.0 [392.0–518.0] | 523.0 [407.0–623.0] | 1141.0 [954.0–1148.0] |
+| api.history | 0.4 [0.4–0.8] | 0.7 [0.6–0.9] | 1.1 [0.9–1.2] |
+| api.players | 1.8 [1.6–1.9] | 17.7 [16.9–19.6] | 67.6 [66.9–88.7] |
+| api.report.game | 1.7 [1.4–1.9] | 4.0 [3.9–4.4] | 12.4 [12.0–15.8] |
+| api.report.location | 1.7 [1.5–1.9] | 4.5 [3.7–5.4] | 11.6 [11.3–15.3] |
+| api.report.month | 1.6 [1.5–2.2] | 4.6 [3.7–5.0] | 13.4 [11.8–15.4] |
+| api.report.overall | 1.9 [1.6–2.2] | 4.3 [3.7–4.8] | 12.7 [12.3–16.9] |
+| api.report.weekday | 2.0 [1.5–2.1] | 4.4 [3.8–4.5] | 12.9 [12.8–16.9] |
+| api.session | 1.7 [1.3–2.0] | 1.7 [1.4–2.2] | 2.8 [2.3–3.6] |
+| api.since | 0.9 [0.7–1.0] | 0.8 [0.7–1.0] | 0.8 [0.8–1.0] |
+| api.write10 | 38.0 [9.0–54.2] | 38.7 [8.5–61.0] | 54.6 [12.9–111.4] |
+
+### Limiter and plans
+
+The long cash-out median was 1,723 ms: approximately 726 ms before POST dispatch and 989 ms from dispatch through confirmation (medians of components need not sum to the overall median). The POST itself used 7.3 ms app / 5.8 ms driver time and returned about 131–134 KB, imposing roughly 0.53 seconds of transfer at 2 Mbps before latency/rendering. Save-tap to next animation frame was 130 ms median (not INP). An unreported owned-Chromium first-cycle V8 profile attributed 262.6 ms self time to `formatMoney` and 112.0 ms to `currencyExponent` in a 1,008.4 ms cycle. These include formatting as well as construction; they are diagnostic self time, not a WebKit speedup estimate. See `memory-long-02/run-01/{first-cycle-cpu,cpu-summary}.json` and its recorded bundle.
+
+Current `EXPLAIN (ANALYZE, BUFFERS)` captures actual roster/history SQL plus session, ledger, events, history-list and lock queries in every repetition. Long-workload median execution times:
+
+| Query | Plan execution ms | Finding |
+| --- | ---: | --- |
+| state-ledger | 0.276 | Existing banker/session bitmap index; roughly 430 post-workload rows, in-memory sort. |
+| roster-summary | 75.623 | Recursive effective-entry/window aggregation; CTE materialization spills at the local default work_mem. |
+| player-sessions | 7.740 | Selected player history aggregation; 200 closed sessions. |
+| history | 0.460 | 31 selected rows for the 30-row page. |
+| write-session-lock | 0.021 | Indexed session row lock; no new index justified for the selected UI bottleneck. |
+
+Standalone API query counts remain fixed: session 10, unchanged 5, roster 6, report 7 and history 2, including authentication/transaction commands. Long roster app time was 67.6 ms, mostly driver time (67.3 ms); it is a separate database aggregation/spill candidate, not the dominant financial UI wait. No migration or database tuning was applied.
+
+### First hill-climb attempt
+
+**Kept: reuse validated currency exponents and up to 64 currency/locale `Intl.NumberFormat` instances.** The BigInt parts/fraction algorithm and parser are unchanged. This removes repeated formatter construction without caching financial values. Mixed-locale/currency, cache-churn and exact signed/maximum-value regressions supplement existing money/report checks.
+
+Five pairs alternate A,B / B,A with identical release `bench-turn3-formatter`, dependencies, seed and harness hash; each leg has two samples per metric. **80 valid observations, zero unexplained errors; noisy host marked.** The target must win every pair and its median improvement exceed both sides’ MADs; no guard median may rise beyond the larger MAD. Compare five leg medians, not baseline observations from a different host window. No p95 is claimed from ten observations per side.
+
+| Metric | A median ms [leg range] | B median ms [leg range] | Delta | Paired wins | Max MAD ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| cash_out.confirm | 1862.5 [1576.0–1965.0] | 1233.0 [1137.5–1370.5] | -33.8% | 5/5 | 102.5 |
+| entry.confirm | 1695.5 [1607.5–1752.0] | 1203.0 [1080.0–1282.0] | -29.0% | 5/5 | 75.0 |
+| ui.open.cold | 643.0 [634.0–668.0] | 504.5 [465.0–530.5] | -21.5% | 5/5 | 26.0 |
+| report.open | 1219.0 [1155.0–1238.5] | 1229.5 [1149.5–1259.0] | +0.9% | 3/5 | 29.5 |
+
+Cash-out improves **33.8%**; its 629.5 ms gap exceeds the 102.5 ms noise floor. Report open is **no measurable difference**, not an improvement or meaningful regression (+10.5 ms versus 29.5 ms MAD). All legs preserve exact financial work. Source patch/provenance and decision are in `attempt-formatter/`; every attempt is appended to `evidence/bench/hillclimb.tsv`. One application attempt was made and kept; none was rejected. Fixture/input/diagnostic corrections before freezing are not optimization gains.
+
+### Fifty-cycle resource check
+
+Each unshaped owned-Chromium run explicitly collects garbage before and after 50 paid buy-in/Undo cycles: **100 revisions, 200 additional append-only ledger rows, unchanged totals, no reload**. Chromium trusts only the generated loopback certificate SPKI. DOM includes text/internal nodes; these snapshots and the profiler/observer overhead are not a leak diagnosis or an A/B latency statistic. Every workload grows by 2,757 DOM nodes as audit history grows.
+
+| Workload / code | JS heap MiB before → after | DOM nodes before → after | Long tasks / interval blocking ms |
+| --- | ---: | ---: | ---: |
+| Small / before | 2.63 → 6.65 | 538 → 3,295 | 0 / 0 |
+| Standard large / before | 2.85 → 6.94 | 1,161 → 3,918 | 0 / 0 |
+| Long / before | 3.85 → 8.36 | 6,257 → 9,014 | 150 / 3761 |
+| Long / after | 3.86 → 8.46 | 6,257 → 9,014 | 48 / 618 |
+
+This blocking sum is time above 50 ms within observed long tasks, not Lighthouse navigation TBT. The after profile’s largest application self-time group is now the Activity row mapper (162.1 ms), followed by entry filtering/sorting; money formatting is 38.4 ms in that single diagnostic. Full-state transfer, Activity row/time rendering and roster CTE spill remain measured targets for the next phase. No live gain is claimed, and no second factor was stacked into this phase’s experiment.
+
+External entry bundle on the long baseline: 368,521 raw / 111,495 gzip / 96,132 Brotli bytes; CSS 24,349 / 5,545 / 4,842. Each sample retains exact asset hashes/sizes and actual request/cache observations. Compression figures are file estimates, distinct from observed wire bytes and cached zero-byte transfers.
+
+Final scoped gate: **typecheck; 178/178 Vitest; 10/10 Playwright** (iPhone standalone and desktop WebKit: cents/precision, zero loss cash-out, isolation, offline replay and timer/display). No Unhandled Errors. Post-change replay and automatic adoption also pass; the resource checks preserve exact work. Cleanup audit found zero owned PG/TLS/engine scratch directories or surviving cloned WebKit processes. Full suite, production, physical iOS keyboard/suspension and live benchmarks were deliberately not run.

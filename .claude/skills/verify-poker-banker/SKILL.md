@@ -7,6 +7,8 @@ description: Drive Justin's poker banker web PWA through its real phone and desk
 
 Read [features/README.md](features/README.md), then the feature being checked. The primary surface is the browser UI. Production HTTP endpoints provide a second, read-only view of saved data. Work only in this run's uniquely named test banker and its sessions.
 
+For reproducible local performance baselines and matched experiments after functional verification, read [performance verification](features/performance.md). It uses the existing benchmark harness with its own isolated fixtures and cleanup; run it serially through the mini capacity runner.
+
 ## Launch
 
 From the repository root, run:
