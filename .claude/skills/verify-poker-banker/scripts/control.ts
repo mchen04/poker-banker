@@ -11,8 +11,8 @@ import { webkit, devices, expect, type Browser, type BrowserServer, type Browser
 import type { SessionState } from '../../../../src/domain/session';
 import { createAccount, signIn, current } from '../../../../e2e/helpers';
 import { ledger } from './ledger';
-import { createProcessOwner, spawnOwned, stopOwned, withShutdownDeadline } from '../../../../scripts/owned-process';
-import { runOwned } from '../../../../scripts/owned-command';
+import { createProcessOwner, spawnOwned, stopOwned, withShutdownDeadline, type ProcessOwner } from '../../../../scripts/owned-process';
+import { ownedMain, runOwned } from '../../../../scripts/owned-command';
 
 export type RecipeContext = {
   page: Page; context: BrowserContext; browser: Browser; baseURL: string;
@@ -53,10 +53,10 @@ async function files(directory: string): Promise<string[]> {
   const values = await readdir(directory, { withFileTypes: true });
   return (await Promise.all(values.map(value => value.isDirectory() ? files(join(directory, value.name)) : [join(directory, value.name)]))).flat();
 }
-async function owned(meta: Pick<Meta, 'pid' | 'runId'>) {
-  const owner = createProcessOwner();
+async function owned(meta: Pick<Meta, 'pid' | 'runId'>, parent?: ProcessOwner) {
+  const owner = createProcessOwner({ parent });
   let command: string;
-  try { command = (await runOwned(owner, 'ps', ['-p', String(meta.pid), '-o', 'command='])).trim(); }
+  try { command = (await runOwned(owner, 'sh', ['-c', 'ps -p "$1" -o command= || [ "$?" -eq 1 ]', 'pb-owned-lookup', String(meta.pid)])).trim(); }
   finally { await owner.stop(); }
   if (!command.includes('control.ts') || !command.includes(`_daemon ${meta.runId}`)) throw new Error('PID no longer belongs to this verification run; refusing to signal it');
   return command;
@@ -281,7 +281,7 @@ else if (action === 'launch') {
       if (!/^[a-zA-Z0-9_-]+\.json$/.test(name)) continue;
       const previous = JSON.parse(await readFile(join(cache, name), 'utf8')) as Meta;
       if (!previous.local || previous.state === 'stopped') continue;
-      try { await owned(previous); } catch { continue; }
+      try { await owned(previous, owner); } catch { owner.checkpoint(); continue; }
       throw new Error(`Local verification run ${previous.runId} owns dist; clean it up before another local launch or build`);
     }
     try { await runOwned(owner, 'pnpm', ['build'], { stdio: 'inherit', env: { ...process.env, RELEASE_VERSION: `verify-${runId}` } }); }
@@ -311,9 +311,10 @@ else if (action === 'launch') {
   } finally {
     try { if (!ready || interrupted) await stopLaunch(); } finally { for (const { signal, handler } of handlers) process.removeListener(signal, handler); }
   }
-} else {
+} else await ownedMain(async owner => {
   const meta = JSON.parse(await readFile(metadata, 'utf8')) as Meta;
-  await owned(meta);
+  await owned(meta, owner);
+  owner.checkpoint();
   const mode = (args.includes('--context') ? option('--context') : 'iphone-webkit') as Mode;
   console.log(JSON.stringify(await request({ action, mode, recipe: args[1] }), null, 2));
-}
+});

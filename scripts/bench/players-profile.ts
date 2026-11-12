@@ -228,14 +228,10 @@ try {
 } catch (error) {
   if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
 }
-const host = await boundedHost(0);
 const owner = createProcessOwner();
 const stackController = new AbortController();
-const stackTask = owner.launch(() => benchmarkStack(output, stackController.signal)).then(async stack => {
-  if (interrupted) { await stack.stop(); throw new Error(`Players profile interrupted by ${interrupted}`); }
-  return stack;
-});
-void stackTask.catch(() => {});
+let host: Awaited<ReturnType<typeof boundedHost>> | undefined;
+let stackTask: Promise<Awaited<ReturnType<typeof benchmarkStack>>> | undefined;
 let phase = 'prepare';
 let monitor: Awaited<ReturnType<typeof hostMonitor>> | undefined;
 let interrupted: NodeJS.Signals | undefined;
@@ -261,7 +257,7 @@ function checkInterrupted() {
   if (interrupted) throw new Error(`Players profile interrupted by ${interrupted}`);
 }
 async function measure() {
-  const stack = await Promise.race([stackTask, interruption]);
+  const stack = await Promise.race([stackTask!, interruption]);
   checkInterrupted();
   const postgres = Number((await readFile(join(stack.database.directory, 'postmaster.pid'), 'utf8')).split('\n')[0]);
   monitor = await hostMonitor(stack.serverPid, postgres, 'no-browser', () => phase, stack.owner);
@@ -362,6 +358,13 @@ async function measure() {
   }
 }
 try {
+  host = await owner.launch(() => boundedHost(0));
+  checkInterrupted();
+  stackTask = owner.launch(() => benchmarkStack(output, stackController.signal)).then(async stack => {
+    if (interrupted) { await stack.stop(); throw new Error(`Players profile interrupted by ${interrupted}`); }
+    return stack;
+  });
+  void stackTask.catch(() => {});
   await Promise.race([measure(), interruption]);
 } catch (error) {
   await withShutdownDeadline('Players profile failure evidence', () => writeFile(join(output, 'failure.json'), JSON.stringify({ phase, errors: 1, message: error instanceof Error ? error.message : String(error) }, null, 2)));
