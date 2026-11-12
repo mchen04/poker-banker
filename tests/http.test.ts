@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { handle } from '@hono/node-server/vercel';
+import { getRequestListener } from '@hono/node-server';
 import { createApp } from '../src/server/app';
 import { testDatabase } from './database';
 
@@ -12,7 +12,7 @@ let server: Server;
 let url: string;
 beforeAll(async () => {
   database = await testDatabase();
-  server = createServer(handle(createApp(database.pool)));
+  server = createServer(getRequestListener(createApp(database.pool).fetch));
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();
@@ -24,7 +24,7 @@ afterAll(async () => {
   finally { await database?.stop(); }
 });
 
-it('serves real HTTP via the Vercel Node adapter and preserves secure cookies', async () => {
+it('serves real HTTP via the local Node adapter and preserves secure cookies', async () => {
   const username = `http-${randomUUID().slice(0, 12)}`;
   const response = await fetch(`${url}/api/auth/signup`, {
     method: 'POST', headers: { origin: url, 'content-type': 'application/json' },

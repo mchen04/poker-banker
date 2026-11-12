@@ -2,7 +2,7 @@ import { closeOwnedServer } from '../scripts/close-server';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
-import { handle } from '@hono/node-server/vercel';
+import { getRequestListener } from '@hono/node-server';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { createApp } from '../src/server/app';
 import type { SessionState } from '../src/domain/session';
@@ -14,7 +14,7 @@ let origin: string;
 
 beforeAll(async () => {
   database = await testDatabase();
-  server = createServer(handle(createApp(database.pool)));
+  server = createServer(getRequestListener(createApp(database.pool).fetch));
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();

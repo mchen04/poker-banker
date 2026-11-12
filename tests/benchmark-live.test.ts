@@ -8,7 +8,7 @@ import { readFile, stat, rm, chmod, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { webkit } from '@playwright/test';
 import { scopeLiveBrowserRequests } from '../scripts/bench/live-browser';
-import { handle } from '@hono/node-server/vercel';
+import { getRequestListener } from '@hono/node-server';
 import { runLiveComparison, summarizeLiveComparison, type LiveComparisonRow } from '../scripts/bench-live-compare';
 import { createServer } from 'node:http';
 import { createApp } from '../src/server/app';
@@ -149,7 +149,7 @@ it('persists a private owned seed, reuses its banker across loopback origins wit
   const seen: { method: string; header: string | undefined }[] = [];
   const servers = Array.from({ length: 2 }, () => createServer((request, response) => {
     seen.push({ method: request.method ?? '', header: request.headers['x-vercel-protection-bypass'] as string | undefined });
-    void handle(createApp(database.pool))(request, response);
+    void getRequestListener(createApp(database.pool).fetch)(request, response);
   }));
   for (const [index, server] of servers.entries()) await new Promise<void>(resolve => server.listen(0, index === 0 ? 'localhost' : '127.0.0.1', resolve));
   const urls = servers.map((server, index) => { const address = server.address(); if (!address || typeof address === 'string') throw new Error('No owned test port'); return `http://${index === 0 ? 'localhost' : '127.0.0.1'}:${address.port}`; });
@@ -249,7 +249,7 @@ it('adds browser bypass headers only to the exact target origin including assets
     if (request.url === '/') { response.setHeader('content-type', 'text/html'); response.end('<script src="/asset.js"></script><p>Owned page</p>'); }
     else if (request.url === '/asset.js') { response.setHeader('content-type', 'application/javascript'); response.end('fetch("/api/auth/me").then(response => response.json()).then(() => document.body.dataset.loaded = "yes")'); }
     else if (request.url === '/redirect') { response.writeHead(302, { location: `http://127.0.0.1:${externalAddress.port}/destination` }); response.end(); }
-    else void handle(createApp(database.pool))(request, response);
+    else void getRequestListener(createApp(database.pool).fetch)(request, response);
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
