@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { webkit, devices, expect, type Page, type BrowserContext } from '@playwright/test';
+import { webkit, devices, expect, type Page, type BrowserContext, type BrowserServer } from '@playwright/test';
 import type { SessionState } from '../../src/domain/session';
 import { formatMoney } from '../../src/domain/money';
 import { observationScript } from './observe';
 import { publicCall, type LiveFixture } from './live-seed';
 import type { LiveClient } from './live-client';
 import type { RecordSample } from './types';
-import { stopOwnedProcess, withShutdownDeadline } from '../owned-process';
+import { createProcessOwner, withShutdownDeadline } from '../owned-process';
 
 type ObservedWindow = Window & { __pbObserveSaved?: (note: string, total: string) => Promise<number> };
 export async function scopeLiveBrowserRequests(context: BrowserContext, client: LiveClient) {
@@ -27,24 +27,19 @@ export async function scopeLiveBrowserRequests(context: BrowserContext, client: 
 }
 export async function liveBrowser(client: LiveClient, fixture: LiveFixture, record: RecordSample, reverse: boolean, samples: number, directory: string, allowLoopbackCertificate = false) {
   let state = await publicCall<SessionState>(client, `/api/sessions/${fixture.sessionId}`);
-  const server = await webkit.launchServer({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
-  const child = typeof server.process === 'function' ? server.process() : undefined;
-  let closingServer: Promise<void> | undefined;
-  const closeServer = () => closingServer ??= (async () => {
-    const errors: unknown[] = [];
-    try { await withShutdownDeadline('Live browser server close', () => server.close()); } catch (error) { errors.push(error); }
-    try {
-      if (child) await stopOwnedProcess(child, 'signal', true);
-      else if (errors.length && typeof server.kill === 'function') await withShutdownDeadline('Live browser server kill', () => server.kill());
-    } catch (error) { errors.push(error); }
-    if (errors.length) throw new AggregateError(errors, 'Live browser server cleanup failed');
-  })();
-  let browser: Awaited<ReturnType<typeof webkit.connect>>;
-  try { browser = await webkit.connect(server.wsEndpoint()); }
+  const owner = createProcessOwner({ parent: client.owner });
+  let server: BrowserServer | undefined;
+  let browser: Awaited<ReturnType<typeof webkit.connect>> | undefined;
+  owner.addCleanup('Live browser server close', 'cleanup', () => server?.close());
+  owner.addCleanup('Live browser close', 'cleanup', () => browser?.close());
+  const closeBrowser = () => owner.stop();
+  server = await owner.launch(async () => server = await webkit.launchServer({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
+  try { browser = await owner.launch(async () => browser = await webkit.connect(server!.wsEndpoint())); }
   catch (error) {
-    try { await closeServer(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Live browser connection and cleanup failed'); }
+    try { await closeBrowser(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Live browser connection and cleanup failed'); }
     throw error;
   }
+  const connectedBrowser = browser;
   const errors: string[] = [];
   const retiring = new WeakSet<Page>();
   const contextClosures = new WeakMap<BrowserContext, Promise<void>>();
@@ -58,10 +53,9 @@ export async function liveBrowser(client: LiveClient, fixture: LiveFixture, reco
     const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
     if (failures.length) throw new AggregateError(failures, 'Live browser contexts failed to close');
   };
-  let closingBrowser: Promise<void> | undefined;
-  const closeBrowser = () => closingBrowser ??= withShutdownDeadline('Live browser close', () => browser.close());
+  owner.addCleanup('Live browser contexts close', 'cleanup', () => closeContexts(connectedBrowser.contexts()));
   const context = async (banker: boolean) => {
-    const owned = await browser.newContext({ ...devices['iPhone 15'], baseURL: client.baseURL, locale: 'en-US', timezoneId: 'UTC', ignoreHTTPSErrors: allowLoopbackCertificate, serviceWorkers: 'block' });
+    const owned = await connectedBrowser.newContext({ ...devices['iPhone 15'], baseURL: client.baseURL, locale: 'en-US', timezoneId: 'UTC', ignoreHTTPSErrors: allowLoopbackCertificate, serviceWorkers: 'block' });
     await scopeLiveBrowserRequests(owned, client);
     if (banker) await owned.addCookies((await client.context.storageState()).cookies);
     await owned.addInitScript({ content: observationScript.replace('__PB_EXPECTED__', JSON.stringify({ name: state.session.name, total: formatMoney(BigInt(state.totals.total_in_minor), 'USD'), ids: fixture.playerIds.slice(0, 9), endpoint: banker ? `/api/sessions/${fixture.sessionId}` : `/api/view/${fixture.token}` })) });
@@ -123,11 +117,7 @@ export async function liveBrowser(client: LiveClient, fixture: LiveFixture, reco
     }
     expect(errors).toEqual([]);
   } catch { throw new Error('Browser benchmark failed'); } finally {
-    for (const owned of browser.contexts()) for (const page of owned.pages()) retiring.add(page);
-    const errors: unknown[] = [];
-    try { await closeContexts(browser.contexts()); } catch (error) { errors.push(error); }
-    try { await closeBrowser(); } catch (error) { errors.push(error); }
-    try { await closeServer(); } catch (error) { errors.push(error); }
-    if (errors.length) throw new AggregateError(errors, 'Live browser cleanup failed');
+    for (const owned of connectedBrowser.contexts()) for (const page of owned.pages()) retiring.add(page);
+    await closeBrowser();
   }
 }

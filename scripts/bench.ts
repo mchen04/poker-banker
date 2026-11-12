@@ -1,4 +1,3 @@
-import { spawnSync, execFileSync } from 'node:child_process';
 import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join, resolve, relative } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
@@ -11,7 +10,8 @@ import { explainBenchmark } from './bench/explain';
 import { summarize, workSummary } from './bench/stats';
 import { boundedHost, hostMonitor, hostPolicy } from './bench/host';
 import type { Sample } from './bench/types';
-import { SHUTDOWN_GRACE_MS, withShutdownDeadline } from './owned-process';
+import { createProcessOwner, withShutdownDeadline } from './owned-process';
+import { runOwned } from './owned-command';
 const args = process.argv.slice(2);
 const option = (name: string, fallback: string) => args.includes(name) ? args[args.indexOf(name) + 1]! : fallback;
 const smoke = args.includes('--smoke');
@@ -29,34 +29,23 @@ const waitMs = Number(option('--wait-ms', '120000'));
 assert(Number.isFinite(waitMs) && waitMs >= 0 && waitMs <= 120000);
 const metrics = args.includes('--metrics') ? new Set(option('--metrics', '').split(',')) : undefined;
 const wantsBrowser = !metrics || [...metrics].some(metric => !metric.startsWith('api.'));
-const preflight = await boundedHost(waitMs);
-const release = args.includes('--skip-build') ? (await readFile('dist/index.html', 'utf8')).match(/name="pb-release" content="([^"]+)"/)?.[1] : `bench-${stamp}`;
-assert(release, 'Prebuilt assets must have a release stamp');
-const build = args.includes('--skip-build') ? { status: 0 } : spawnSync('pnpm', ['build'], { stdio: 'inherit', env: { ...process.env, RELEASE_VERSION: release } });
-assert.equal(build.status, 0, 'Production benchmark build must pass');
-const versions = { node: process.versions.node, postgres: '', react: (JSON.parse(await readFile('node_modules/react/package.json', 'utf8')) as { version: string }).version, vite: (JSON.parse(await readFile('node_modules/vite/package.json', 'utf8')) as { version: string }).version, playwright: (JSON.parse(await readFile('node_modules/@playwright/test/package.json', 'utf8')) as { version: string }).version, release };
-await writeFile(join(output, 'method.json'), JSON.stringify({ preflight, versions, runs, repeatedSamples: count, reported: !smoke, profile: 'Synthetic 25ms/100ms owned WebKit CPU budget;60ms latency;2Mbps aggregate down;512Kbps up', order: 'Odd runs workspace/viewer,cold/warm,1/10/25; even runs reverse these orders and API read order', output }, null, 2));
-const allSamples: Sample[] = [];
-const runSummaries: unknown[] = [];
+const owner = createProcessOwner();
 let engine: Awaited<ReturnType<typeof isolatedEngine>> | undefined;
-let stackTask: Promise<Awaited<ReturnType<typeof benchmarkStack>>> | undefined;
 let interrupted: NodeJS.Signals | undefined;
 let signalStop: Promise<void> = Promise.resolve();
 let signalCleanupError: unknown;
 const interruptionController = new AbortController();
-const interruption = new Promise<never>((_, reject) => interruptionController.signal.addEventListener('abort', () => reject(interruptionController.signal.reason), { once: true }));
-void interruption.catch(() => {});
 const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 const stopForSignal = (signal: NodeJS.Signals) => {
   if (interrupted) return;
   interrupted = signal; process.exitCode = signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 129;
   interruptionController.abort(new Error(`Benchmark interrupted by ${signal}`));
-  signalStop = withShutdownDeadline('Benchmark startup shutdown', () => stackTask).then(stack => stack?.stop()).catch(error => { signalCleanupError = error; });
+  signalStop = owner.stop().catch(error => { signalCleanupError = error; });
 };
 const checkInterrupted = () => { if (interrupted) throw new Error(`Benchmark interrupted by ${interrupted}`); };
 function running<T>(action: () => Promise<T>): Promise<T> {
   checkInterrupted();
-  return Promise.race([Promise.resolve().then(() => { checkInterrupted(); return action(); }), interruption]);
+  return owner.launch(action);
 }
 const handlers = signals.map(signal => { const handler = () => stopForSignal(signal); process.on(signal, handler); return { signal, handler }; });
 const ownedMessage = (message: unknown) => { if (message && typeof message === 'object' && 'type' in message && message.type === 'pb-shutdown') stopForSignal('SIGTERM'); };
@@ -65,19 +54,19 @@ if (typeof process.send === 'function') {
   process.on('message', ownedMessage); process.on('disconnect', ownedDisconnect);
   if (!process.connected) ownedDisconnect();
 }
+const preflight = await running(() => boundedHost(waitMs));
+const release = args.includes('--skip-build') ? (await readFile('dist/index.html', 'utf8')).match(/name="pb-release" content="([^"]+)"/)?.[1] : `bench-${stamp}`;
+assert(release, 'Prebuilt assets must have a release stamp');
+if (!args.includes('--skip-build')) await runOwned(owner, 'pnpm', ['build'], { stdio: 'inherit', env: { ...process.env, RELEASE_VERSION: release } });
+const versions = { node: process.versions.node, postgres: '', react: (JSON.parse(await readFile('node_modules/react/package.json', 'utf8')) as { version: string }).version, vite: (JSON.parse(await readFile('node_modules/vite/package.json', 'utf8')) as { version: string }).version, playwright: (JSON.parse(await readFile('node_modules/@playwright/test/package.json', 'utf8')) as { version: string }).version, release };
+await writeFile(join(output, 'method.json'), JSON.stringify({ preflight, versions, runs, repeatedSamples: count, reported: !smoke, profile: 'Synthetic 25ms/100ms owned WebKit CPU budget;60ms latency;2Mbps aggregate down;512Kbps up', order: 'Odd runs workspace/viewer,cold/warm,1/10/25; even runs reverse these orders and API read order', output }, null, 2));
+const allSamples: Sample[] = [];
+const runSummaries: unknown[] = [];
 try {
   if (wantsBrowser) {
-    engine = await running(async () => {
-      const value = await isolatedEngine();
-      if (interrupted) {
-        try { await withShutdownDeadline('Late benchmark engine cleanup', () => value.cleanup()); }
-        catch (error) { signalCleanupError = error; throw error; }
-        checkInterrupted();
-      }
-      return value;
-    });
+    engine = await running(async () => engine = await isolatedEngine(owner));
     checkInterrupted();
-    await primeEngine(engine, interruptionController.signal);
+    await owner.launch(() => primeEngine(engine!, interruptionController.signal));
   }
   for (let index = 0; index < runs; index++) {
     checkInterrupted();
@@ -88,16 +77,15 @@ try {
     const directory = join(output, `run-${String(index + 1).padStart(2, '0')}`); await running(() => mkdir(directory));
     console.log(`Benchmark run ${index + 1}/${runs}, ${index % 2 ? 'reverse' : 'forward'} order; production ${release}`);
     const samples: Sample[] = [];
-    stackTask = benchmarkStack(directory, interruptionController.signal);
-    const stack = await running(() => stackTask!);
+    const stack = await running(() => benchmarkStack(directory, interruptionController.signal));
     let phase = 'prepare';
-    let monitorRun: ReturnType<typeof hostMonitor> | undefined;
+    let monitorRun: Awaited<ReturnType<typeof hostMonitor>> | undefined;
     let failure: string | undefined;
     try {
       checkInterrupted();
       const ownBackend = Number((await running(() => stack.database.pool.query('SELECT pg_backend_pid() AS pid'))).rows[0]!.pid);
-      const postmaster = Number(execFileSync('ps', ['-p', String(ownBackend), '-o', 'ppid='], { encoding: 'utf8', timeout: SHUTDOWN_GRACE_MS, killSignal: 'SIGKILL' }).trim());
-      monitorRun = hostMonitor(stack.serverPid, postmaster, engine?.engine ?? resolve('.cache/nonexistent-benchmark-engine'), () => phase);
+      const postmaster = Number((await runOwned(owner, 'ps', ['-p', String(ownBackend), '-o', 'ppid='])).trim());
+      monitorRun = await hostMonitor(stack.serverPid, postmaster, engine?.engine ?? resolve('.cache/nonexistent-benchmark-engine'), () => phase, stack.owner);
       versions.postgres = String((await running(() => stack.database.pool.query('SELECT version() AS version'))).rows[0]!.version);
       await running(() => writeFile(join(directory, 'seed.json'), JSON.stringify({ counts: stack.fixture.counts, versions, host, order: index % 2 ? 'reverse' : 'forward', startingOpenEntries: 60 }, null, 2)));
       const record = (sample: Sample) => { if (!Number.isFinite(sample.ms) || sample.ms < 0) throw new Error(`Invalid timing for ${sample.metric}`); const load = monitorRun!.snapshot(Number(sample.work.renderedEpoch ?? sample.work.confirmedEpoch ?? Date.now())); samples.push({ ...sample, host: { ...hostPolicy(host.cores, load.otherCpu), serverCpu: load.serverCpu, browserCpu: load.browserCpu, controllerCpu: load.controllerCpu }, work: { ...sample.work, run: index + 1 }, recordedAt: new Date().toISOString() }); };
@@ -113,7 +101,7 @@ try {
     } catch (error) { failure = error instanceof Error ? error.stack : String(error); throw error; }
     finally {
       try {
-        const monitor = monitorRun?.stop();
+        const monitor = await monitorRun?.stop();
         const noise = monitor?.samples.filter(sample => sample.otherCpu >= host.cores * 50) ?? [];
         const measured = monitor?.samples.filter(sample => !sample.phase.startsWith('prepare')) ?? [];
         const saturated = !!monitor && monitor.eventLoopDelayMs.p95 > 100 && measured.some(sample => sample.browserCpu >= host.cores * 85 || (sample.controllerCpu ?? 0) >= 90);
@@ -139,7 +127,7 @@ try {
 } catch (error) { if (!interrupted) throw error; console.error(`Benchmark interrupted by ${interrupted}`); }
 finally {
   try { await signalStop; } finally {
-    try { await withShutdownDeadline('Benchmark engine cleanup', () => engine?.cleanup()); }
+    try { await owner.stop(); }
     finally {
       for (const { signal, handler } of handlers) process.removeListener(signal, handler);
       process.removeListener('message', ownedMessage);

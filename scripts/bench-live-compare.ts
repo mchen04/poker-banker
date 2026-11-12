@@ -1,4 +1,5 @@
-import { withShutdownDeadline } from './owned-process';
+import { ownedMain } from './owned-command';
+import { type ProcessOwner, withShutdownDeadline } from './owned-process';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, appendFile } from 'node:fs/promises';
 import { cpus, loadavg } from 'node:os';
@@ -30,7 +31,7 @@ export function summarizeLiveComparison(rows: LiveComparisonRow[], metric: strin
   const clearsBothMAD = improvementMs !== null && beforeMAD !== null && afterMAD !== null && improvementMs > beforeMAD && improvementMs > afterMAD;
   return { metric, pairs, beforeMedian, afterMedian, improvementMs, beforeMAD, afterMAD, everyPairImproves, clearsBothMAD, identicalResponses, bodyHashes, errors: errors + sampleErrors, samples: rows.length, completedWork: rows.filter(row => row.ok).map(row => ({ side: row.side, pair: row.pair, work: row.work })), accepted: complete && everyPairImproves && clearsBothMAD && identicalResponses && errors === 0 && sampleErrors === 0 };
 }
-export async function runLiveComparison(options: { baselineURL: string; candidateURL: string; reuse: string; metric: string; directory: string; samples?: number; order?: 'alternating' | 'abba'; allowLoopbackCertificate?: boolean }) {
+export async function runLiveComparison(options: { baselineURL: string; candidateURL: string; reuse: string; metric: string; directory: string; samples?: number; order?: 'alternating' | 'abba'; allowLoopbackCertificate?: boolean }, owner?: ProcessOwner) {
   assert.equal(options.metric, 'api.players', 'Live paired comparison currently selects exactly api.players');
   const sampleCount = options.samples ?? 1;
   assert(Number.isInteger(sampleCount) && sampleCount >= 1 && sampleCount <= 10, 'Comparison samples must be between one and ten');
@@ -44,8 +45,8 @@ export async function runLiveComparison(options: { baselineURL: string; candidat
   let journal = Promise.resolve(), error: string | null = null;
   try {
     const state = await readLiveSeedState(options.reuse);
-    clients.A = await LiveClient.create(options.baselineURL, options.allowLoopbackCertificate);
-    clients.B = await LiveClient.create(options.candidateURL, options.allowLoopbackCertificate);
+    clients.A = await LiveClient.create(options.baselineURL, options.allowLoopbackCertificate, owner);
+    clients.B = await LiveClient.create(options.candidateURL, options.allowLoopbackCertificate, owner);
     const fixtures = { A: await reuseLiveSeed(clients.A, state), B: await reuseLiveSeed(clients.B, state) };
     await writeFile(join(directory, 'method.json'), JSON.stringify({ baselineURL: clients.A.baseURL, candidateURL: clients.B.baseURL, bankerId: state.fixture.bankerId, metric: options.metric, pairs: 5, samples: sampleCount, order: options.order ?? 'alternating', bypass: clients.A.bypassEnabled, timing: 'HTTP round trip through response body', hash: 'SHA256 of raw HTTP response body bytes', remoteHostLoad: 'unavailable through the public API', readOnly: true }, null, 2));
     for (let pair = 1; pair <= 5; pair++) {
@@ -82,11 +83,11 @@ export async function runLiveComparison(options: { baselineURL: string; candidat
     }
   }
 }
-async function main() {
+async function main(owner: ProcessOwner) {
   const args = process.argv.slice(2);
   const option = (name: string, fallback = '') => args.includes(name) ? args[args.indexOf(name) + 1]! : fallback;
-  const result = await runLiveComparison({ baselineURL: option('--baseline-url', option('--base')), candidateURL: option('--candidate-url'), reuse: option('--reuse'), metric: option('--metrics'), directory: option('--output', `evidence/bench/live/compare-${Date.now()}`), samples: Number(option('--samples', '1')), order: option('--order', 'alternating') as 'alternating' | 'abba', allowLoopbackCertificate: args.includes('--allow-loopback-certificate') });
+  const result = await runLiveComparison({ baselineURL: option('--baseline-url', option('--base')), candidateURL: option('--candidate-url'), reuse: option('--reuse'), metric: option('--metrics'), directory: option('--output', `evidence/bench/live/compare-${Date.now()}`), samples: Number(option('--samples', '1')), order: option('--order', 'alternating') as 'alternating' | 'abba', allowLoopbackCertificate: args.includes('--allow-loopback-certificate') }, owner);
   console.log(JSON.stringify({ accepted: result.accepted, errors: result.errors, identicalResponses: result.identicalResponses, beforeMedian: result.beforeMedian, afterMedian: result.afterMedian, beforeMAD: result.beforeMAD, afterMAD: result.afterMAD }));
   if (result.error || result.errors) process.exitCode = 1;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) void main().catch(() => { console.error('Live comparison failed; verify the supplied options and owned seed state'); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) void ownedMain(owner => main(owner)).catch(() => { console.error('Live comparison failed; verify the supplied options and owned seed state'); process.exitCode = 1; });

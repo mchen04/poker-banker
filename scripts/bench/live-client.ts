@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { request, type APIRequestContext } from '@playwright/test';
 import type { BenchmarkClient, HttpResult } from './types';
-import { withShutdownDeadline } from '../owned-process';
+import { createProcessOwner, type ProcessOwner, withShutdownDeadline } from '../owned-process';
 
 export function liveOrigin(baseURL: string, allowLoopbackCertificate = false) {
   const url = new URL(baseURL);
@@ -16,7 +16,7 @@ export class LiveClient implements BenchmarkClient {
   readonly counts = { requests: 0, mutations: 0, errors: 0, statuses: {} as Record<string, number> };
   private readonly secrets = new Set<string>();
   private closing: Promise<void> | undefined;
-  private constructor(readonly baseURL: string, readonly context: APIRequestContext, private readonly bypass: string | undefined) { if (bypass) this.secrets.add(bypass); }
+  private constructor(readonly baseURL: string, readonly context: APIRequestContext, private readonly bypass: string | undefined, readonly owner: ProcessOwner) { if (bypass) this.secrets.add(bypass); }
   get bypassEnabled() { return Boolean(this.bypass); }
   ownSecret(value: string) { if (value) this.secrets.add(value); }
   redact(value: unknown) {
@@ -29,10 +29,15 @@ export class LiveClient implements BenchmarkClient {
     if (new URL(url).origin === this.baseURL && this.bypass) result['x-vercel-protection-bypass'] = this.bypass;
     return result;
   }
-  static async create(baseURL: string, allowLoopbackCertificate = false) {
+  static async create(baseURL: string, allowLoopbackCertificate = false, parent?: ProcessOwner) {
     const origin = liveOrigin(baseURL, allowLoopbackCertificate);
-    const context = await request.newContext({ baseURL: origin, ignoreHTTPSErrors: allowLoopbackCertificate, extraHTTPHeaders: { origin, 'content-type': 'application/json' }, timeout: 30000 });
-    return new LiveClient(origin, context, process.env.PB_VERCEL_BYPASS || undefined);
+    const owner = createProcessOwner({ parent });
+    let context: APIRequestContext | undefined;
+    owner.addCleanup('Live controller disposal', 'cleanup', () => context?.dispose());
+    try {
+      context = await owner.launch(async () => context = await request.newContext({ baseURL: origin, ignoreHTTPSErrors: allowLoopbackCertificate, extraHTTPHeaders: { origin, 'content-type': 'application/json' }, timeout: 30000 }));
+      return new LiveClient(origin, context, process.env.PB_VERCEL_BYPASS || undefined, owner);
+    } catch (error) { await owner.stop(); throw error; }
   }
   async sessionCookie() {
     const cookies = (await this.context.storageState()).cookies.filter(cookie => cookie.name === 'pb_session' && cookie.domain === new URL(this.baseURL).hostname && cookie.path === '/');
@@ -64,5 +69,5 @@ export class LiveClient implements BenchmarkClient {
       return { status, body, ms, serverMs: timing ? Number(timing[1]) : null, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
     } catch (error) { this.counts.errors++; throw new Error(`Controller ${options.method ?? 'GET'} ${url.pathname.replace(/\/api\/view\/[^/]+/, '/api/view/OWNED_TOKEN')} failed (${error instanceof Error ? error.name : 'transport error'})`); }
   }
-  close() { return this.closing ??= withShutdownDeadline('Live controller disposal', () => this.context.dispose()); }
+  close() { return this.closing ??= this.owner.stop(); }
 }

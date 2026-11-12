@@ -1,4 +1,5 @@
-import { withShutdownDeadline } from './owned-process';
+import { ownedMain } from './owned-command';
+import { type ProcessOwner, withShutdownDeadline } from './owned-process';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, appendFile, access } from 'node:fs/promises';
 import { webkit } from '@playwright/test';
@@ -11,7 +12,7 @@ import { liveBrowser } from './bench/live-browser';
 import { summarize, workSummary } from './bench/stats';
 import type { Sample } from './bench/types';
 
-async function main() {
+async function main(owner: ProcessOwner) {
   const args = process.argv.slice(2);
   const option = (name: string, fallback: string) => {
     const index = args.indexOf(name);
@@ -42,7 +43,7 @@ async function main() {
   if (statePath) await prepareLiveSeedState(statePath);
   await mkdir(resolve('evidence/bench/live'), { recursive: true }); await mkdir(directory);
   if (!apiOnly) await access(webkit.executablePath());
-  const client = await LiveClient.create(baseURL, allowLoopbackCertificate);
+  const client = await LiveClient.create(baseURL, allowLoopbackCertificate, owner);
   const collected: Sample[] = [];
   const repetitions: unknown[] = [];
   let error: string | null = null;
@@ -91,4 +92,4 @@ async function main() {
   }
 
 }
-void main().catch(() => { console.error('Live benchmark failed before measurement; verify the supplied options and owned seed state'); process.exitCode = 1; });
+void ownedMain(owner => main(owner)).catch(() => { console.error('Live benchmark failed before measurement; verify the supplied options and owned seed state'); process.exitCode = 1; });

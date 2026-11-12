@@ -9,7 +9,7 @@ import { createApp } from '../../src/server/app';
 import { playerRoster } from '../../src/server/store';
 import { boundedHost, hostMonitor } from './host';
 import { benchmarkStack } from './stack';
-import { withShutdownDeadline } from '../owned-process';
+import { createProcessOwner, withShutdownDeadline } from '../owned-process';
 
 type QueryCapture = { sql: string; parameters: unknown[]; rows: unknown[]; driverAwaitMs: number; pgSocketBytes: number };
 type QuerySample = { sql: string; fingerprint: string; rows: number; decodedRowsJsonBytes: number; driverAwaitMs: number; pgSocketBytes: number };
@@ -229,14 +229,15 @@ try {
   if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
 }
 const host = await boundedHost(0);
+const owner = createProcessOwner();
 const stackController = new AbortController();
-const stackTask = benchmarkStack(output, stackController.signal).then(async stack => {
+const stackTask = owner.launch(() => benchmarkStack(output, stackController.signal)).then(async stack => {
   if (interrupted) { await stack.stop(); throw new Error(`Players profile interrupted by ${interrupted}`); }
   return stack;
 });
 void stackTask.catch(() => {});
 let phase = 'prepare';
-let monitor: ReturnType<typeof hostMonitor> | undefined;
+let monitor: Awaited<ReturnType<typeof hostMonitor>> | undefined;
 let interrupted: NodeJS.Signals | undefined;
 let signalStop: Promise<void> = Promise.resolve();
 let signalCleanupError: unknown;
@@ -251,7 +252,7 @@ const handlers = (['SIGINT', 'SIGTERM', 'SIGHUP'] as const).map(signal => {
     stackController.abort(error);
     cancel(error);
     process.exitCode = signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 129;
-    signalStop = withShutdownDeadline('Players profile startup shutdown barrier', () => stackTask).then(stack => stack.stop()).catch(error => { signalCleanupError = error; });
+    signalStop = owner.stop().catch(error => { signalCleanupError = error; });
   };
   process.on(signal, handler);
   return { signal, handler };
@@ -263,7 +264,7 @@ async function measure() {
   const stack = await Promise.race([stackTask, interruption]);
   checkInterrupted();
   const postgres = Number((await readFile(join(stack.database.directory, 'postmaster.pid'), 'utf8')).split('\n')[0]);
-  monitor = hostMonitor(stack.serverPid, postgres, 'no-browser', () => phase);
+  monitor = await hostMonitor(stack.serverPid, postgres, 'no-browser', () => phase, stack.owner);
   const method = {
     claim: 'Diagnose the existing /api/players workload at 30, 100, and 300 closed sessions without changing application code.',
     samplesPerScale: samples,
@@ -367,11 +368,11 @@ try {
   throw error;
 } finally {
   try {
-    await withShutdownDeadline('Players profile host evidence', () => writeFile(join(output, 'host.json'), JSON.stringify(monitor?.stop() ?? { unavailable: 'Profile interrupted before host monitoring started' }, null, 2)));
+    await withShutdownDeadline('Players profile host evidence', async () => writeFile(join(output, 'host.json'), JSON.stringify(await monitor?.stop() ?? { unavailable: 'Profile interrupted before host monitoring started' }, null, 2)));
   } finally {
     try {
       await signalStop;
-      await withShutdownDeadline('Players profile final startup barrier', () => stackTask).then(stack => stack.stop());
+      await owner.stop();
       if (signalCleanupError) throw signalCleanupError;
       await withShutdownDeadline('Players profile cleanup evidence', () => writeFile(join(output, 'cleanup.json'), JSON.stringify({ stoppedOwnedStack: true, finished: new Date().toISOString() }, null, 2)));
     } finally {

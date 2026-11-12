@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createServer as createHttpsServer } from 'node:https';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -8,7 +8,8 @@ import { testDatabase } from '../../tests/database';
 import { seedBenchmark } from './seed';
 import { LocalClient } from './http';
 import { ShapedProxy } from './network';
-import { SHUTDOWN_GRACE_MS, stopOwnedProcess, withShutdownDeadline } from '../owned-process';
+import { createProcessOwner, spawnOwned, withShutdownDeadline } from '../owned-process';
+import { runOwned } from '../owned-command';
 async function availablePort() {
   const server = createServer();
   try {
@@ -27,71 +28,33 @@ export async function benchmarkStack(output: string, signal?: AbortSignal) {
   let listener: ReturnType<typeof createHttpsServer> | undefined;
   let client: LocalClient | undefined;
   let log: ReturnType<typeof createWriteStream> | undefined;
-  let stopping: Promise<void> | undefined;
-  const lifecycleSignal = typeof signal === 'undefined' ? undefined : signal;
-  let rejectStartup!: (error: Error) => void;
-  const startupStopped = new Promise<never>((_, reject) => { rejectStartup = reject; });
-  void startupStopped.catch(() => {});
-  async function starting<T>(action: () => Promise<T>, cleanup?: (value: T) => Promise<unknown>): Promise<T> {
-    if (stopping || lifecycleSignal?.aborted) throw new Error('Owned benchmark startup was stopped');
-    const task = Promise.resolve().then(() => {
-      if (stopping || lifecycleSignal?.aborted) throw new Error('Owned benchmark startup was stopped');
-      return action();
-    }).then(async value => {
-      if (stopping || lifecycleSignal?.aborted) {
-        if (cleanup) await cleanup(value);
-        throw new Error('Owned benchmark startup was stopped');
-      }
-      return value;
-    });
-    return Promise.race([task, startupStopped]);
-  }
-  const owned = new Map<() => Promise<void>, boolean>();
-  async function own(cleanup: () => Promise<void>, options: { selfBounded?: boolean } = {}) {
-    if (stopping) { await (options.selfBounded ? cleanup() : withShutdownDeadline('Late benchmark cleanup', cleanup)); throw new Error('Owned benchmark stack is stopping'); }
-    owned.set(cleanup, options.selfBounded ?? false);
-    return () => { owned.delete(cleanup); };
-  }
-  own.withDeadline = withShutdownDeadline;
-  own.stopProcess = stopOwnedProcess;
-  function stop(): Promise<void> {
-    stopping ??= (async () => {
-      rejectStartup(new Error('Owned benchmark startup was stopped'));
-      const errors: unknown[] = [];
-      const attempt = async (action: () => unknown | Promise<unknown>) => { try { await action(); } catch (error) { errors.push(error); } };
-      const bounded = (label: string, action: () => unknown | Promise<unknown>) => attempt(() => withShutdownDeadline(label, action));
-      for (const [cleanup, selfBounded] of owned) await (selfBounded ? attempt(cleanup) : bounded('Owned benchmark action cleanup', cleanup));
-      owned.clear();
-      await bounded('Benchmark client close', () => client?.close());
-      await bounded('Benchmark proxy close', () => proxy?.close());
-      await bounded('Benchmark listener close', async () => { if (listener?.listening) { listener.closeAllConnections(); await new Promise<void>((resolve, reject) => listener!.close(error => error ? reject(error) : resolve())); } });
-      await attempt(async () => { if (child) await stopOwnedProcess(child, 'signal', true); });
-      await attempt(async () => { await database?.stop(); });
-      await bounded('Benchmark TLS removal', async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
-      await bounded('Benchmark log close', async () => { if (log && !log.destroyed) await new Promise<void>((resolve, reject) => { log!.once('error', reject); log!.end(resolve); }); });
-      lifecycleSignal?.removeEventListener('abort', abort);
-      if (errors.length) throw new AggregateError(errors, 'Owned benchmark cleanup failed');
-    })();
-    return stopping;
-  }
+  const owner = createProcessOwner();
+  const stop = () => owner.stop();
   const abort = () => { void stop().catch(() => {}); };
-  lifecycleSignal?.addEventListener('abort', abort, { once: true });
+  signal?.addEventListener('abort', abort, { once: true });
+  owner.addCleanup('Benchmark abort listener removal', 'cleanup', () => signal?.removeEventListener('abort', abort));
+  owner.addCleanup('Benchmark log close', 'cleanup', async () => { if (log && !log.destroyed) await new Promise<void>((resolve, reject) => { log!.once('error', reject); log!.end(resolve); }); });
+  owner.addCleanup('Benchmark TLS removal', 'cleanup', async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
+  owner.addCleanup('Benchmark listener close', 'pool', async () => { if (listener?.listening) { listener.closeAllConnections(); await new Promise<void>((resolve, reject) => listener!.close(error => error ? reject(error) : resolve())); } });
+  owner.addCleanup('Benchmark proxy close', 'pool', () => proxy?.close());
+  owner.addCleanup('Benchmark client close', 'pool', () => client?.close());
+  const starting = <T>(action: () => Promise<T>) => owner.launch(action);
+  if (signal?.aborted) owner.cancel();
   try {
-    database = await starting(() => testDatabase(), value => value.stop());
-    directory = await starting(() => mkdtemp(resolve('.cache/bench-tls-')), value => withShutdownDeadline('Late benchmark TLS removal', () => rm(value, { recursive: true, force: true })));
+    database = await starting(async () => database = await testDatabase({ owner }));
+    directory = await starting(async () => directory = await mkdtemp(resolve('.cache/bench-tls-')));
     log = createWriteStream(join(output, 'server.log'), { flags: 'a' });
     await starting(() => new Promise<void>((resolve, reject) => { log!.once('open', () => resolve()); log!.once('error', reject); }));
     const fixture = await starting(() => seedBenchmark(database!.pool));
     const key = join(directory, 'key.pem'), certificate = join(directory, 'cert.pem');
-    const generated = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', certificate], { stdio: 'ignore', timeout: SHUTDOWN_GRACE_MS, killSignal: 'SIGKILL' });
-    if (generated.status !== 0) throw new Error('Owned benchmark TLS certificate failed');
+    await runOwned(owner, 'openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', certificate], { stdio: 'ignore' });
     const port = await starting(availablePort); const backend = `https://127.0.0.1:${port}`;
     proxy = new ShapedProxy(backend);
     listener = createHttpsServer({ key: await starting(() => readFile(key)), cert: await starting(() => readFile(certificate)) }, proxy.handle);
-    await starting(() => new Promise<void>((resolve, reject) => { listener!.once('error', reject); listener!.listen(0, '127.0.0.1', resolve); }), () => withShutdownDeadline('Late benchmark listener close', () => new Promise<void>((resolve, reject) => listener!.close(error => error ? reject(error) : resolve()))));
+    await starting(() => new Promise<void>((resolve, reject) => { listener!.once('error', reject); listener!.listen(0, '127.0.0.1', resolve); }));
     const address = listener.address(); if (!address || typeof address === 'string') throw new Error('No shaping port');
     const origin = `https://127.0.0.1:${address.port}`;
-    child = spawn(process.execPath, ['--import', 'tsx', 'src/server/local.ts'], { detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { ...process.env, NODE_ENV: 'production', PORT: String(port), DATABASE_URL: database.pool.options.connectionString, APP_ORIGIN: origin, LOCAL_TLS_KEY: key, LOCAL_TLS_CERT: certificate, PB_BENCHMARK_TIMING: '1' } });
+    child = spawnOwned(owner, process.execPath, ['--import', 'tsx', 'src/server/local.ts'], { detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { ...process.env, NODE_ENV: 'production', PORT: String(port), DATABASE_URL: database.pool.options.connectionString, APP_ORIGIN: origin, LOCAL_TLS_KEY: key, LOCAL_TLS_CERT: certificate, PB_BENCHMARK_TIMING: '1' } });
     await starting(() => new Promise<void>((resolve, reject) => {
       let text = ''; const timeout = setTimeout(() => reject(new Error('Owned benchmark server startup timed out')), 30000);
       child!.stdout!.on('data', chunk => { log!.write(chunk); text += String(chunk); if (text.includes('Poker banker ready at')) { clearTimeout(timeout); resolve(); } });
@@ -102,7 +65,7 @@ export async function benchmarkStack(output: string, signal?: AbortSignal) {
     const login = await starting(() => client!.request('/api/auth/login', { method: 'POST', body: { username: fixture.username, password: fixture.password } }));
     if (login.status !== 200) throw new Error(`Owned benchmark sign-in failed ${login.status}`);
     client.cookie();
-    return { fixture, database, backend, origin, client, proxy, serverPid: child.pid!, stop, own };
+    return { fixture, database, backend, origin, client, proxy, serverPid: child.pid!, stop, owner };
   } catch (error) {
     try { await stop(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Owned benchmark startup and cleanup failed'); }
     throw error;

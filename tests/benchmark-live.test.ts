@@ -1,9 +1,8 @@
 import { closeOwnedServer } from '../scripts/close-server';
 import { cleanupLeaves } from './teardown';
-import { stopOwnedProcess, withShutdownDeadline } from '../scripts/owned-process';
+import { createProcessOwner, withShutdownDeadline } from '../scripts/owned-process';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execute } from './processes';
 import { randomUUID, createHash } from 'node:crypto';
 import { readFile, stat, rm, chmod, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -157,7 +156,7 @@ it('persists a private owned seed, reuses its banker across loopback origins wit
   const client = await LiveClient.create(urls[0]!);
   const reused = await LiveClient.create(urls[1]!);
   try {
-    const seeded = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[0]!, '--seed-only', '--state', path, '--sessions', '1', '--output', seedEvidence]);
+    const seeded = await execute(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[0]!, '--seed-only', '--state', path, '--sessions', '1', '--output', seedEvidence]);
     const fixture = (await readLiveSeedState(path)).fixture;
     await client.restoreSession((await readLiveSeedState(path)).sessionCookie);
     expect(JSON.parse(await readFile(join(seedEvidence, 'summary.json'), 'utf8')).metrics).toEqual([]);
@@ -167,9 +166,9 @@ it('persists a private owned seed, reuses its banker across loopback origins wit
     expect(state.fixture.bankerId).toBe(fixture.bankerId);
     expect(await readFile(path, 'utf8')).not.toContain(sentinel);
     const beforeExistingState = seen.length;
-    await expect(promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[0]!, '--seed-only', '--state', path, '--sessions', '1', '--output', invalidEvidence])).rejects.toThrow();
+    await expect(execute(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[0]!, '--seed-only', '--state', path, '--sessions', '1', '--output', invalidEvidence])).rejects.toThrow();
     expect(seen).toHaveLength(beforeExistingState);
-    await expect(promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[0]!, '--sessions', '1', '--api-only', '--runs', '1', '--output', missingReuseEvidence, '--reuse'])).rejects.toThrow();
+    await expect(execute(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[0]!, '--sessions', '1', '--api-only', '--runs', '1', '--output', missingReuseEvidence, '--reuse'])).rejects.toThrow();
     expect(seen).toHaveLength(beforeExistingState);
     await expect(writeLiveSeedState(path, client, fixture)).rejects.toThrow();
     await expect(writeLiveSeedState('evidence/not-a-private-state.json', client, fixture)).rejects.toThrow('.cache');
@@ -197,11 +196,11 @@ it('persists a private owned seed, reuses its banker across loopback origins wit
     const raw = await readFile(join(evidence, 'samples.jsonl'), 'utf8');
     const rows = raw.trim().split('\n').map(line => JSON.parse(line) as LiveComparisonRow);
     expect(rows.map(row => row.side).join('')).toBe('ABBAABBAAB');
-    const reusedCLI = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[1]!, '--reuse', path, '--metrics', 'api.players', '--runs', '1', '--output', reuseEvidence]);
+    const reusedCLI = await execute(process.execPath, ['--import', 'tsx', 'scripts/bench-live.ts', '--base', urls[1]!, '--reuse', path, '--metrics', 'api.players', '--runs', '1', '--output', reuseEvidence]);
     const reusedSummary = JSON.parse(await readFile(join(reuseEvidence, 'summary.json'), 'utf8'));
     expect(reusedSummary.requests.mutations).toBe(0);
     expect(reusedSummary.metrics.map((metric: { metric: string }) => metric.metric)).toEqual(['api.players']);
-    const comparedCLI = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/bench-live-compare.ts', '--baseline-url', urls[0]!, '--candidate-url', urls[1]!, '--reuse', path, '--metrics', 'api.players', '--order', 'abba', '--output', compareEvidence]);
+    const comparedCLI = await execute(process.execPath, ['--import', 'tsx', 'scripts/bench-live-compare.ts', '--baseline-url', urls[0]!, '--candidate-url', urls[1]!, '--reuse', path, '--metrics', 'api.players', '--order', 'abba', '--output', compareEvidence]);
     const compared = JSON.parse(await readFile(join(compareEvidence, 'comparison.json'), 'utf8'));
     expect(compared).toMatchObject({ errors: 0, samples: 20, identicalResponses: true });
     expect(compared.pairs).toHaveLength(5);
@@ -258,9 +257,10 @@ it('adds browser bypass headers only to the exact target origin including assets
   const client = await LiveClient.create(`http://127.0.0.1:${address.port}`);
   let browser: Awaited<ReturnType<typeof webkit.launch>> | undefined;
   let browserServer: Awaited<ReturnType<typeof webkit.launchServer>> | undefined;
+  const owner = createProcessOwner();
   try {
     await client.request('/api/auth/signup', { method: 'POST', body: { username: `browser-${randomUUID().slice(0, 12)}`, password: `test-only-${randomUUID()}` } });
-    browserServer = await webkit.launchServer();
+    browserServer = await owner.launch(() => webkit.launchServer());
     browser = await webkit.connect(browserServer.wsEndpoint());
     const context = await browser.newContext({ serviceWorkers: 'block' });
     await context.addCookies((await client.context.storageState()).cookies);
@@ -281,6 +281,6 @@ it('adds browser bypass headers only to the exact target origin including assets
   } finally {
     if (previous === undefined) delete process.env.PB_VERCEL_BYPASS; else process.env.PB_VERCEL_BYPASS = previous;
     try { await cleanupLeaves(() => browser?.close(), () => browserServer?.close(), () => client.close(), ...[server, external].map(owned => () => closeOwnedServer(owned))); }
-    finally { if (browserServer) await stopOwnedProcess(browserServer.process(), 'signal', true); }
+    finally { await owner.stop(); }
   }
 }, 30000);

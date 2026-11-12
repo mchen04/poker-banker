@@ -29,7 +29,7 @@ it('removes database and TLS scratch even when an owned benchmark cleanup fails'
   let calls = 0;
   try {
     stack = await benchmarkStack(output);
-    await stack.own(async () => { calls++; throw new Error('Intentional owned resource failure'); });
+    stack.owner.addCleanup('Intentional owned resource failure', 'pool', async () => { calls++; throw new Error('Intentional owned resource failure'); });
     const results = await Promise.allSettled([stack.stop(), stack.stop()]);
     expect(results.map(result => result.status)).toEqual(['rejected', 'rejected']);
     expect(calls).toBe(1);
@@ -52,8 +52,8 @@ it('bounds a stalled owned resource and still closes the server, database and TL
   let calls = 0;
   try {
     stack = await benchmarkStack(output);
-    await stack.own(() => { calls++; return new Promise(() => {}); });
-    await expect(stack.stop()).rejects.toThrow('Owned benchmark cleanup failed');
+    stack.owner.addCleanup('Stalled owned resource', 'pool', () => { calls++; return new Promise(() => {}); });
+    await expect(stack.stop()).rejects.toThrow('Stalled owned resource');
     expect(calls).toBe(1);
     expect(await scratch()).toEqual(before);
   } finally { await stack?.stop().catch(() => {}); await withShutdownDeadline('Test directory cleanup', () => rm(output, { recursive: true, force: true })); }
