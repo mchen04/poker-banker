@@ -426,14 +426,13 @@ export function DraftSaveStatus() {
     }
   }
   const visible = notices.filter(notice => bankerId && notice.key.startsWith(`${bankerId}/`));
-  return <>{visible.length > 0 && <div className="warning" role="alert" data-testid="draft-conflict-notice">{visible.map(notice => <p key={notice.key}>{notice.message}</p>)}<button type="button" onClick={() => { if (account?.isCurrent?.() === false) return; for (const notice of visible) dismissDraftConflict(notice); }}>Dismiss draft change notice</button></div>}
+  return <>{visible.length > 0 && <div className="warning" role="status" aria-live="polite" data-testid="draft-conflict-notice">{visible.map(notice => <p key={notice.key}>{notice.message}</p>)}<button type="button" onClick={() => { if (account?.isCurrent?.() === false) return; for (const notice of visible) dismissDraftConflict(notice); }}>Dismiss draft change notice</button></div>}
     {recoveries.length > 0 && <section aria-label="Needs review"><h2>Needs review</h2>{recoveries.filter(recovery => bankerId && recovery.key.startsWith(`${bankerId}/`)).map(recovery => recovery.collision ? <details className="warning" key={recovery.key} data-testid="recovered-draft"><summary>Review recovered edit</summary><p>A saved draft and your recovered edit are both kept. Check the game for an earlier save before choosing.</p><h3>Saved draft</h3><RecoveredDraftFields value={recovery.source_value} /><h3>Your recovered edit</h3><RecoveredDraftFields value={recovery.value} /><button type="button" disabled={busy} onClick={() => { void resolve(recovery, true); }}>Use recovered edit</button><button type="button" disabled={busy} onClick={() => { void resolve(recovery, false); }}>Keep saved edit</button></details> : <RecoveredDraftEditor key={recovery.key} recovery={recovery} busy={busy} act={edit} />)}</section>}
-    <ErrorText text={recoveryError} />{failed && <div className="warning" role="alert"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
+    <ErrorText text={recoveryError} />{failed && <div className="warning" role="status" aria-live="polite"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
 }
-export function ErrorText({ text, id }: { text: string; id?: string }) { return text ? <p id={id} role="alert" className="error" tabIndex={-1}>{text}</p> : null; }
+export function ErrorText({ text, id }: { text: string; id?: string }) { return text ? <p id={id} role="alert" aria-live="polite" className="error" tabIndex={-1}>{text}</p> : null; }
 export function Sheet({ title, children, close, leadingClose = true, closeLabel = 'Cancel', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
-  const shownError = useRef('');
   const client = useContext(ClientContext);
   const updateBanner = client?.updateBanner;
   const busy = client?.formBusy ?? false;
@@ -508,29 +507,6 @@ export function Sheet({ title, children, close, leadingClose = true, closeLabel 
       window.removeEventListener('resize', keepVisible);
       panel?.removeEventListener('focusin', keepVisible);
     };
-  }, []);
-  useLayoutEffect(() => {
-    const panel = ref.current;
-    const revealError = () => {
-      const error = panel?.querySelector<HTMLElement>('.error');
-      const message = error?.textContent ?? '';
-      if (message && message !== shownError.current && error) {
-        const invalid = panel?.querySelector<HTMLElement>('[aria-invalid="true"]');
-        (invalid ?? error).focus({ preventScroll: true });
-        const body = error.closest<HTMLElement>('.form-body,.money-fields,.sheet-fields,.sheet-status');
-        if (body) {
-          const bounds = body.getBoundingClientRect();
-          const content = error.getBoundingClientRect();
-          if (content.bottom > bounds.bottom - 16) body.scrollTop += content.bottom - bounds.bottom + 16;
-          else if (content.top < bounds.top + 16) body.scrollTop -= bounds.top + 16 - content.top;
-        }
-      }
-      shownError.current = message;
-    };
-    const observer = new MutationObserver(revealError);
-    if (panel) observer.observe(panel, { childList: true, subtree: true, characterData: true });
-    revealError();
-    return () => observer.disconnect();
   }, []);
   const closeButton = <button type="button" aria-label={className.includes('money-sheet') ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
   return <div className="sheet-backdrop"><div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
