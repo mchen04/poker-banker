@@ -11,6 +11,10 @@ A saved session opens offline with confirmed totals. New entries wait visibly wi
 - `offline-close-signout-guards` prevents closing or silently discarding unsent work.
 - `updates-hidden-visible` discovers a waiting release on foreground return while preserving an editing draft.
 - `updates-safe-activation` waits for visibility, closed editors, drained requests/outbox and successful local persistence, then adopts the release without a tap.
+- `updates-one-navigation` latches a document’s first reload despite lifecycle events and a stalled real HTML response.
+- `updates-bounded-caches` retains known document releases and recorded unknown pins while six successive waiting candidates replace one another.
+- `updates-live-legacy` keeps exact tracked `30209c1` editing and waiting for a real committed POST; activation waits until those legacy windows close, then preserves its draft and replays its old outbox.
+- `updates-initial-skew` recovers B HTML whose initial entry really returns 404 after C replaces it, with an independent two-navigation bootstrap budget.
 - `updates-chunk-failure` serves a genuine old lazy module through a newer controller after its server URL disappears, then applies the release safely.
 
 ## How to get to it (user POV)
@@ -149,7 +153,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
 }
 ```
 
-- **Prove safe automatic release adoption.** This local-only recipe uses the production builder and real service workers, Cache Storage, UI writes and PostgreSQL. It never routes or mocks a response, edits IndexedDB or calls `registration.update()` to manufacture post-deployment discovery. It builds the tracked previous client, current A and current B in sequence. Run it last in an exclusive checkout; it deliberately changes `dist/`.
+- **Prove safe automatic release adoption.** This local-only recipe uses the production builder and real service workers, Cache Storage, UI writes and PostgreSQL. It never fulfills a fake response, edits IndexedDB or calls `registration.update()` from the driver to manufacture post-deployment discovery. A separate owned loopback TLS forwarder records and delays genuine upstream responses or holds a module request until the next real build replaces its file. It builds the tracked previous clients and current releases in sequence. Run it last in an exclusive checkout; it deliberately changes `dist/`.
 
 Prepare the pinned previous-source fixture on this Mac because the mini checkout intentionally has no `.git`. The archive contains tracked project files only. The helper verifies both hashes and the pinned commit, and refuses credential/traversal paths before extracting into its own temporary directory.
 
@@ -166,12 +170,24 @@ manifest.write_text(json.dumps({'sourceSha': 'dc2082b09d7bf8ad124f0e21f8826ef75c
 print(sha256(manifest.read_bytes()).hexdigest())
 PYTHON
 rsync -az .cache/round36/previous/ mini:worktrees/poker-banker/.cache/round36/previous/
+mkdir -p .cache/update-live-legacy
+git archive --format=tar --output .cache/update-live-legacy/previous.tar 30209c1bff774172c89e8dba1901a1e597e860b6
+python3 - <<'PYTHON'
+from hashlib import sha256
+from pathlib import Path
+import json
+root = Path('.cache/update-live-legacy')
+manifest = root / 'manifest.json'
+manifest.write_text(json.dumps({'sourceSha': '30209c1bff774172c89e8dba1901a1e597e860b6', 'archive': 'previous.tar', 'archiveSha256': sha256((root / 'previous.tar').read_bytes()).hexdigest()}, indent=2) + '\n')
+print(sha256(manifest.read_bytes()).hexdigest())
+PYTHON
+rsync -az .cache/update-live-legacy/ mini:worktrees/poker-banker/.cache/update-live-legacy/
 ```
 
-Use the printed manifest hash as `MANIFEST_SHA` below. These public fixture metadata variables must be present at **launch**, because the existing daemon executes later recipes.
+Use the first printed manifest hash as `MANIFEST_SHA` and the second as `LEGACY_MANIFEST_SHA` below. The live-legacy source is pinned to the publicly observed production client from the update review; it is not a claim about future deployments. These public fixture metadata variables must be present at **launch**, because the existing daemon executes later recipes.
 
 ```sh
-scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/round36/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256=MANIFEST_SHA .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
+scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/round36/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256=MANIFEST_SHA PB_UPDATE_LIVE_LEGACY_MANIFEST=.cache/update-live-legacy/manifest.json PB_UPDATE_LIVE_LEGACY_MANIFEST_SHA256=LEGACY_MANIFEST_SHA .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
 scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh doctor --run RUN_ID
 scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh drive updates --run RUN_ID --context iphone-standalone
 scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh evidence --run RUN_ID
@@ -189,7 +205,7 @@ export default async function ({ page, browser, baseURL, evidence, runId }: Reci
 }
 ```
 
-Proofs in `automatic-updates-summary.json`:
+Proofs in `automatic-updates-summary.json` and `review/review-cases-summary.json`:
 
 | Case | Actual path and required result |
 | --- | --- |
@@ -199,11 +215,16 @@ Proofs in `automatic-updates-summary.json`:
 | Offline | A reloads its cached shell and keeps a queued entry excluded from totals. Reconnection sends the same body/op_id once and the app adopts B. |
 | Stale lazy asset | A first imports one cached, server-deleted module before the idle timer: asset access discovers B without a tap. A second tab activates B while the first edits. A distinct module's first import still succeeds from retained A assets under B; closing the sheet permits B. |
 | Cold launch | A's page is closed before deployment. A new page starts B with authentication, session data and draft unchanged. |
+| Overlapping lifecycle/navigation stall | Native page timers emit foreground/online events during actual header and body holds. Exactly one navigation starts and the cached-shell deadline completes. |
+| Unknown-client retention | An unmodified legacy client never replies to release queries across six candidate deployments. App cache count stays bounded (at most five, usually four), while its cached release and typed amount remain intact. |
+| First live legacy upgrade | Exact `30209c1` holds a committed Start timer POST response while another legacy window edits. No replacement controller or reload occurs. All legacy windows close, then B cold-loads the old draft and replays the exact old offline body once. |
+| Initial HTML/bundle skew | Deliver actual B HTML, hold its real initial-module request, publish staged C, then forward the request to obtain a real 404. The inline guard reaches C without a tap. Persistent 404 stops after two recovery navigations; a healthy boot cancels the watchdog. |
 
-The two lazy modules and previous storage reader are test-build fixtures emitted before the shared production precache stamp. Normal builds contain neither. Every case has screenshots, ARIA/landmarks and explicit before/after release identities. The helper owns and closes its contexts, archive scratch and journey lock; the skill's cleanup then stops its existing owned browser/server/database and keeps evidence.
+The original five cases plus four review cases share one helper and exclusive build scope; allow the focused recipe to complete its real discovery and failure-observation windows. The two lazy modules and previous storage reader are test-build fixtures emitted before the shared production precache stamp. Normal builds contain neither. Every case has screenshots, ARIA/landmarks and explicit before/after release identities. The helper owns and closes its contexts, archive scratch and journey lock; the skill's cleanup then stops its existing owned browser/server/database and keeps evidence.
 
 ## Gotchas
 
+- Never describe legacy deferral as a hot upgrade: the old code cannot gain request guards or explanations. Legacy windows must close. An already-delivered pre-guard blank HTML document also needs a navigation; forcing an unidentified window would risk its input or transaction.
 - `RELEASE_VERSION` stamps the local build. Serialize builds with other runs because they share `dist/`; do not run another browser suite or benchmark while changing it.
 - Visibility overrides use scalar properties so tsx does not inject a function-name helper into a serialized getter. They emulate browser suspension signals. They do not prove actual iOS suspension, Home Screen installation or a real keyboard.
 - Run update verification last. Doctor pins the launch release, so it intentionally reports a build mismatch after this recipe changes the local build; clean up and relaunch before other features.

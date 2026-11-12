@@ -15,7 +15,7 @@ export type UpdateJourneyOptions = { page: Page; browser: Browser; baseURL: stri
 export type UpdateCase = { case: string; before: string; after: string; bankerId: string; sessionId: string; [key: string]: unknown };
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? 'undefined').digest('hex');
 
-async function databaseSnapshot(page: Page): Promise<Snapshot> {
+export async function databaseSnapshot(page: Page): Promise<Snapshot> {
   return page.evaluate(async () => {
     const opening = indexedDB.open('poker-banker');
     const db = await new Promise<IDBDatabase>((resolve, reject) => { opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
@@ -29,7 +29,7 @@ async function databaseSnapshot(page: Page): Promise<Snapshot> {
   }) as Promise<Snapshot>;
 }
 
-async function controllerRelease(page: Page) {
+export async function controllerRelease(page: Page) {
   return page.evaluate(async () => {
     const controller = navigator.serviceWorker.controller;
     if (!controller) return null;
@@ -42,7 +42,7 @@ async function controllerRelease(page: Page) {
   });
 }
 
-async function releaseIs(page: Page, release: string, timeout = 25000) {
+export async function releaseIs(page: Page, release: string, timeout = 25000) {
   await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', release, { timeout });
   await expect.poll(async () => {
     try { return await controllerRelease(page); } catch (error) {
@@ -52,7 +52,7 @@ async function releaseIs(page: Page, release: string, timeout = 25000) {
   }, { timeout }).toBe(release);
 }
 
-async function visible(page: Page, value: boolean) {
+export async function visible(page: Page, value: boolean) {
   await page.evaluate(value => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: value ? 'visible' : 'hidden' });
     Object.defineProperty(document, 'hidden', { configurable: true, value: !value });
@@ -60,20 +60,20 @@ async function visible(page: Page, value: boolean) {
   }, value);
 }
 
-async function draft(page: Page, player: string, amount: string, method: 'Cash' | 'Venmo' | 'Zelle' = 'Venmo') {
+export async function draft(page: Page, player: string, amount: string, method: 'Cash' | 'Venmo' | 'Zelle' = 'Venmo') {
   await openMoney(page, player);
   await typeInput(page.getByTestId('money-amount'), amount);
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: method, exact: true }).click();
   await expect.poll(async () => (await databaseSnapshot(page)).drafts.some(row => row.value.amount === amount && row.value.method === method.toLowerCase())).toBe(true);
 }
 
-async function restoredDraft(page: Page, player: string, amount: string, method: 'Venmo' | 'Zelle' = 'Venmo') {
+export async function restoredDraft(page: Page, player: string, amount: string, method: 'Venmo' | 'Zelle' = 'Venmo') {
   await openMoney(page, player);
   await expect(page.getByTestId('money-amount')).toHaveValue(amount);
   await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: method, exact: true })).toHaveAttribute('aria-pressed', 'true');
 }
 
-async function capture(page: Page, evidence: string, name: string) {
+export async function capture(page: Page, evidence: string, name: string) {
   await page.screenshot({ path: join(evidence, `${name}.png`), fullPage: true });
   await writeFile(join(evidence, `${name}.aria.txt`), await page.locator('body').ariaSnapshot());
   const landmarks = await page.evaluate(() => [...document.querySelectorAll('main, nav, [role="dialog"], h1, h2')]
@@ -304,7 +304,11 @@ export async function verifyUpdateJourney({ page, browser, baseURL, evidence, ta
       expect(coldAfter).toEqual(coldBefore);
       await restoredDraft(cold.page, cold.player, '53.', 'Zelle');
       await report(cold, 'closed-client-cold-start', { draftBeforeSha256: hash(coldBefore), draftAfterSha256: hash(coldAfter), amount: '53.', method: 'zelle', coldNavigations });
-      const result = { table, compatibility, releaseA, releaseB, environment: { origin: target.origin, realTls: true, database: 'owned local PostgreSQL', browser: browser.browserType().name(), profile: await page.evaluate(() => ({ userAgent: navigator.userAgent, standalone: !!(navigator as Navigator & { standalone?: boolean }).standalone })) },
+      await Promise.all(contexts.map(context => context.close()));
+      contexts.length = 0;
+      const { verifyUpdateReviewCases } = await import('./verify-update-review');
+      const review = await verifyUpdateReviewCases({ page, browser, baseURL, evidence: join(artifactRoot, 'review'), tag, lockHeld: true });
+      const result = { table, compatibility, review, releaseA, releaseB, environment: { origin: target.origin, realTls: true, database: 'owned local PostgreSQL', browser: browser.browserType().name(), profile: await page.evaluate(() => ({ userAgent: navigator.userAgent, standalone: !!(navigator as Navigator & { standalone?: boolean }).standalone })) },
         limitations: ['Headless browser profile and standalone emulation; no physical iOS Home Screen installation or suspension proof.', 'Foreground cases emulate document visibility signals. Network, service workers, caches, UI writes and PostgreSQL responses are real.', 'Two build-only hashed lazy modules use the production precache: one first imports under A to trigger discovery; the other first imports under B to prove retained A cache compatibility.'] };
       await writeFile(join(artifactRoot, 'automatic-updates-summary.json'), JSON.stringify(result, null, 2));
       return result;

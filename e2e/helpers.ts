@@ -87,14 +87,17 @@ export async function signOut(page: Page) {
   await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
 }
 async function previousUpdateFixture(page: Page) {
-  return (await page.locator('meta[name="pb-release"]').getAttribute('content'))?.startsWith('r36-previous-') ?? false;
+  return /^(?:r36-previous-|r38-legacy-302-)/.test(await page.locator('meta[name="pb-release"]').getAttribute('content') ?? '');
+}
+async function liveLegacyUpdateFixture(page: Page) {
+  return (await page.locator('meta[name="pb-release"]').getAttribute('content'))?.startsWith('r38-legacy-302-') ?? false;
 }
 export async function workspaceReady(page: Page) {
   const previous = await previousUpdateFixture(page);
   const workspace = page.getByRole('navigation', { name: previous ? 'Workspace navigation' : 'Table navigation', exact: true }).getByRole('button', { name: previous ? 'Workspace' : 'Table', exact: true });
   await expect(workspace).toBeVisible();
   await expect(workspace).toHaveAttribute('aria-pressed', 'true');
-  const selected = page.getByRole('button', { name: 'Switch session', exact: true }).and(page.locator('[data-testid^="session-tab-"]'));
+  const selected = await liveLegacyUpdateFixture(page) ? page.getByRole('tab', { selected: true }) : page.getByRole('button', { name: 'Switch session', exact: true }).and(page.locator('[data-testid^="session-tab-"]'));
   const welcome = page.getByRole('button', { name: 'Create your first session', exact: true });
   await expect(selected.or(welcome)).toBeVisible();
 }
@@ -105,6 +108,7 @@ export async function openNewSession(page: Page) {
   await workspaceReady(page);
   const existing = await call<{ sessions: { id: string }[] }>(page, '/sessions');
   if (!existing.sessions.length) await page.getByRole('button', { name: 'Create your first session', exact: true }).click();
+  else if (await liveLegacyUpdateFixture(page)) await page.getByRole('button', { name: 'New session', exact: true }).click();
   else if (previous) {
     await page.getByRole('button', { name: 'Switch session', exact: true }).click();
     await page.getByRole('dialog', { name: 'History', exact: true }).getByRole('button', { name: 'New session', exact: true }).click();

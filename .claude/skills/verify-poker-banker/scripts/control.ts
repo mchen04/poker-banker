@@ -38,7 +38,8 @@ async function request(command: Command): Promise<unknown> {
   const client = createConnection(socket);
   const pending = new Promise((resolve, reject) => {
     let output = '';
-    client.setTimeout(180000, () => client.destroy(new Error('Verification command exceeded 180 seconds')));
+    const deadline = command.recipe === 'updates' || command.action === 'recipe' ? 900000 : 180000;
+    client.setTimeout(deadline, () => client.destroy(new Error(`Verification command exceeded ${deadline / 1000} seconds`)));
     client.on('connect', () => client.write(`${JSON.stringify(command)}\n`));
     client.on('data', chunk => { output += String(chunk); });
     client.on('error', reject);
