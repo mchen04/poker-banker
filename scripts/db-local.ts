@@ -19,8 +19,14 @@ let child: ReturnType<typeof spawn> | undefined;
 let requested = false;
 let ending: Promise<void> | undefined;
 let stopping: Promise<void> | undefined;
+let exitCode = 0;
 const stopDatabase = database.stop.bind(database);
 const endPool = () => pool ? ending ??= pool.end() : Promise.resolve();
+function fail(message: string) {
+  exitCode ||= 1;
+  process.exitCode = exitCode;
+  try { console.error(message); } catch {}
+}
 async function initialize() {
   await mkdir(directory, { recursive: true });
   if (requested) return;
@@ -38,7 +44,8 @@ async function initialize() {
   if (process.argv.length > 2) {
     const [command, ...args] = process.argv.slice(2);
     child = spawn(command!, args, { stdio: 'inherit', env: { ...process.env, DATABASE_URL: connectionString, DATABASE_URL_UNPOOLED: connectionString } });
-    child.on('exit', code => { void stop().then(() => process.exit(code ?? 1)); });
+    child.on('error', () => { fail('Local app failed to start'); finish(1); });
+    child.on('exit', code => { if (!requested || (code !== null && code !== 0)) finish(code ?? 1); });
   }
 }
 function stop(): Promise<void> {
@@ -47,14 +54,24 @@ function stop(): Promise<void> {
     await startup.catch(() => {});
     try {
       if (child && child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
-    } finally {
-      try { await endPool(); } finally { await stopDatabase(); }
-    }
+    } catch { fail('Local app shutdown failed'); }
+    try { await endPool(); } catch { fail('Local database pool shutdown failed'); }
+    try { await stopDatabase(); } catch { fail('Local database shutdown failed'); }
   })();
 }
+function finish(code: number) {
+  if (code !== 0 && exitCode === 0) {
+    exitCode = code;
+    process.exitCode = code;
+  }
+  void stop().then(
+    () => process.exit(exitCode),
+    () => { fail('Local database shutdown failed'); process.exit(exitCode); },
+  );
+}
 database.stop = stop;
-process.on('SIGINT', () => { void stop().then(() => process.exit(0)); });
-process.on('SIGTERM', () => { void stop().then(() => process.exit(0)); });
+process.on('SIGINT', () => { finish(0); });
+process.on('SIGTERM', () => { finish(0); });
 const startup = initialize();
-await startup.catch(async error => { await stop(); throw error; });
+await startup.catch(() => { fail('Local database startup failed'); finish(1); });
 if (!requested && !child) await new Promise(() => {});

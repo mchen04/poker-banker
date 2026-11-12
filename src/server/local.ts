@@ -40,4 +40,29 @@ const fetch = process.env.PB_TEST_EDGE_HEADERS === '1' ? async (request: Request
 const server = serve({ ...tls, fetch, port: Number(process.env.PORT || 3000), hostname: '127.0.0.1' }, info => {
   console.log(`Poker banker ready at ${tlsKey ? 'https' : 'http'}://127.0.0.1:${info.port}`);
 });
-for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { server.close(() => { void pool.end().then(() => process.exit(0)); }); });
+let stopping: Promise<void> | undefined;
+let exitCode = 0;
+function fail(message: string) {
+  exitCode ||= 1;
+  process.exitCode = exitCode;
+  try { console.error(message); } catch {}
+}
+function stop(): Promise<void> {
+  return stopping ??= (async () => {
+    try {
+      await new Promise<void>((resolve, reject) => server.close(error => { if (error) reject(error); else resolve(); }));
+    } catch { fail('Local HTTP server shutdown failed'); }
+    try { await pool.end(); } catch { fail('Local database pool shutdown failed'); }
+  })();
+}
+function finish(code: number) {
+  if (code !== 0 && exitCode === 0) {
+    exitCode = code;
+    process.exitCode = code;
+  }
+  void stop().then(
+    () => process.exit(exitCode),
+    () => { fail('Local HTTP server shutdown failed'); process.exit(exitCode); },
+  );
+}
+for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { finish(0); });
