@@ -8,6 +8,7 @@ import { createPool } from './db.js';
 import { emulateEdgeHeaders } from './local-edge.js';
 import { createProcessOwner } from '../../scripts/owned-process.js';
 import { closeOwnedServer } from '../../scripts/close-server.js';
+import { createBenchmarkTiming } from './benchmark.js';
 
 const owner = createProcessOwner();
 let stopping: Promise<void> | undefined;
@@ -35,6 +36,7 @@ async function initialize() {
   owner.checkpoint();
   const pool = createPool();
   owner.addCleanup('Local database pool shutdown', 'pool', () => pool.end());
+  const benchmarkTiming = process.env.PB_BENCHMARK_TIMING === '1' ? createBenchmarkTiming(pool) : undefined;
   const app = createApp(pool, { origin: process.env.APP_ORIGIN, onError: error => console.error(error) });
   app.use('/assets/*', compress());
   app.use('/assets/*', async (c, next) => {
@@ -53,12 +55,7 @@ async function initialize() {
     c.header('Cache-Control', 'no-store');
     return c.notFound();
   });
-  const fetchApp = process.env.PB_BENCHMARK_TIMING === '1' ? async (request: Request) => {
-    const started = performance.now();
-    const response = await app.fetch(request);
-    response.headers.set('Server-Timing', `app;dur=${(performance.now() - started).toFixed(3)}`);
-    return response;
-  } : app.fetch;
+  const fetchApp = benchmarkTiming ? (request: Request) => benchmarkTiming.fetch(request, app.fetch) : app.fetch;
   const fetch = process.env.PB_TEST_EDGE_HEADERS === '1' ? async (request: Request) => emulateEdgeHeaders(await fetchApp(request)) : fetchApp;
   await owner.launch(() => {
     const server = serve({ ...tls, fetch, port: Number(process.env.PORT || 3000), hostname: '127.0.0.1' }, info => {

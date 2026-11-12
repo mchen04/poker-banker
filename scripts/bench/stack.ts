@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { testDatabase } from '../../tests/database';
-import { seedBenchmark } from './seed';
+import { seedBenchmark, type SeedOptions } from './seed';
 import { LocalClient } from './http';
 import { ShapedProxy } from './network';
 import { createProcessOwner, spawnOwned, withShutdownDeadline } from '../owned-process';
@@ -20,7 +20,7 @@ async function availablePort() {
     await withShutdownDeadline('Benchmark port release', () => new Promise<void>((resolve, reject) => server.close(error => error && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve())));
   }
 }
-export async function benchmarkStack(output: string, signal?: AbortSignal) {
+export async function benchmarkStack(output: string, signal?: AbortSignal, options: SeedOptions = {}) {
   let database: Awaited<ReturnType<typeof testDatabase>> | undefined;
   let directory: string | undefined;
   let child: ChildProcess | undefined;
@@ -45,7 +45,7 @@ export async function benchmarkStack(output: string, signal?: AbortSignal) {
     directory = await starting(async () => directory = await mkdtemp(resolve('.cache/bench-tls-')));
     log = createWriteStream(join(output, 'server.log'), { flags: 'a' });
     await starting(() => new Promise<void>((resolve, reject) => { log!.once('open', () => resolve()); log!.once('error', reject); }));
-    const fixture = await starting(() => seedBenchmark(database!.pool));
+    const fixture = await starting(() => seedBenchmark(database!.pool, options));
     const key = join(directory, 'key.pem'), certificate = join(directory, 'cert.pem');
     await runOwned(owner, 'openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', certificate], { stdio: 'ignore' });
     const port = await starting(availablePort); const backend = `https://127.0.0.1:${port}`;

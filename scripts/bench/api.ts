@@ -15,7 +15,7 @@ async function measured(client: BenchmarkClient, path: string, metric: string, r
   try {
     result = await client.request(path);
     const work = validate(result);
-    record({ metric, ms: result.serverMs!, roundtripMs: result.ms, bytes: result.bytes, status: result.status, ok: true, work });
+    record({ metric, ms: result.serverMs!, roundtripMs: result.ms, bytes: result.bytes, status: result.status, ok: true, work, evidence: { dbMs: result.dbMs ?? null, queryCount: result.queryCount ?? null } });
   } catch (error) {
     record({ metric, ms: result?.serverMs ?? result?.ms ?? 0, roundtripMs: result?.ms, bytes: result?.bytes, status: result?.status, ok: false, work: {}, error: error instanceof Error ? error.message : String(error) });
     throw error;
@@ -24,12 +24,12 @@ async function measured(client: BenchmarkClient, path: string, metric: string, r
 export async function benchmarkReads(client: BenchmarkClient, pool: pg.Pool, fixture: SeedFixture, record: RecordSample, options: ApiOptions) {
   const initial = await client.request(`/api/sessions/${fixture.sessionId}`); success(initial);
   const state = initial.body as SessionState;
-  assert.equal(state.session.id, fixture.sessionId); assert.equal(state.entries.length, 60); assert.equal(state.players.length, 9);
+  assert.equal(state.session.id, fixture.sessionId); assert.equal(state.entries.length, fixture.counts.main_open_entries); assert.equal(state.players.length, fixture.counts.main_open_players);
   const reportSessions = fixture.counts.main_player_report_sessions!;
   const paths: { metric: string; path: string; validate: (result: HttpResult) => Record<string, string | number | boolean> }[] = [
     { metric: 'api.session', path: `/api/sessions/${fixture.sessionId}`, validate: result => {
       success(result); const body = result.body as SessionState;
-      assert.equal(body.session.id, fixture.sessionId); assert.equal(body.entries.length, 60); assert.equal(body.players.length, 9);
+      assert.equal(body.session.id, fixture.sessionId); assert.equal(body.entries.length, fixture.counts.main_open_entries); assert.equal(body.players.length, fixture.counts.main_open_players);
       return { session_entries: body.entries.length, players: body.players.length, revision: body.revision };
     } },
     { metric: 'api.since', path: `/api/sessions/${fixture.sessionId}?since=${state.revision}`, validate: result => {
@@ -37,9 +37,9 @@ export async function benchmarkReads(client: BenchmarkClient, pool: pg.Pool, fix
     } },
     { metric: 'api.players', path: '/api/players', validate: result => {
       success(result); const body = result.body as { players: { id: string; cumulative: { currency: string; result_minor: string }[] }[] };
-      assert.equal(body.players.length, 40); assert.deepEqual(new Set(body.players.map(player => player.id)), new Set(fixture.playerIds));
+      assert.equal(body.players.length, fixture.counts.main_players); assert.deepEqual(new Set(body.players.map(player => player.id)), new Set(fixture.playerIds));
       assert(body.players.every(player => player.cumulative.length === 1 && player.cumulative[0]!.currency === 'USD'));
-      return { players: body.players.length, cumulative_currencies: body.players.reduce((count, player) => count + player.cumulative.length, 0), closed_sessions: 300 };
+      return { players: body.players.length, cumulative_currencies: body.players.reduce((count, player) => count + player.cumulative.length, 0), closed_sessions: fixture.counts.main_closed_sessions! };
     } },
     ...(['overall', 'location', 'game', 'weekday', 'month'] as const).map(group => ({ metric: `api.report.${group}`, path: `/api/players/${fixture.playerId}/report?group=${group}`, validate: (result: HttpResult) => {
       success(result); const body = result.body as Report;
@@ -50,8 +50,9 @@ export async function benchmarkReads(client: BenchmarkClient, pool: pg.Pool, fix
     } })),
     { metric: 'api.history', path: '/api/sessions', validate: result => {
       success(result); const body = result.body as { sessions: { id: string }[]; next: string | null };
-      assert.equal(body.sessions.length, 30); assert(body.next); assert.equal(body.sessions[0]!.id, fixture.sessionId);
-      return { rows_returned: body.sessions.length, rows_selected: 31, has_next: true, sessions_available: 301 };
+      const available = fixture.counts.main_closed_sessions! + 1;
+      assert.equal(body.sessions.length, Math.min(30, available)); assert.equal(!!body.next, available > 30); assert.equal(body.sessions[0]!.id, fixture.sessionId);
+      return { rows_returned: body.sessions.length, rows_selected: Math.min(31, available), has_next: !!body.next, sessions_available: available };
     } },
   ];
   for (const request of (options.reverse ? [...paths].reverse() : paths).filter(item => !options.metrics || options.metrics.has(item.metric))) {
@@ -59,7 +60,7 @@ export async function benchmarkReads(client: BenchmarkClient, pool: pg.Pool, fix
     for (let index = 0; index < options.samples; index++) await measured(client, request.path, request.metric, record, request.validate);
   }
   const count = (await pool.query('SELECT count(*)::int AS count FROM ledger_entries WHERE banker_id=$1 AND session_id=$2', [fixture.bankerId, fixture.sessionId])).rows[0]!.count;
-  assert.equal(count, 60);
+  assert.equal(count, fixture.counts.main_open_entries);
 }
 
 export async function benchmarkWrites(client: BenchmarkClient, pool: pg.Pool, fixture: SeedFixture, record: RecordSample, options: ApiOptions) {
@@ -91,7 +92,7 @@ export async function benchmarkWrites(client: BenchmarkClient, pool: pg.Pool, fi
     } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
     for (const result of results) {
       const value = result.status === 'fulfilled' ? result.value : undefined;
-      record({ metric: 'api.write10', ms: value?.serverMs ?? value?.ms ?? 0, roundtripMs: value?.ms, bytes: value?.bytes, status: value?.status, ok: errors.length === 0, work: { concurrency: 10, batch, writes_completed: writtenCount, revision_delta: String(BigInt(after.revision) - BigInt(before.revision)), ledger_rows_before: before.count, ledger_rows_after: after.count }, ...(errors.length ? { error: errors.join('; ') } : {}) });
+      record({ metric: 'api.write10', ms: value?.serverMs ?? value?.ms ?? 0, roundtripMs: value?.ms, bytes: value?.bytes, status: value?.status, ok: errors.length === 0, evidence: { dbMs: value?.dbMs ?? null, queryCount: value?.queryCount ?? null }, work: { concurrency: 10, batch, writes_completed: writtenCount, revision_delta: String(BigInt(after.revision) - BigInt(before.revision)), ledger_rows_before: before.count, ledger_rows_after: after.count }, ...(errors.length ? { error: errors.join('; ') } : {}) });
     }
     assert.equal(errors.length, 0, errors.join('; '));
   }
