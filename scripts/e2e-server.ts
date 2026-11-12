@@ -2,7 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stopOwnedProcess } from './owned-process';
+import { SHUTDOWN_GRACE_MS, stopOwnedProcess } from './owned-process';
 import { testDatabase } from '../tests/database';
 
 let database: Awaited<ReturnType<typeof testDatabase>> | undefined;
@@ -23,7 +23,7 @@ async function initialize() {
   if (requested) return;
   const key = `${certificateDir}/key.pem`;
   const cert = `${certificateDir}/cert.pem`;
-  const certificate = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', cert], { stdio: 'ignore' });
+  const certificate = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', cert], { stdio: 'ignore', timeout: SHUTDOWN_GRACE_MS, killSignal: 'SIGKILL' });
   if (certificate.status !== 0) throw new Error('Could not generate the throwaway local HTTPS certificate');
   if (requested) return;
   child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('../src/server/local.ts', import.meta.url))], {
@@ -37,12 +37,13 @@ const startup = initialize();
 function stop(): Promise<void> {
   requested = true;
   return stopping ??= (async () => {
-    await startup.catch(() => {});
+    try { await stopOwnedProcess.withDeadline('E2E startup shutdown', () => startup.catch(() => {})); }
+    catch { fail('E2E startup shutdown failed'); }
     try {
       if (child) await stopOwnedProcess(child, 'signal');
     } catch { fail('E2E app shutdown failed'); }
     try { await database?.stop(); } catch { fail('E2E database shutdown failed'); }
-    try { if (certificateDir) await rm(certificateDir, { recursive: true, force: true }); } catch { fail('E2E TLS cleanup failed'); }
+    try { if (certificateDir) await stopOwnedProcess.withDeadline('E2E TLS cleanup', () => rm(certificateDir!, { recursive: true, force: true })); } catch { fail('E2E TLS cleanup failed'); }
   })();
 }
 function finish(code: number) {

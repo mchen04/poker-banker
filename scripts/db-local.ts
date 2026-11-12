@@ -21,7 +21,7 @@ let ending: Promise<void> | undefined;
 let stopping: Promise<void> | undefined;
 let exitCode = 0;
 const stopDatabase = database.stop.bind(database);
-const endPool = () => pool ? ending ??= pool.end() : Promise.resolve();
+const endPool = () => pool ? ending ??= stopOwnedProcess.withDeadline('Local database pool shutdown', () => pool!.end()) : Promise.resolve();
 function fail(message: string) {
   exitCode ||= 1;
   process.exitCode = exitCode;
@@ -51,12 +51,13 @@ async function initialize() {
 function stop(): Promise<void> {
   requested = true;
   return stopping ??= (async () => {
-    await startup.catch(() => {});
+    try { await stopOwnedProcess.withDeadline('Local database startup shutdown', () => startup.catch(() => {})); }
+    catch { fail('Local database startup shutdown failed'); }
     try {
       if (child && child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
     } catch { fail('Local app shutdown failed'); }
     try { await endPool(); } catch { fail('Local database pool shutdown failed'); }
-    try { await stopDatabase(); } catch { fail('Local database shutdown failed'); }
+    try { await stopOwnedProcess.withDeadline('Local database shutdown', stopDatabase); } catch { fail('Local database shutdown failed'); }
   })();
 }
 function finish(code: number) {

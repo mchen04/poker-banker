@@ -6,6 +6,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { createApp } from './app.js';
 import { createPool } from './db.js';
 import { emulateEdgeHeaders } from './local-edge.js';
+import { stopOwnedProcess } from '../../scripts/owned-process.js';
 
 const tlsKey = process.env.LOCAL_TLS_KEY;
 const tlsCert = process.env.LOCAL_TLS_CERT;
@@ -50,9 +51,12 @@ function fail(message: string) {
 function stop(): Promise<void> {
   return stopping ??= (async () => {
     try {
-      await new Promise<void>((resolve, reject) => server.close(error => { if (error) reject(error); else resolve(); }));
-    } catch { fail('Local HTTP server shutdown failed'); }
-    try { await pool.end(); } catch { fail('Local database pool shutdown failed'); }
+      await stopOwnedProcess.withDeadline('Local HTTP server shutdown', () => new Promise<void>((resolve, reject) => server.close(error => { if (error) reject(error); else resolve(); })));
+    } catch {
+      fail('Local HTTP server shutdown failed');
+      try { if ('closeAllConnections' in server && typeof server.closeAllConnections === 'function') server.closeAllConnections(); } catch {}
+    }
+    try { await stopOwnedProcess.withDeadline('Local database pool shutdown', () => pool.end()); } catch { fail('Local database pool shutdown failed'); }
   })();
 }
 function finish(code: number) {
