@@ -112,7 +112,11 @@ export async function openNewSession(page: Page) {
   else if (previous) {
     await page.getByRole('button', { name: 'Switch session', exact: true }).click();
     await page.getByRole('dialog', { name: 'History', exact: true }).getByRole('button', { name: 'New session', exact: true }).click();
-  } else await page.locator('.session-heading').getByRole('button', { name: 'New session', exact: true }).click();
+  } else {
+    const headerAction = page.locator('.session-heading').getByRole('button', { name: 'New session', exact: true });
+    if (await headerAction.isVisible()) await headerAction.click();
+    else await page.getByTestId('session-bottom-bar').getByRole('button', { name: 'New session', exact: true }).click();
+  }
   await expect(page.getByRole('dialog', { name: 'New session', exact: true })).toBeVisible();
 }
 export async function switchSession(page: Page, id: string) {

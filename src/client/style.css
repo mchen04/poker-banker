@@ -50,6 +50,9 @@ ul { padding-left: 1.25rem; }
 .status-line { font-size: .8125rem; color: var(--accent); font-weight: 650; margin-bottom: 0; }
 .timer-row { display: flex; gap: .25rem .6rem; align-items: center; justify-content: space-between; flex-wrap: wrap; margin: .15rem 0 .4rem; min-height: 26px; }
 .timer { color: var(--muted); font-size: .8125rem; font-variant-numeric: tabular-nums; }
+.retained-timer-notice { flex-basis: 100%; margin: 0; color: var(--muted); font-size: .8125rem; }
+.retained-timer-notice button { font-size: inherit; min-height: 44px; padding-block: .3rem; }
+.ready-to-close { width: 100%; margin-bottom: .6rem; padding: .8rem; text-align: left; color: var(--accent); background: var(--soft); font-size: .875rem; }
 .totals { padding: .55rem .7rem; margin-bottom: .5rem; background: var(--surface); border: 1px solid var(--line); border-radius: .6rem; display: grid; grid-template-columns: 1fr 1.7fr; gap: .3rem .6rem; }
 .totals > div { min-width: 0; }
 .totals span { display: block; font-size: .8125rem; color: var(--muted); line-height: 1.35; }
@@ -248,6 +251,8 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--soft)
   .transaction-slot { grid-column: 3; grid-row: 1; }
   .bottom-navigation > button:last-child { grid-column: 2; grid-row: 1; }
   .workspace { padding: 1.25rem 1.5rem 2rem; }
+  .banker-shell .workspace { padding-bottom: 9rem; }
+  .closed-session-new { display: none; }
   .session-board { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(19rem, 1fr); gap: 1rem 1.5rem; align-items: start; }
   .session-overview { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(27rem, 1fr); align-items: start; gap: 0 1.5rem; }
   .session-heading { grid-column: 1; }
@@ -265,7 +270,7 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--soft)
   .sheet-backdrop { align-items: center; padding: 1.5rem; }
   .sheet { border-radius: .85rem; max-height: calc(var(--sheet-viewport-height, 100dvh) - 3rem); }
   .money-sheet, .sheet:has(.sheet-form) { height: min(46rem, calc(var(--sheet-viewport-height, 100dvh) - 3rem)); }
-  .notice { bottom: 1rem; }
+  .notice { bottom: 1rem; left: max(1.5rem, calc((100vw - 76rem) / 2 + 1.5rem)); transform: none; width: min(26.25rem, calc(100vw - 23.5rem)); }
 }
 .session-title { display: flex; align-items: center; gap: .35rem; min-width: 0; max-width: 100%; min-height: 44px; padding: .2rem 0; border: 0; background: transparent; text-align: left; font-size: inherit; font-weight: 700; letter-spacing: inherit; }
 .session-title > span:first-child { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }

@@ -133,13 +133,13 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
   await money(page, playerId, '20', { kind: 'Cash out', paid: true, method: 'cash' });
   expect((await current(page)).totals.discrepancy_minor).toBe('0');
   await measure('Close a balanced session', async tap => {
-    await tap(page.getByRole('button', { name: 'Session menu', exact: true }));
-    await tap(page.getByTestId('session-close'));
+    await tap(page.getByTestId('ready-to-close'));
     await tap(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })); await saved();
   });
   const secondName = `Eight at Justin’s ${tag}`;
   await measure('Create another session', async tap => {
-    await tap(page.locator('.session-heading').getByRole('button', { name: 'New session', exact: true }));
+    const headerAction = page.locator('.session-heading').getByRole('button', { name: 'New session', exact: true });
+    await tap(await headerAction.isVisible() ? headerAction : page.getByTestId('session-bottom-bar').getByRole('button', { name: 'New session', exact: true }));
     await typeInput(page.getByLabel('Session name', { exact: true }), secondName);
     await tap(page.getByRole('button', { name: 'Create session', exact: true }));
     await expect(page.getByRole('heading', { name: secondName, exact: true })).toBeVisible();

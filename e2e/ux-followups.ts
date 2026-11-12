@@ -69,7 +69,7 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
     const undone = await current(page);
     expect(undone.session.started_at).toBe(first.session.started_at);
     expect(undone.entries.filter(entry => entry.voids_entry_id)).toHaveLength(1);
-    const correction = page.getByRole('button', { name: 'Correct times', exact: true });
+    const correction = page.getByTestId('save-status').getByRole('button', { name: 'Correct times', exact: true });
     await correction.focus(); await both('undo-first-buy-in-timer-explanation');
     await correction.click(); await expect(page.getByLabel('Started at', { exact: true })).not.toHaveValue('');
     await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
@@ -143,7 +143,7 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
     await money(page, paid.id, '50', { kind: 'Cash out', paid: true });
     await expect(primary).toHaveText('Buy-in');
     await measure('Close a balanced session', async tap => {
-      await tap(page.getByRole('button', { name: 'Session menu', exact: true })); await tap(page.getByTestId('session-close'));
+      await tap(page.getByTestId('ready-to-close'));
       await tap(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })); await settled();
     });
     await expect(primary).toHaveText('New session'); await expect(nav.getByRole('button', { name: 'Reopen session', exact: true })).toHaveCount(0); await both('closed-session-footer');
