@@ -6,7 +6,7 @@ import { buildRelease } from './global-setup';
 test('a manual update keeps progressing when its first activation message leaves the worker waiting', async ({ page }, info) => {
   const releaseA = `intent-A-${info.project.name}`;
   const releaseB = `intent-B-${info.project.name}`;
-  buildRelease(releaseA);
+  await buildRelease(releaseA);
   const account = await createAccount(page);
   const session = await newSession(page, 'Pending manual update');
   const player = await addPlayer(page, 'Justin');
@@ -15,7 +15,7 @@ test('a manual update keeps progressing when its first activation message leaves
   await typeInput(page.getByTestId('money-amount'), '123');
   const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
   await expect.poll(async () => (await storedDraft<{ amount: string }>(page, key))?.amount).toBe('123');
-  buildRelease(releaseB);
+  await buildRelease(releaseB);
   await page.evaluate(async () => {
     const registration = await navigator.serviceWorker.getRegistration('/');
     if (!registration) throw new Error('The local service worker is missing');

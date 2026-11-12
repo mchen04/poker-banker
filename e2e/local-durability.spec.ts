@@ -68,7 +68,7 @@ async function openCleanSignout(page: Page) {
 test('a quota failure blocks a waiting update until the typed draft is saved and restored', async ({ page }, testInfo) => {
   const releaseA = `durability-A-${testInfo.project.name}`;
   const releaseB = `durability-B-${testInfo.project.name}`;
-  buildRelease(releaseA);
+  await buildRelease(releaseA);
   const account = await createAccount(page);
   const session = await newSession(page, 'Durable update');
   const player = await addPlayer(page, 'Justin');
@@ -89,7 +89,7 @@ test('a quota failure blocks a waiting update until the typed draft is saved and
   await typeInput(amount, '123');
   await expect(amount).toHaveValue('123');
   expect((await localWork(page)).drafts.find(draft => draft.key === key)?.value.amount).toBe('10');
-  buildRelease(releaseB);
+  await buildRelease(releaseB);
   await page.evaluate(async () => {
     const registration = await navigator.serviceWorker.getRegistration('/');
     if (!registration) throw new Error('The local service worker is missing');

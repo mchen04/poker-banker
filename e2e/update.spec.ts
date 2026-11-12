@@ -21,7 +21,7 @@ test('waiting release update after hidden and visible preserves auth, drafts and
   test.setTimeout(120000);
   const releaseA = `e2e-A-${testInfo.project.name}`;
   const releaseB = `e2e-B-${testInfo.project.name}`;
-  buildRelease(releaseA);
+  await buildRelease(releaseA);
   const user = await createAccount(page);
   const state = await newSession(page, 'Survives update');
   const player = await addPlayer(page, 'Justin');
@@ -35,7 +35,7 @@ test('waiting release update after hidden and visible preserves auth, drafts and
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
     document.dispatchEvent(new Event('visibilitychange'));
   });
-  buildRelease(releaseB);
+  await buildRelease(releaseB);
   await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration('/'); if (!registration) throw new Error('Local service worker registration disappeared'); await registration.update(); });
   await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/'))?.waiting)).toBe(true);
   expect(await version(page)).toBe(releaseA);

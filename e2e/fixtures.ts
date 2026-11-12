@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { mkdir } from 'node:fs/promises';
-import { stopOwnedProcess } from '../scripts/owned-process';
-import { test as base, expect, type Page, type TestInfo } from '@playwright/test';
+import { spawnOwned } from '../scripts/owned-process';
+import { ownedMain } from '../scripts/owned-command';
+import { test as base, expect, type Browser, type Page, type TestInfo } from '@playwright/test';
 
 async function availablePort() {
   const server = createServer();
@@ -13,34 +13,36 @@ async function availablePort() {
   return address.port;
 }
 export const test = base.extend({
-  baseURL: async ({}, use) => {
+  browser: [async ({ playwright, browserName, launchOptions, channel, headless }, use) => ownedMain(async owner => {
+    let browser: Browser | undefined;
+    owner.addCleanup('Browser test browser close', 'cleanup', () => browser?.close());
+    browser = await owner.launch(async () => browser = await playwright[browserName].launch({ ...launchOptions, channel, headless, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
+    await use(browser);
+  }), { scope: 'worker' }],
+  baseURL: async ({}, use) => ownedMain(async owner => {
     const port = await availablePort();
-    const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { detached: true, env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    const child = spawnOwned(owner, process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { detached: true, env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     let output = '';
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const finish = (error?: Error) => {
-          clearTimeout(timeout);
-          child.removeListener('exit', onExit);
-          child.removeListener('error', onError);
-          if (error) reject(error); else resolve();
-        };
-        const onExit = (code: number | null) => finish(new Error(`Browser server exited ${code}\n${output}`));
-        const onError = (error: Error) => finish(error);
-        const timeout = setTimeout(() => finish(new Error(`Browser server did not start\n${output}`)), 30000);
-        child.stdout!.on('data', chunk => {
-          output += String(chunk);
-          if (output.includes('Poker banker ready at')) finish();
-        });
-        child.stderr!.on('data', chunk => { output += String(chunk); });
-        child.once('exit', onExit);
-        child.once('error', onError);
+    await new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        child.removeListener('exit', onExit);
+        child.removeListener('error', onError);
+        if (error) reject(error); else resolve();
+      };
+      const onExit = (code: number | null) => finish(new Error(`Browser server exited ${code}\n${output}`));
+      const onError = (error: Error) => finish(error);
+      const timeout = setTimeout(() => finish(new Error(`Browser server did not start\n${output}`)), 30000);
+      child.stdout!.on('data', chunk => {
+        output += String(chunk);
+        if (output.includes('Poker banker ready at')) finish();
       });
-      await use(`https://127.0.0.1:${port}`);
-    } finally {
-      await stopOwnedProcess(child, 'ipc', true);
-    }
-  },
+      child.stderr!.on('data', chunk => { output += String(chunk); });
+      child.once('exit', onExit);
+      child.once('error', onError);
+    });
+    await use(`https://127.0.0.1:${port}`);
+  }),
   context: async ({ context }, use, testInfo) => {
     if (testInfo.project.name === 'iphone-standalone') await context.addInitScript(() => {
       Object.defineProperty(navigator, 'standalone', { configurable: true, value: true });

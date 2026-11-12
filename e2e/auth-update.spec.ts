@@ -7,11 +7,11 @@ import { buildRelease } from './global-setup';
 test('an update waits for the signup reply and restores its unacknowledged recovery codes', async ({ page }, testInfo) => {
   const releaseA = `signup-A-${testInfo.project.name}`;
   const releaseB = `signup-B-${testInfo.project.name}`;
-  buildRelease(releaseA);
+  await buildRelease(releaseA);
   await page.goto('/');
   await workerReady(page);
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
-  buildRelease(releaseB);
+  await buildRelease(releaseB);
   await page.evaluate(async () => { await (await navigator.serviceWorker.getRegistration('/'))!.update(); });
   await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/'))?.waiting)).toBe(true);
   await page.getByRole('button', { name: 'Sign up', exact: true }).click();
