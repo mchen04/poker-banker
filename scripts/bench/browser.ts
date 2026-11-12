@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { webkit, devices, expect, type Page, type BrowserContext, type BrowserServer } from '@playwright/test';
+import { chromium, webkit, devices, expect, type Browser, type Page, type BrowserContext, type BrowserServer } from '@playwright/test';
 import { formatMoney } from '../../src/domain/money';
 import type { SessionState } from '../../src/domain/session';
-import { observationScript } from './observe';
+import { observationScript, telemetryScript } from './observe';
+import { benchmarkJourneys } from './journeys';
+import { safePath } from './browser-telemetry';
+import { typeInput } from '../../e2e/input';
 import { CpuBudget, type isolatedEngine } from './profile';
 import type { benchmarkStack } from './stack';
 import type { RecordSample } from './types';
@@ -13,21 +16,26 @@ type Stack = Awaited<ReturnType<typeof benchmarkStack>>;
 type Engine = Awaited<ReturnType<typeof isolatedEngine>>;
 type ObservedWindow = Window & { __pbObserveSaved?: (note: string, total: string) => Promise<number> };
 type Target = 'workspace' | 'viewer';
-export async function benchmarkBrowser(stack: Stack, engine: Engine, output: string, record: RecordSample, options: { samples: number; reverse: boolean; phase: (name: string) => void; metrics?: Set<string> }) {
+export async function benchmarkBrowser(stack: Stack, engine: Engine, output: string, record: RecordSample, options: { samples: number; reverse: boolean; phase: (name: string) => void; metrics?: Set<string>; journeys?: boolean; memoryCycles?: number; updateReleases?: { beforePath: string; afterPath: string; beforeRelease: string; afterRelease: string } }) {
   const bounded = withShutdownDeadline;
   const owner = createProcessOwner({ parent: stack.owner });
+  const memoryOnly = options.journeys && options.metrics?.size === 1 && options.metrics.has('memory.cycles');
   const wanted = (metric: string) => !options.metrics || options.metrics.has(metric);
   const hasWrites = wanted('entry.confirm') || [1,10,25].some(count => wanted(`viewer.delay.${count}`));
-  const profiled = wanted('entry.confirm') || ['workspace.cold','workspace.warm','viewer.cold','viewer.warm'].some(wanted);
+  const profiled = !memoryOnly && (options.journeys || wanted('entry.confirm') || ['workspace.cold','workspace.warm','viewer.cold','viewer.warm'].some(wanted));
   let server: BrowserServer | undefined;
   let browser: Awaited<ReturnType<typeof webkit.connect>> | undefined;
   let budget: CpuBudget | undefined;
+  let memoryServer: BrowserServer | undefined;
+  let memoryBrowser: Browser | undefined;
   owner.addCleanup('Benchmark browser server close', 'cleanup', () => server?.close());
   owner.addCleanup('Benchmark browser close', 'cleanup', () => browser?.close());
   owner.addCleanup('Benchmark CPU budget pause', 'pool', () => budget?.pause());
+  owner.addCleanup('Benchmark memory browser server close', 'cleanup', () => memoryServer?.close());
+  owner.addCleanup('Benchmark memory browser close', 'cleanup', () => memoryBrowser?.close());
   const closeBrowser = () => owner.stop();
-  server = await owner.launch(async () => server = await webkit.launchServer({ executablePath: engine.executable, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
-  try { browser = await owner.launch(async () => browser = await webkit.connect(server!.wsEndpoint())); }
+  server = await owner.launch(async () => server = memoryOnly ? await chromium.launchServer({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }) : await webkit.launchServer({ executablePath: engine.executable, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
+  try { browser = await owner.launch(async () => browser = await (memoryOnly ? chromium : webkit).connect(server!.wsEndpoint())); }
   catch (error) {
     try { await closeBrowser(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Benchmark browser connection and cleanup failed'); }
     throw error;
@@ -36,21 +44,28 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   budget = new CpuBudget(engine.engine, server, owner);
   const errors: string[] = [];
   const teardownErrors: { url: string; message: string }[] = [];
+  const pageErrors: { page: Page; url: string; message: string }[] = [];
+  const offline = new WeakSet<Page>();
+  const offlineFailures: { page: Page; url: string; failure: string }[] = [];
+  const expectedOfflineErrors: { page: string; requestPath: string; message: string }[] = [];
   const closing = new WeakSet<Page>();
   const fixture = stack.fixture;
   let initial: Awaited<ReturnType<typeof stack.client.request>>;
   try { initial = await stack.client.request(`/api/sessions/${fixture.sessionId}`); expect(initial.status).toBe(200); } catch (error) { await closeBrowser(); throw error; }
   let state = initial.body as SessionState;
-  expect(state.entries).toHaveLength(60);
-  const context = async (banker: boolean) => {
-    const value = await connectedBrowser.newContext({ ...devices['iPhone 15'], baseURL: stack.origin, ignoreHTTPSErrors: true, locale: 'en-US', timezoneId: 'UTC' });
-    await value.addInitScript({ content: observationScript.replace('__PB_EXPECTED__', JSON.stringify({ name: state.session.name, total: formatMoney(BigInt(state.totals.total_in_minor), 'USD'), ids: state.players.map(player => player.id), endpoint: banker ? `/api/sessions/${fixture.sessionId}` : `/api/view/${fixture.token}` })) });
+  expect(state.entries).toHaveLength(fixture.counts.main_open_entries!);
+  const context = async (banker: boolean, target: Browser = connectedBrowser) => {
+    const value = await target.newContext({ ...devices['iPhone 15'], baseURL: stack.origin, ignoreHTTPSErrors: true, locale: 'en-US', timezoneId: 'UTC' });
+    await value.addInitScript({ content: `Object.defineProperty(navigator, 'standalone', { configurable: true, value: true }); { const native = window.matchMedia.bind(window); window.matchMedia = query => { const result = native(query); if (query.includes('display-mode') && query.includes('standalone')) Object.defineProperty(result, 'matches', { configurable: true, value: true }); return result; }; }` });
+    await value.addInitScript({ content: telemetryScript });
+    await value.addInitScript({ content: observationScript.replace('__PB_EXPECTED__', JSON.stringify({ name: state.session.name, total: formatMoney(BigInt(state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0'), state.session.currency), ids: state.players.map(player => player.id), endpoint: banker ? `/api/sessions/${fixture.sessionId}` : `/api/view/${fixture.token}` })) });
     if (banker) await value.addCookies([{ name: 'pb_session', value: stack.client.cookie().slice('pb_session='.length), url: stack.origin, httpOnly: true, secure: true, sameSite: 'Lax' }]);
     return value;
   };
   function watch(page: Page) {
-    page.on('pageerror', error => { if (closing.has(page)) teardownErrors.push({ url: page.url(), message: error.message }); else errors.push(`${page.url()}: ${error.message}`); });
-    page.on('response', response => { if (response.url().includes('/api/') && response.status() >= 400) errors.push(`${response.status()} ${new URL(response.url()).pathname}`); });
+    page.on('pageerror', error => { if (closing.has(page)) teardownErrors.push({ url: safePath(page.url()), message: error.message }); else pageErrors.push({ page, url: safePath(page.url()), message: error.message }); });
+    page.on('requestfailed', request => { if (offline.has(page)) offlineFailures.push({ page, url: request.url(), failure: request.failure()?.errorText ?? 'Request failed while explicitly offline' }); });
+    page.on('response', response => { const path = safePath(response.url()); if (response.url().includes('/api/') && response.status() >= 400 && !(options.journeys && path === '/api/auth/me' && response.status() === 401)) errors.push(`${response.status()} ${path}`); });
   }
   const closingContexts = new WeakMap<BrowserContext, Promise<void>>();
   function closeContext(context: BrowserContext) {
@@ -69,9 +84,9 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   });
   async function meaningful(page: Page) {
     await expect.poll(() => page.evaluate(() => !!(window as Window & { __pbBenchMeaningful?: unknown }).__pbBenchMeaningful), { timeout: 20000 }).toBe(true);
-    const proof = await page.evaluate(() => ({ marker: (window as Window & { __pbBenchMeaningful?: { ms: number; currentHttp: boolean; epoch: number } }).__pbBenchMeaningful!, name: document.querySelector('h1')?.textContent, total: document.querySelector('[data-testid="totals"] strong')?.textContent, players: [...document.querySelectorAll('.players .player-row')].map(row => row.getAttribute('data-testid')), visible: !!document.querySelector('h1')?.getClientRects().length }));
+    const proof = await page.evaluate(() => ({ marker: (window as Window & { __pbBenchMeaningful?: { ms: number; currentHttp: boolean; epoch: number } }).__pbBenchMeaningful!, name: document.querySelector('h1')?.getAttribute('aria-label') || document.querySelector('h1')?.textContent, total: document.querySelector('[data-testid="totals"] strong')?.textContent, players: [...document.querySelectorAll('.players .player-row')].map(row => row.getAttribute('data-testid')), visible: !!document.querySelector('h1')?.getClientRects().length }));
     expect(proof.name).toBe(state.session.name); expect(proof.visible).toBe(true);
-    expect(proof.total).toBe(formatMoney(BigInt(state.totals.total_in_minor), 'USD'));
+    expect(proof.total).toBe(formatMoney(BigInt(state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0'), state.session.currency));
     expect(new Set(proof.players)).toEqual(new Set(state.players.map(player => `player-${player.id}`)));
     return proof.marker;
   }
@@ -93,7 +108,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
       if (cache === 'warm') await page.reload({ waitUntil: 'commit' }); else await page.goto(path(target), { waitUntil: 'commit' });
       const marker = await meaningful(page);
       expect(errors).toEqual([]);
-      record({ metric, ms: marker.ms, ok: true, work: { players: 9, ledger_entries: state.entries.length, profile: 'synthetic phone', cache, current_http_observed_at_render: marker.currentHttp, sample: index, renderedEpoch: marker.epoch } });
+      record({ metric, ms: marker.ms, ok: true, work: { players: state.players.length, ledger_entries: state.entries.length, profile: 'synthetic phone', cache, current_http_observed_at_render: marker.currentHttp, sample: index, renderedEpoch: marker.epoch } });
       await expect.poll(() => currentResponses, { timeout: 15000 }).toBeGreaterThan(0);
       const resources = await page.evaluate(() => (performance.getEntriesByType('resource') as PerformanceResourceTiming[]).map(entry => ({ path: new URL(entry.name).pathname.replace(/\/api\/view\/[^/]+/, '/api/view/OWNED_TOKEN'), startTime: entry.startTime, responseStart: entry.responseStart, responseEnd: entry.responseEnd, duration: entry.duration, transferSize: entry.transferSize, encodedBodySize: entry.encodedBodySize, decodedBodySize: entry.decodedBodySize, workerStart: entry.workerStart })));
       await writeFile(join(output, `${target}-${cache}-${index}-resources.json`), JSON.stringify({ marker, resources }, null, 2));
@@ -114,14 +129,13 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
     await page.getByTestId(`player-${player}`).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Buy-in', exact: true }).click();
     await expect(page.getByLabel('Amount', { exact: true })).toBeEnabled();
-    await page.getByLabel('Amount', { exact: true }).fill('1');
-    await page.getByLabel('Paid now', { exact: true }).setChecked(paid);
-    if (paid) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
+    await typeInput(page.getByLabel('Amount', { exact: true }), '1');
+    await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: paid ? 'Cash' : 'Unpaid', exact: true }).click();
     await page.getByText('Record an earlier time or note', { exact: true }).click();
-    await page.getByLabel('Note', { exact: true }).fill(note);
+    await typeInput(page.getByLabel('Note', { exact: true }), note);
     const button = page.getByRole('button', { name: 'Save entry', exact: true });
     await button.evaluate(button => button.addEventListener('click', () => { performance.clearMarks('benchmark-save'); performance.mark('benchmark-save'); }, { once: true }));
-    const displayed = page.evaluate(({ note, total }) => (window as ObservedWindow).__pbObserveSaved!(note, total), { note, total: formatMoney(BigInt(state.totals.total_in_minor) + 100n, 'USD') });
+    const displayed = page.evaluate(({ note, total }) => (window as ObservedWindow).__pbObserveSaved!(note, total), { note, total: formatMoney(BigInt(state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0') + 100n, state.session.currency) });
     void displayed.catch(() => {});
     options.phase(stack.proxy.enabled ? 'entry.confirm' : 'viewer.delay');
     const responsePromise = page.waitForResponse(response => response.url().includes(`/api/sessions/${fixture.sessionId}/entries`) && response.request().method() === 'POST' && response.request().postDataJSON().note === note);
@@ -132,7 +146,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
     state = await response.json() as SessionState;
     const entry = state.entries.find(entry => entry.note === note && entry.kind === 'buy_in'); expect(entry).toBeDefined();
     await expect(page.getByTestId(`entry-${entry!.id}`)).toBeVisible();
-    await expect(page.getByTestId('totals').locator('strong').first()).toHaveText(formatMoney(BigInt(state.totals.total_in_minor), 'USD'));
+    await expect(page.getByTestId('totals').locator('strong').first()).toHaveText(formatMoney(BigInt(state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0'), state.session.currency));
     const click = await page.evaluate(() => performance.timeOrigin + performance.getEntriesByName('benchmark-save').at(-1)!.startTime);
     const timing = { click, confirmed };
     const count = (await stack.database.pool.query('SELECT count(*)::int AS count FROM ledger_entries WHERE banker_id=$1 AND session_id=$2 AND note=$3 AND kind=\'buy_in\'', [fixture.bankerId, fixture.sessionId, note])).rows[0]!.count;
@@ -142,6 +156,15 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   const observers: BrowserContext[] = [];
   let bankerContext: BrowserContext | undefined;
   try {
+    const memoryContext = async () => {
+      if (memoryOnly) return context(true);
+      memoryServer = await owner.launch(async () => memoryServer = await chromium.launchServer({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
+      memoryBrowser = await owner.launch(async () => memoryBrowser = await chromium.connect(memoryServer!.wsEndpoint()));
+      return context(true, memoryBrowser);
+    };
+    const markOffline = (page: Page, value: boolean) => { if (value) offline.add(page); else offline.delete(page); };
+    if (options.journeys) await benchmarkJourneys({ stack, browser: connectedBrowser, context, memoryContext, closeContext, watch, markOffline, budget, record, options, output });
+    if (!options.journeys) {
     const targets: Target[] = options.reverse ? ['viewer', 'workspace'] : ['workspace', 'viewer'];
     const caches = options.reverse ? ['warm', 'cold'] as const : ['cold', 'warm'] as const;
     for (let index = 0; index < options.samples; index++) for (const target of targets) for (const cache of caches) if (wanted(`${target}.${cache}`)) await load(target, cache, index);
@@ -171,7 +194,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
         }
         for (let index = 0; index < options.samples; index++) {
           const note = `Benchmark live ${randomUUID()}`;
-          const seen = viewers.map(page => page.evaluate(({ note, total }) => (window as ObservedWindow).__pbObserveSaved!(note, total), { note, total: formatMoney(BigInt(state.totals.total_in_minor) + 100n, 'USD') }));
+          const seen = viewers.map(page => page.evaluate(({ note, total }) => (window as ObservedWindow).__pbObserveSaved!(note, total), { note, total: formatMoney(BigInt(state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0') + 100n, state.session.currency) }));
           for (const promise of seen) void promise.catch(() => {});
           try {
             const result = await save(banker, note, false);
@@ -179,7 +202,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
             expect(displayed).toHaveLength(count);
             for (const [viewer, epoch] of displayed.entries()) {
               await expect(viewers[viewer]!.getByTestId(`entry-${result.entry!.id}`)).toBeVisible();
-              await expect(viewers[viewer]!.getByTestId('totals').locator('strong').first()).toHaveText(formatMoney(BigInt(state.totals.total_in_minor), 'USD'));
+              await expect(viewers[viewer]!.getByTestId('totals').locator('strong').first()).toHaveText(formatMoney(BigInt(state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0'), state.session.currency));
               record({ metric: `viewer.delay.${count}`, ms: epoch - result.click, ok: true, work: { concurrency: count, viewers_completed: count, viewer, batch: index, renderedEpoch: epoch, ledger_rows_written: 1, revision: result.revision, banker_confirmed_ms: result.confirmed - result.click, confirmed_to_viewer_ms: epoch - result.confirmed, profile: 'unthrottled load generator; real visible WebKit contexts' } });
             }
             if (index === 0) await viewers[0]!.screenshot({ path: join(output, `live-${count}-viewers.png`) });
@@ -190,11 +213,23 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
       }
     }
     }
+    }
+    const sanitize = (value: string) => value.replaceAll(fixture.username, 'OWNED_USER').replaceAll(fixture.password, 'OWNED_SECRET').replace(/\/(api\/view|v)\/[A-Za-z0-9_-]+/g, '/$1/OWNED_TOKEN');
+    for (const error of pageErrors) {
+      const failed = /due to access control checks\.?/i.test(error.message) ? offlineFailures.find(failure => {
+        if (failure.page !== error.page) return false;
+        if (error.message.includes(failure.url)) return true;
+        const path = new URL(failure.url).pathname; const index = error.message.indexOf(path);
+        return index >= 0 && /^(?:[?\s"'.,)]|$)/.test(error.message.slice(index + path.length));
+      }) : undefined;
+      if (failed) expectedOfflineErrors.push({ page: error.url, requestPath: safePath(failed.url), message: sanitize(error.message) });
+      else errors.push(`${error.url}: ${sanitize(error.message)}`);
+    }
     expect(errors).toEqual([]);
     const cpu = profiled ? budget!.summary() : null;
     if (cpu) { expect(cpu.cycles).toBeGreaterThan(0);
     expect(cpu.actualRunnableFraction).toBeGreaterThan(.15); expect(cpu.actualRunnableFraction).toBeLessThan(.35); }
-    await writeFile(join(output, 'profile.json'), JSON.stringify({ cpu, network: stack.proxy.profile(), proxyCounts: stack.proxy.counts, engineHashes: engine.hashes, browserVersion: connectedBrowser.version(), browserErrors: errors, teardownErrors }, null, 2));
+    await writeFile(join(output, 'profile.json'), JSON.stringify({ cpu, network: stack.proxy.profile(), proxyCounts: stack.proxy.counts, engineHashes: engine.hashes, browserVersion: connectedBrowser.version(), browserErrors: errors, teardownErrors, expectedOfflineErrors, expectedOfflineFailures: offlineFailures.map(failure => ({ page: safePath(failure.page.url()), requestPath: safePath(failure.url), failure: sanitize(failure.failure) })) }, null, 2));
     return { cpu, errors };
   } finally {
     stack.proxy.enabled = false;

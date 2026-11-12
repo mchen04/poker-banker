@@ -11,7 +11,7 @@ export const observationScript = String.raw`
     observer.observe(document.body, { childList: true, subtree: true, characterData: true }); check();
   });
   let pending = false;
-  const valid = () => document.querySelector('h1')?.getClientRects().length && document.querySelector('h1')?.textContent === expected.name && document.querySelector('[data-testid="totals"] strong')?.textContent === expected.total && document.querySelectorAll('.players .player-row').length === 9 && expected.ids.every(id => document.querySelector('[data-testid="player-' + id + '"]'));
+  const valid = () => document.querySelector('h1')?.getClientRects().length && (document.querySelector('h1')?.getAttribute('aria-label') || document.querySelector('h1')?.textContent) === expected.name && document.querySelector('[data-testid="totals"] strong')?.textContent === expected.total && document.querySelectorAll('.players .player-row').length === expected.ids.length && expected.ids.every(id => document.querySelector('[data-testid="player-' + id + '"]'));
   const check = () => {
     if (pending || window.__pbBenchMeaningful || !valid()) return;
     pending = true;
@@ -26,4 +26,19 @@ export const observationScript = String.raw`
   const observer = new MutationObserver(check);
   observer.observe(document, { childList: true, subtree: true, characterData: true }); check();
 })(__PB_EXPECTED__);
+`;
+
+export const telemetryScript = String.raw`
+(() => {
+  const supported = typeof PerformanceObserver !== 'undefined' ? PerformanceObserver.supportedEntryTypes || [] : [];
+  const entries = { event: [], longtask: [] };
+  for (const type of ['event', 'longtask']) if (supported.includes(type)) {
+    try { new PerformanceObserver(list => { for (const entry of list.getEntries()) { const value = entry.toJSON(); entries[type].push(value); if (entries[type].length > 2000) entries[type].shift(); } }).observe({ type, buffered: true, ...(type === 'event' ? { durationThreshold: 16 } : {}) }); } catch {}
+  }
+  const delays = [];
+  let previous = performance.now();
+  const timer = setInterval(() => { const now = performance.now(); delays.push({ startTime: previous, delay: Math.max(0, now - previous - 50) }); if (delays.length > 2000) delays.shift(); previous = now; }, 50);
+  window.addEventListener('pagehide', () => clearInterval(timer), { once: true });
+  window.__pbTelemetry = { supported, entries, delays };
+})();
 `;

@@ -2,11 +2,21 @@ import { constants } from 'node:fs';
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
+import { AsyncResource } from 'node:async_hooks';
 import { setTimeout as pause } from 'node:timers/promises';
 import { webkit, type BrowserServer } from '@playwright/test';
 import { createProcessOwner, type ProcessOwner, withShutdownDeadline } from '../owned-process';
 import { runOwned } from '../owned-command';
-type OwnedProcess = { pid: number; group: number; executable: string };
+type OwnedProcess = { pid: number; group: number; started: string; executable: string };
+const createScannerOwner = AsyncResource.bind(() => createProcessOwner());
+
+export function engineProcesses(snapshot: string, engine: string): OwnedProcess[] {
+  return snapshot.split('\n').flatMap(line => {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/);
+    if (!match || Number(match[1]) <= 0 || !match[4]!.startsWith(`${engine}/`)) return [];
+    return [{ pid: Number(match[1]), group: Number(match[2]), started: match[3]!.replace(/\s+/g, ' '), executable: match[4]! }];
+  });
+}
 export async function isolatedEngine(parent?: ProcessOwner) {
   const owner = createProcessOwner({ parent });
   let ownedDirectory: string | undefined;
@@ -35,26 +45,41 @@ export class CpuBudget {
   private pausing: Promise<void> | undefined;
   private cycles: { activeMs: number; stoppedMs: number; processes: number }[] = [];
   private seen = new Map<number, Omit<OwnedProcess, 'pid'>>();
-  constructor(private readonly engine: string, private readonly server: BrowserServer, private readonly owner: ProcessOwner) {}
+  private stopped = new Map<number, OwnedProcess>();
+  private readonly scanner = createScannerOwner();
+  constructor(private readonly engine: string, private readonly server: BrowserServer, private readonly owner: ProcessOwner) {
+    const abort = () => { void this.pause().catch(() => {}); };
+    owner.signal.addEventListener('abort', abort, { once: true });
+    owner.addCleanup('Benchmark CPU scanner close', 'cleanup', async () => { owner.signal.removeEventListener('abort', abort); try { await this.pause(); } finally { await this.scanner.stop(); } });
+  }
   private async processes(): Promise<OwnedProcess[]> {
-    const groups = new Set(this.owner.groupIds());
-    return (await runOwned(this.owner, 'ps', ['-Ao', 'pid=,pgid=,comm='])).split('\n').flatMap(line => {
-      const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
-      if (!match || !groups.has(Number(match[2])) || !match[3]!.startsWith(`${this.engine}/`)) return [];
-      const result = { pid: Number(match[1]), group: Number(match[2]), executable: match[3]! };
-      this.seen.set(result.pid, { group: result.group, executable: result.executable });
-      return [result];
-    });
+    const snapshot = await withShutdownDeadline('Benchmark CPU process scan', () => runOwned(this.scanner, 'ps', ['-Ao', 'pid=,pgid=,lstart=,comm='], { env: { ...process.env, LC_ALL: 'C' } }));
+    const values = engineProcesses(snapshot, this.engine);
+    for (const value of values) this.seen.set(value.pid, { group: value.group, started: value.started, executable: value.executable });
+    return values;
   }
   private async signal(value: 'SIGSTOP' | 'SIGCONT') {
+    if (value === 'SIGCONT' && !this.stopped.size) return 0;
     const processes = await this.processes();
-    const groups = new Set(this.owner.signalGroups(value));
-    return processes.filter(process => groups.has(process.group)).length;
+    if (value === 'SIGSTOP') this.owner.checkpoint();
+    let count = 0;
+    const targets = value === 'SIGSTOP' ? processes : [...this.stopped.values()];
+    for (const target of targets) {
+      const current = processes.find(candidate => candidate.pid === target.pid && candidate.started === target.started && candidate.executable === target.executable);
+      if (!current) { this.stopped.delete(target.pid); continue; }
+      try {
+        process.kill(current.pid, value); count++;
+        if (value === 'SIGSTOP') this.stopped.set(current.pid, current);
+        else this.stopped.delete(current.pid);
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; this.stopped.delete(current.pid); }
+    }
+    return count;
   }
   async start() {
     if (this.enabled) return;
     if (this.server.process().exitCode !== null) throw new Error('Owned WebKit browser exited during CPU shaping');
     if (!(await this.processes()).some(value => value.executable.includes('WebContent'))) throw new Error('WebContent is not attributable to the exclusive engine directory');
+    this.owner.checkpoint();
     this.enabled = true;
     this.pausing = undefined;
     this.loop = (async () => {
@@ -71,18 +96,18 @@ export class CpuBudget {
           this.cycles.push({ activeMs: stopped - active, stoppedMs: resumed - stopped, processes: count });
         }
       } catch (error) { if (!this.owner.signal.aborted) throw error; }
-      finally { if (!this.owner.signal.aborted) await this.signal('SIGCONT'); }
+      finally { await this.signal('SIGCONT'); }
     })();
     void this.loop.catch(() => {});
   }
   pause() {
     this.enabled = false;
-    return this.pausing ??= (async () => { try { await withShutdownDeadline('Benchmark CPU shaping pause', () => this.loop); } finally { if (!this.owner.signal.aborted) await this.signal('SIGCONT'); } })();
+    return this.pausing ??= (async () => { try { await withShutdownDeadline('Benchmark CPU shaping pause', () => this.loop); } finally { await this.signal('SIGCONT'); } })();
   }
   summary() {
     const active = this.cycles.reduce((sum, value) => sum + value.activeMs, 0);
     const stopped = this.cycles.reduce((sum, value) => sum + value.stoppedMs, 0);
-    return { requested: '25ms runnable / 75ms stopped, registered process groups only', actualRunnableFraction: active / (active + stopped), cycles: this.cycles.length, minActiveMs: Math.min(...this.cycles.map(value => value.activeMs)), maxActiveMs: Math.max(...this.cycles.map(value => value.activeMs)), processes: [...this.seen].map(([pid, observed]) => ({ pid, ...observed })), source: 'Exclusive copy of installed Playwright WebKit with byte-identical executable hashes. Signals target only registered browser process groups; observations include only engine executables in those groups.' };
+    return { requested: '25ms runnable / 75ms stopped, individually verified positive PIDs only', actualRunnableFraction: active / (active + stopped), cycles: this.cycles.length, minActiveMs: Math.min(...this.cycles.map(value => value.activeMs)), maxActiveMs: Math.max(...this.cycles.map(value => value.activeMs)), processes: [...this.seen].map(([pid, observed]) => ({ pid, ...observed })), source: 'Exclusive byte-identical WebKit clone. macOS XPC process groups are not assumed to inherit the launcher group. Every STOP scans the exact cloned executable prefix; CONT revalidates executable and process start time against the stopped set using an independently owned ps scanner that remains available during cancellation. No process-group signals.' };
   }
 }
 export async function primeEngine(engine: Awaited<ReturnType<typeof isolatedEngine>>, signal?: AbortSignal) {
