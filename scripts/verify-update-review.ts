@@ -8,7 +8,7 @@ import { buildArchivedUpdateRelease, buildUpdateRelease, type PreviousSourceInpu
 import { capture, controllerRelease, databaseSnapshot, draft, releaseIs, restoredDraft, visible, type UpdateJourneyOptions } from './verify-update-journey';
 import { createUpdateProofProxy } from './update-proof-proxy';
 
-export const reviewBaselineSourceSha = '6d810fdea69be3a932c9fb62aab1c47905b80dc4';
+export const reviewBaselineSourceSha = '6cae494833f98de43e7003dd6d0e90188d86fd42';
 export const liveLegacySourceSha = '30209c1bff774172c89e8dba1901a1e597e860b6';
 type ReviewMode = 'baseline' | 'fixed';
 type ReviewRow = { case: string; regressionObserved: boolean; [key: string]: unknown };
@@ -52,6 +52,19 @@ async function cacheInventory(page: Page): Promise<CacheInventory[]> {
       result.push({ key, entries, bodyBytes: entries.reduce((sum, entry) => sum + entry.bytes, 0) });
     }
     return result;
+  });
+}
+type CachePolicy = { clients: Record<string, { release?: string; pins?: string[] }>; manifests?: Record<string, string[]>; releases: Record<string, number>; inventories?: Record<string, string[]>; generation: number };
+async function cachePolicy(page: Page): Promise<CachePolicy> {
+  return page.evaluate(async () => {
+    const request = indexedDB.open('poker-banker-updates');
+    const database = await new Promise<IDBDatabase>((accept, reject) => { request.onsuccess = () => accept(request.result); request.onerror = () => reject(request.error); });
+    try {
+      return await new Promise<CachePolicy>((accept, reject) => {
+        const read = database.transaction('policy', 'readonly').objectStore('policy').get('state');
+        read.onsuccess = () => accept(read.result); read.onerror = () => reject(read.error);
+      });
+    } finally { database.close(); }
   });
 }
 type WorkerObservation = { release: string; instanceId: string; fetches: { at: number; clientId: string; method: string; path: string }[]; activations: { at: number; clientId: string | null; updateProtocol: number | null }[] };
@@ -121,7 +134,7 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
       try {
         const result = await action();
         rows.push(result);
-        const expectedRegression = mode === 'baseline' && ['R2-unknown-client-cache-bound', 'R5-slow-successful-initial-entry'].includes(name);
+        const expectedRegression = mode === 'baseline' && name === 'R7-failed-install-cache-bound';
         expect(result.regressionObserved, `${name} ${mode} expected regression=${expectedRegression}`).toBe(expectedRegression);
       } catch (error) { errors.push({ case: name, error: error instanceof Error ? error.stack ?? error.message : String(error) }); }
       finally {
@@ -525,6 +538,184 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
         await capture(state.page, evidence, 'R6-B-restores-draft-after-one-paid-undo');
         return { case: 'R6-held-undo-response', regressionObserved: beforeRelease.length > 0, before: a, after: b, originalBuyInId: originalBuyIn.id, originalPaymentId: originalPayment.id, committedBeforeResponseRelease: true, ledgerAndPaymentVoidCounts: [1, 1], postCount: gate.records.length, actualUndoResponse: gate.records[0], observationMs: 4200, navigationsBeforeResponseRelease: beforeRelease, navigationsAfterSafePoint: navigations, closedSheetAndEmptyOutboxDuringHold: true, draftBeforeSha256: sha(durable), draftAfterSha256: sha(after.drafts.find(row => row.key === durable.key)), bankerId: banker, sessionId: state.session };
       } finally { gate.release(); await close(readerContext); await close(state.context); }
+    });
+    await run('R7-failed-install-cache-bound', async () => {
+      const a = `r38-legacy-302-R7-A-${id}`, anchor = `r42-R7-anchor-${id}`, b = `r42-R7-B-${id}`;
+      const builtA = await build(a, true);
+      const state = await seed(await fresh(), a, 'R7 legacy');
+      await draft(state.page, state.player, '61.');
+      await visible(state.page, false);
+      const initial = await cacheInventory(state.page);
+      expect(initial.find(cache => cache.key === `poker-banker-${a}`)?.entries.length).toBeGreaterThan(0);
+      const builtAnchor = await build(anchor);
+      const anchorPage = await state.context.newPage();
+      await anchorPage.goto(`/?session=${state.session}`);
+      await workspaceReady(anchorPage);
+      await expect.poll(() => candidateRelease(anchorPage), { timeout: 25000 }).toBe(anchor);
+      await anchorPage.close();
+      await state.page.waitForTimeout(1200);
+      const afterAnchor = await cacheInventory(state.page);
+      const original = afterAnchor.find(cache => cache.key === `poker-banker-${a}`)!;
+      expect(original?.entries.length).toBeGreaterThan(0);
+      const anchorPolicy = await cachePolicy(state.page);
+      expect(anchorPolicy.inventories?.[original.key]?.slice().sort()).toEqual(original.entries.map(entry => entry.url).sort());
+      const builtB = await build(b);
+      const htmlB = await readFile('dist/index.html', 'utf8');
+      const mainB = htmlB.match(/<script[^>]*type="module"[^>]*src="([^"]+)"/)?.[1];
+      if (!mainB?.startsWith('/assets/')) throw new Error('Failed-install B requires its real initial module');
+      const missing = builtB.assets.find(asset => /\/icon-(?:512|192)\.png$/.test(asset.path));
+      if (!missing) throw new Error('Failed-install proof requires a normally emitted precached app icon');
+      await rm(join('dist', missing.path.slice(1)));
+      const editor = await state.context.newPage();
+      await editor.addInitScript(() => {
+        const observation = { identity: crypto.randomUUID(), states: [] as string[] };
+        Object.defineProperty(window, '__pbFailedInstallProof', { value: observation });
+        void navigator.serviceWorker.getRegistration('/').then(registration => {
+          if (!registration) return;
+          registration.addEventListener('updatefound', () => {
+            const worker = registration.installing;
+            if (!worker) return;
+            observation.states.push(worker.state);
+            worker.addEventListener('statechange', () => observation.states.push(worker.state));
+          });
+          const worker = registration.installing;
+          if (worker) {
+            observation.states.push(worker.state);
+            worker.addEventListener('statechange', () => observation.states.push(worker.state));
+          }
+        });
+      });
+      const proofState = () => editor.evaluate(() => (window as unknown as { __pbFailedInstallProof: { identity: string; states: string[] } }).__pbFailedInstallProof);
+      const editorNavigations: { url: string; at: number }[] = [];
+      editor.on('request', request => { if (request.isNavigationRequest() && request.frame() === editor.mainFrame()) editorNavigations.push({ url: request.url(), at: Date.now() }); });
+      const firstRequest = proxy.records.length;
+      const inventories = new Map<string, ReleaseAsset[]>([[a, builtA.assets], [anchor, builtAnchor.assets], [b, builtB.assets]]);
+      const snapshots: Record<string, unknown>[] = [];
+      try {
+        await editor.goto(`/?session=${state.session}`);
+        await workspaceReady(editor);
+        await expect(editor.locator('meta[name="pb-release"]')).toHaveAttribute('content', b);
+        const player = await addPlayer(editor, `R7 B draft ${id}`);
+        await draft(editor, player.id, '73.', 'Zelle');
+        await visible(editor, false);
+        await expect.poll(async () => (await proofState()).states.includes('redundant'), { timeout: 25000 }).toBe(true);
+        await expect.poll(() => proxy.records.slice(firstRequest).some(record => new URL(record.path, proxy.origin).pathname === missing.path && record.status === 404)).toBe(true);
+        await expect.poll(async () => (await cacheInventory(editor)).some(cache => cache.key === `poker-banker-${b}`)).toBe(false);
+        expect(await candidateRelease(editor)).toBe(anchor);
+        const failedInstall = await proofState();
+        const durable = (await databaseSnapshot(editor)).drafts.find(row => row.value.amount === '73.')!;
+        expect(durable).toBeTruthy();
+        const afterFailedInstall = await cacheInventory(editor);
+        const bAssets = afterFailedInstall.find(cache => cache.key === original.key)!.entries.filter(entry => builtB.assets.some(asset => asset.path === entry.path && asset.sha256 === entry.sha256) && entry.path.startsWith('/assets/'));
+        expect(bAssets.some(entry => entry.path === mainB)).toBe(true);
+        const policyAfterFailure = await cachePolicy(editor);
+        await writeFile(join(evidence, 'R7-failed-install.json'), JSON.stringify({ failedInstall, policyAfterFailure, afterFailedInstall, missing, bAssets, draftSha256: sha(durable) }, null, 2));
+        if (mode === 'fixed') expect(policyAfterFailure.manifests?.[b]?.slice().sort()).toEqual(builtB.assets.map(asset => asset.path).sort());
+        const snapshot = async (release: string, phase: string, previous: string | undefined, bOpen = true) => {
+          const caches = await cacheInventory(state.page);
+          const policy = await cachePolicy(state.page);
+          const boundedReleases = [...new Set([a, ...(bOpen ? [b] : []), anchor, previous, release].filter((value): value is string => !!value))];
+          const allowedCaches = boundedReleases.filter(value => value !== b).map(value => `poker-banker-${value}`);
+          const allowed = new Map<string, number>();
+          for (const entry of original.entries) allowed.set(entry.url, entry.bytes);
+          for (const live of boundedReleases) for (const asset of inventories.get(live) ?? []) {
+            const key = new URL(asset.path, proxy.origin).href;
+            allowed.set(key, Math.max(asset.bytes, allowed.get(key) ?? 0));
+          }
+          const obsoleteEntries = caches.flatMap(cache => cache.entries.filter(entry => entry.method !== 'GET' || !allowed.has(entry.url)).map(entry => ({ cache: cache.key, path: entry.path, bytes: entry.bytes })));
+          const allowedBodyBytes = [...allowed.values()].reduce((sum, bytes) => sum + bytes, 0) * allowedCaches.length;
+          const allowedEntryCount = allowed.size * allowedCaches.length;
+          const totalBodyBytes = caches.reduce((sum, cache) => sum + cache.bodyBytes, 0);
+          const totalEntries = caches.reduce((sum, cache) => sum + cache.entries.length, 0);
+          expect(caches.some(cache => cache.key === `poker-banker-${b}`)).toBe(false);
+          const legacy = caches.find(cache => cache.key === original.key)!;
+          expect(legacy).toBeTruthy();
+          for (const entry of original.entries) expect(legacy.entries.find(value => value.url === entry.url)).toEqual(entry);
+          if (bOpen) {
+            for (const entry of bAssets) expect(legacy.entries.find(value => value.url === entry.url)).toEqual(entry);
+            await expect(editor.getByTestId('money-amount')).toHaveValue('73.');
+            await expect(editor.locator('meta[name="pb-release"]')).toHaveAttribute('content', b);
+            await expect(state.page.getByTestId('money-amount')).toHaveValue('61.');
+            expect((await proofState()).identity).toBe(failedInstall.identity);
+            expect(editorNavigations).toHaveLength(1);
+            expect((await databaseSnapshot(editor)).drafts.find(row => row.key === durable.key)).toEqual(durable);
+            if (mode === 'fixed') expect(policy.manifests?.[b]?.slice().sort()).toEqual(builtB.assets.map(asset => asset.path).sort());
+          }
+          const workers = await state.page.evaluate(async () => {
+            const registration = await navigator.serviceWorker.getRegistration('/');
+            return Promise.all((['active', 'waiting', 'installing'] as const).map(async role => {
+              const worker = registration?.[role];
+              if (!worker) return { role, release: null, state: null };
+              const release = await new Promise<string | null>(accept => {
+                const channel = new MessageChannel();
+                const timer = setTimeout(() => { channel.port1.close(); accept(null); }, 1500);
+                channel.port1.onmessage = event => { clearTimeout(timer); channel.port1.close(); accept(event.data.version); };
+                worker.postMessage({ type: 'GET_VERSION' }, [channel.port2]);
+              });
+              return { role, release, state: worker.state };
+            }));
+          });
+          const record = { release, phase, caches, policy, workers, bDocumentOpen: bOpen, bManifestPresent: !!policy.manifests?.[b], bCacheAbsent: true, boundedReleases, allowedCaches, allowedRequestKeys: [...allowed.keys()].sort(), allowedBodyBytes, allowedEntryCount, totalBodyBytes, totalEntries, obsoleteEntries, bDraftSha256: bOpen ? sha(durable) : null, bDocumentIdentity: bOpen ? failedInstall.identity : null };
+          snapshots.push(record);
+          await writeFile(join(evidence, 'R7-cache-snapshots.json'), JSON.stringify({ initial, afterAnchor, anchorPolicy, snapshots, releaseInventories: Object.fromEntries(inventories) }, null, 2));
+          if (mode === 'fixed') {
+            expect(caches.every(cache => allowedCaches.includes(cache.key))).toBe(true);
+            expect(obsoleteEntries).toEqual([]);
+            expect(totalBodyBytes).toBeLessThanOrEqual(allowedBodyBytes);
+            expect(totalEntries).toBeLessThanOrEqual(allowedEntryCount);
+            for (const cache of caches) {
+              expect(cache.entries.length).toBeLessThanOrEqual(allowed.size);
+              expect(cache.bodyBytes).toBeLessThanOrEqual(allowedBodyBytes / allowedCaches.length);
+            }
+          }
+          return record;
+        };
+        let previous: string | undefined = anchor;
+        for (const letter of ['C', 'D', 'E', 'F', 'G', 'H', 'I']) {
+          const release = `r42-R7-${letter}-${id}`;
+          const built = await build(release);
+          inventories.set(release, built.assets);
+          const candidate = await state.context.newPage();
+          await candidate.goto(`/?session=${state.session}`);
+          await workspaceReady(candidate);
+          await expect(candidate.locator('meta[name="pb-release"]')).toHaveAttribute('content', release);
+          await expect.poll(() => candidateRelease(candidate), { timeout: 25000 }).toBe(release);
+          await candidate.waitForTimeout(1800);
+          await snapshot(release, 'candidate-installed-B-document-still-editing', previous);
+          await candidate.close();
+          await state.page.waitForTimeout(1200);
+          await snapshot(release, 'candidate-closed-B-document-still-editing', previous);
+          previous = release;
+        }
+        const finalLive = snapshots.at(-1)!;
+        const direct = await state.context.request.get(`${proxy.origin}${mainB}`);
+        expect(direct.status()).toBe(404);
+        const protectedBAsset = await editor.evaluate(async path => {
+          const response = await fetch(path, { cache: 'no-store' });
+          const body = await response.arrayBuffer();
+          const digest = await crypto.subtle.digest('SHA-256', body);
+          return { status: response.status, bytes: body.byteLength, sha256: [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('') };
+        }, mainB);
+        const originalBMain = bAssets.find(entry => entry.path === mainB)!;
+        expect(protectedBAsset).toEqual({ status: 200, bytes: originalBMain.bytes, sha256: originalBMain.sha256 });
+        await capture(editor, evidence, 'R7-failed-install-B-still-editing-after-seven-deployments');
+        const beforeClose = { document: await editor.locator('meta[name="pb-release"]').getAttribute('content'), controller: await controllerRelease(editor), proof: await proofState(), draftSha256: sha((await databaseSnapshot(editor)).drafts.find(row => row.key === durable.key)), navigations: [...editorNavigations] };
+        await editor.close();
+        const j = `r42-R7-J-${id}`;
+        inventories.set(j, (await build(j)).assets);
+        const cleanup = await state.context.newPage();
+        await cleanup.goto(`/?session=${state.session}`); await workspaceReady(cleanup);
+        await expect.poll(() => candidateRelease(cleanup), { timeout: 25000 }).toBe(j);
+        await cleanup.waitForTimeout(1800);
+        const afterClose = await snapshot(j, 'B-closed-next-install-collects-manifest-and-extra-assets', previous, false);
+        expect(afterClose.policy.manifests?.[b]).toBeUndefined();
+        const bOnlyPaths = bAssets.map(entry => entry.path).filter(path => !afterClose.allowedRequestKeys.includes(new URL(path, proxy.origin).href));
+        expect(bOnlyPaths).toContain(mainB);
+        expect(afterClose.caches.flatMap(cache => cache.entries).filter(entry => bOnlyPaths.includes(entry.path))).toEqual([]);
+        expect((await databaseSnapshot(cleanup)).drafts.find(row => row.key === durable.key)).toEqual(durable);
+        const collectedAfterBClose = { caches: afterClose.caches, policy: afterClose.policy };
+        return { case: 'R7-failed-install-cache-bound', regressionObserved: (finalLive.obsoleteEntries as unknown[]).length > 0, legacySource: liveLegacySourceSha, baselineSource: mode === 'baseline' ? reviewBaselineSourceSha : null, legacyRelease: a, anchorRelease: anchor, failedRelease: b, missingActualEmittedAsset: missing, failedInstall, policyAfterFailure, afterFailedInstall, initial, afterAnchor, anchorPolicy, originalLegacyInventory: original, preservedBMainAssets: bAssets, bDraftBeforeSha256: sha(durable), snapshots, beforeClose, directBMainHttpStatusAfterSupersession: direct.status(), protectedBAsset, releaseInventories: Object.fromEntries(inventories), collectedAfterBClose, missingAssetActual404s: proxy.records.slice(firstRequest).filter(record => new URL(record.path, proxy.origin).pathname === missing.path && record.status === 404), workingSetRule: 'Successful anchor installation records the immutable legacy A inventory before B loads, including finite anchor contamination. The live failed-install B manifest, anchor fallback, previous waiting worker and current candidate then bound at most five release inventories and four actual caches independently of deployment count. B cache never exists and B is never reinstalled. Closing B collects its manifest and unique main assets while legacy A stays open; activation remains covered by the separate legacy case.', legacyNonresponse: 'Unmodified 30209c1 A document remains open through J without a CLIENT_RELEASE_REQUEST listener.' };
+      } finally { await close(state.context); }
     });
     const result = { mode, rows, errors, builds, origin: proxy.origin, upstream: baseURL, bankerId: banker, actualForwarding: true, limitations: ['Loopback TLS, owned PostgreSQL and real HTTP bodies; no production writes.', 'Desktop/phone browser emulation does not prove physical iOS suspension or Home Screen behavior.', 'Legacy activation is explicitly deferred until all legacy documents close.'] };
     await writeFile(join(evidence, 'review-cases-summary.json'), JSON.stringify(result, null, 2));
