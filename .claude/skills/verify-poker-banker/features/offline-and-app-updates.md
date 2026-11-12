@@ -9,16 +9,16 @@ A saved session opens offline with confirmed totals. New entries wait visibly wi
 - `offline-once` reconnects and confirms one stored entry, including an idempotent HTTP replay.
 - `offline-rejected` preserves the reason and offers Retry or Discard in session order.
 - `offline-close-signout-guards` prevents closing or silently discarding unsent work.
-- `updates-hidden-visible` exposes Update ready after a new local release and preserves a draft through Reload.
-- `updates-safe-activation` waits while hidden, a sheet is open or the outbox is nonempty.
-- `updates-chunk-failure` routes a real dynamic-import failure to the update check when such an entry point exists.
+- `updates-hidden-visible` discovers a waiting release on foreground return while preserving an editing draft.
+- `updates-safe-activation` waits for visibility, closed editors, drained requests/outbox and successful local persistence, then adopts the release without a tap.
+- `updates-chunk-failure` serves a genuine old lazy module through a newer controller after its server URL disappears, then applies the release safely.
 
 ## How to get to it (user POV)
 
 - Open a previously loaded session without connectivity, then enter a buy-in normally.
 - Reconnect to save, or use Retry/Discard on a rejected pending row.
 - Attempt Close game or Players → Account → Sign out while an entry is pending.
-- When Update ready appears, choose Reload; otherwise a safe visible idle app can activate automatically.
+- A visible idle workspace applies a discovered release automatically. While editing or offline work holds it, Update ready stays available; save/close/reconnect naturally reaches the next safe point. Explicit Reload remains an optional persisted-draft choice.
 
 ## Driving it with Playwright
 
@@ -149,84 +149,65 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
 }
 ```
 
-- **Prove the update path.** Save as `.cache/verify-update.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-update.ts --run RUN_ID --context iphone-standalone`. This recipe deliberately refuses live URLs and builds release B only into this checkout's local `dist/`.
+- **Prove safe automatic release adoption.** This local-only recipe uses the production builder and real service workers, Cache Storage, UI writes and PostgreSQL. It never routes or mocks a response, edits IndexedDB or calls `registration.update()` to manufacture post-deployment discovery. It builds the tracked previous client, current A and current B in sequence. Run it last in an exclusive checkout; it deliberately changes `dist/`.
+
+Prepare the pinned previous-source fixture on this Mac because the mini checkout intentionally has no `.git`. The archive contains tracked project files only. The helper verifies both hashes and the pinned commit, and refuses credential/traversal paths before extracting into its own temporary directory.
+
+```sh
+mkdir -p .cache/round36/previous
+git archive --format=tar --output .cache/round36/previous/previous.tar dc2082b09d7bf8ad124f0e21f8826ef75c0b4e1f
+python3 - <<'PYTHON'
+from hashlib import sha256
+from pathlib import Path
+import json
+root = Path('.cache/round36/previous')
+manifest = root / 'manifest.json'
+manifest.write_text(json.dumps({'sourceSha': 'dc2082b09d7bf8ad124f0e21f8826ef75c0b4e1f', 'archive': 'previous.tar', 'archiveSha256': sha256((root / 'previous.tar').read_bytes()).hexdigest()}, indent=2) + '\n')
+print(sha256(manifest.read_bytes()).hexdigest())
+PYTHON
+rsync -az .cache/round36/previous/ mini:worktrees/poker-banker/.cache/round36/previous/
+```
+
+Use the printed manifest hash as `MANIFEST_SHA` below. These public fixture metadata variables must be present at **launch**, because the existing daemon executes later recipes.
+
+```sh
+scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/round36/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256=MANIFEST_SHA .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
+scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh doctor --run RUN_ID
+scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh drive updates --run RUN_ID --context iphone-standalone
+scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh evidence --run RUN_ID
+scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh cleanup --run RUN_ID
+```
+
+The same reusable helper can be invoked as a recipe. Save as `.cache/verify-update.ts`, copy that file explicitly as described in SKILL.md, then use `recipe .cache/verify-update.ts` instead of `drive updates`.
 
 ```ts
-import { typeInput } from '../e2e/input';
-import { execFileSync } from 'node:child_process';
-import { expect } from '@playwright/test';
-import { addPlayer, newSession, openMoney, workerReady, workspaceReady } from '../e2e/helpers';
+import { verifyUpdateJourney } from '../scripts/verify-update-journey';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
-export default async function ({ page, context, baseURL, runId, step, checkState }: RecipeContext) {
-  if (new URL(baseURL).hostname !== '127.0.0.1') throw new Error('A/B update proof requires an owned local server; no deployment is authorized');
-  await page.goto('/');
-  await workspaceReady(page);
-  await newSession(page, 'Verify update preservation');
-  const player = await addPlayer(page, `Update ${runId.slice(-8)}`);
-  await workerReady(page);
-  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
-  const releaseA = await page.locator('meta[name="pb-release"]').getAttribute('content');
-  await openMoney(page, player.id);
-  await typeInput(page.getByTestId('money-amount'), '37.');
-  await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }).click();
-  await step('updates-draft-before-new-release');
-  await page.evaluate(() => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
-    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
-    document.dispatchEvent(new Event('visibilitychange'));
-  });
-  const releaseB = `verify-B-${runId}`;
-  execFileSync('pnpm', ['build'], { env: { ...process.env, RELEASE_VERSION: releaseB }, stdio: 'inherit' });
-  await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration('/'); if (!registration) throw new Error('No service worker'); await registration.update(); });
-  await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/'))?.waiting)).toBe(true);
-  expect(await page.locator('meta[name="pb-release"]').getAttribute('content')).toBe(releaseA);
-  await page.evaluate(() => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
-    document.dispatchEvent(new Event('visibilitychange'));
-  });
-  await expect(page.getByText('Update ready', { exact: true })).toBeVisible();
-  await expect(page.getByTestId('money-amount')).toHaveValue('37.');
-  await step('updates-ready-with-sheet-open');
-  await Promise.all([page.waitForEvent('domcontentloaded'), page.getByTestId('update-reload').click()]);
-  await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
-  await expect(page.getByRole('heading', { name: 'Verify update preservation', exact: true })).toBeVisible();
-  await openMoney(page, player.id);
-  await expect(page.getByTestId('money-amount')).toHaveValue('37.');
-  await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  expect((await checkState()).players.some(row => row.id === player.id)).toBe(true);
-  expect((await page.request.get(`${baseURL}/api/auth/me`)).status()).toBe(200);
-  await step('updates-new-release-draft-and-data-preserved');
-  await typeInput(page.getByTestId('money-amount'), '37');
-  const releaseC = `verify-C-${runId}`;
-  execFileSync('pnpm', ['build'], { env: { ...process.env, RELEASE_VERSION: releaseC }, stdio: 'inherit' });
-  await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration('/'); if (!registration) throw new Error('No service worker'); await registration.update(); });
-  await expect(page.getByText('Update ready', { exact: true })).toBeVisible();
-  await context.setOffline(true);
-  try {
-    await page.getByRole('button', { name: 'Save entry', exact: true }).click();
-    await expect(page.getByText('Not saved yet', { exact: true }).first()).toBeVisible();
-    await expect(page.getByTestId('update-reload')).toBeDisabled();
-    expect(await page.locator('meta[name="pb-release"]').getAttribute('content')).toBe(releaseB);
-    await step('updates-outbox-holds-activation');
-    const reloaded = page.waitForEvent('domcontentloaded');
-    await context.setOffline(false);
-    await reloaded;
-    await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseC);
-    await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
-    expect((await checkState()).entries.filter(entry => entry.kind === 'buy_in' && entry.amount_minor === '3700')).toHaveLength(1);
-    await step('updates-idle-visible-auto-activation-after-save');
-  } finally { await context.setOffline(false); }
+export default async function ({ page, browser, baseURL, evidence, runId }: RecipeContext) {
+  await verifyUpdateJourney({ page, browser, baseURL, evidence, tag: `verify-${runId.slice(-8)}` });
 }
 ```
+
+Proofs in `automatic-updates-summary.json`:
+
+| Case | Actual path and required result |
+| --- | --- |
+| Previous-client compatibility | Boot tracked `dc2082b`, create a durable draft and offline financial write, close that page, then cold-load current A. IDB stays version 2, draft hashes match, old body/op_id replays once through the current API, and an HTTP replay writes nothing twice. An actual archived reader also reads A-written draft/outbox records without changing them. |
+| Idle Workspace | A is visible before B deploys. No tap, visibility signal or manual update follows deployment; the real periodic check discovers B and the app adopts it. |
+| Open buy-in | Waiting B leaves A's typed amount/method in place for an observed safety window. Keep draft and close supplies the natural safe point; B opens with that draft intact. |
+| Offline | A reloads its cached shell and keeps a queued entry excluded from totals. Reconnection sends the same body/op_id once and the app adopts B. |
+| Stale lazy asset | A first imports one cached, server-deleted module before the idle timer: asset access discovers B without a tap. A second tab activates B while the first edits. A distinct module's first import still succeeds from retained A assets under B; closing the sheet permits B. |
+| Cold launch | A's page is closed before deployment. A new page starts B with authentication, session data and draft unchanged. |
+
+The two lazy modules and previous storage reader are test-build fixtures emitted before the shared production precache stamp. Normal builds contain neither. Every case has screenshots, ARIA/landmarks and explicit before/after release identities. The helper owns and closes its contexts, archive scratch and journey lock; the skill's cleanup then stops its existing owned browser/server/database and keeps evidence.
 
 ## Gotchas
 
 - `RELEASE_VERSION` stamps the local build. Serialize builds with other runs because they share `dist/`; do not run another browser suite or benchmark while changing it.
 - Visibility overrides use scalar properties so tsx does not inject a function-name helper into a serialized getter. They emulate browser suspension signals. They do not prove actual iOS suspension, Home Screen installation or a real keyboard.
 - Run update verification last. Doctor pins the launch release, so it intentionally reports a build mismatch after this recipe changes the local build; clean up and relaunch before other features.
-- The current client is one statically imported bundle. A genuine lazy-chunk failure entry point is absent, so that proof reports an unmet prerequisite until one exists. Dispatching an internal failure event is not a real-user proof.
+- The normal app still has one static JS entry. The proof uses an actual hashed, precached lazy fixture and a server-deleted URL; it does not claim a production React lazy route or manufacture an internal failure event.
 - Playwright API requests can bypass browser offline emulation. A successful API request is not offline-browser proof; use the actual offline reload and perform stored-state checks after reconnection.
 - Retry needs the reopened timer end cleared. Wait for Save timing to close the sheet before retrying; Reopen alone preserves the old end.
 - Activity is returned newest first. The queue-order proof orders buy-ins by ascending revision before checking their submission order.

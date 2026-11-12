@@ -171,12 +171,16 @@ async function daemon() {
       }, checkState: () => current(page) };
     try {
       if (command.action === 'drive' && command.recipe === 'ledger') await ledger(recipeContext);
+      else if (command.action === 'drive' && command.recipe === 'updates') {
+        const { verifyUpdateJourney } = await import('../../../../scripts/verify-update-journey');
+        await verifyUpdateJourney({ page, browser, baseURL: meta.baseURL, evidence: directory, tag: `verify-${runId.slice(-8)}` });
+      }
       else if (command.action === 'recipe' && command.recipe) {
         const path = resolve(command.recipe);
         if (!path.startsWith(`${root}/`) || !path.endsWith('.ts')) throw new Error('Recipe must be a TypeScript file inside this repository');
         const loaded = await import(`${pathToFileURL(path).href}?run=${Date.now()}`) as { default: (context: RecipeContext) => Promise<void> };
         await loaded.default(recipeContext);
-      } else throw new Error('Use drive ledger or recipe <repo-relative-file.ts>');
+      } else throw new Error('Use drive ledger, drive updates or recipe <repo-relative-file.ts>');
       const result = { passed: true, mode, recipe: command.recipe, steps: steps.length, evidence: directory };
       await json(join(directory, `${command.action}-result.json`), result); return result;
     } catch (error) {

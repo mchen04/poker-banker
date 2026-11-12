@@ -40,4 +40,4 @@ This directory is the maintained source for checking user-facing poker banker be
 - [Close and reopen with cumulative results](close-reopen-and-cumulative.md) covers blockers, discrepancy consent and counting closed sessions once.
 - [Sharing and live viewer](sharing-and-live-viewer.md) covers enable, copy, live updates, rotate, disable and readonly access.
 - [Player reports](player-reports.md) covers roster, rename, five groupings, six filters and display-only rates.
-- [Offline and app updates](offline-and-app-updates.md) covers snapshots, queued/rejected writes, replay and the safe update path.
+- [Offline and app updates](offline-and-app-updates.md) covers snapshots, queued/rejected writes, replay and real automatic A/B adoption via `drive updates` or its shared recipe, including pinned previous-client compatibility.
