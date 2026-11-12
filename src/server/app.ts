@@ -1,7 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { Hono } from 'hono';
-import { compress } from 'hono/compress';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { z } from 'zod';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -16,27 +15,13 @@ import { viewerState, type SessionSettings } from '../domain/session.js';
 
 type Config = { origin?: string; clientIp?: (c: AppContext) => string; onError?: (error: unknown) => void };
 const recordName = (name: string) => name.normalize('NFKC').toLowerCase();
-const compressionThreshold = 32_768;
-const compressResponse = compress();
-
-function jsonResponse(c: AppContext, value: unknown, status: ContentfulStatusCode = 200) {
-  const body = JSON.stringify(value);
-  const length = Buffer.byteLength(body);
-  const response = c.newResponse(body, status, {
-    'Content-Type': 'application/json',
-    ...(length >= compressionThreshold ? { 'Content-Length': String(length) } : {}),
-  });
-  if (length < compressionThreshold) return response;
-  c.res = response;
-  return Promise.resolve(compressResponse(c, async () => {})).then(() => c.res);
-}
 
 async function mutate<T extends { op_id: string }>(c: AppContext, pool: Database, schema: z.ZodType<T>, write: (db: Transaction, banker: string, input: T) => Promise<unknown>) {
   const body: unknown = await c.req.json();
   const input = schema.parse(body);
   const banker = c.get('banker').id;
   const result = await command(pool, banker, input.op_id, { method: c.req.method, path: c.req.path, body }, db => write(db, banker, input));
-  return jsonResponse(c, result.body, result.status as ContentfulStatusCode);
+  return c.json(result.body, result.status as ContentfulStatusCode);
 }
 
 function assertOccurredAt(session: Pick<SessionSettings, 'started_at' | 'ended_at'>, occurredAt: string | null) {
@@ -93,7 +78,7 @@ export function createApp(pool: Database, config: Config = {}) {
       if (query.since === session.revision) return null;
       return viewerState(await loadSession(db, session.banker_id, session.id));
     });
-    return result ? jsonResponse(c, result) : c.body(null, 304);
+    return result ? c.json(result) : c.body(null, 304);
   });
   app.use('/api/*', async (c, next) => { await authenticate(pool, c); await next(); });
   app.get('/api/sessions', async c => {
@@ -123,7 +108,7 @@ export function createApp(pool: Database, config: Config = {}) {
       const row = await sessionRow(db, c.get('banker').id, id);
       return row.revision === query.since ? null : loadSession(db, c.get('banker').id, id);
     });
-    return result ? jsonResponse(c, result) : c.body(null, 304);
+    return result ? c.json(result) : c.body(null, 304);
   });
   app.patch('/api/sessions/:id', c => mutate(c, pool, v.sessionPatch, async (db, banker, input) => {
     const id = v.id.parse(c.req.param('id'));
@@ -323,7 +308,7 @@ export function createApp(pool: Database, config: Config = {}) {
   }));
   app.get('/api/players/:id', async c => {
     const id = v.id.parse(c.req.param('id'));
-    return jsonResponse(c, await readSnapshot(pool, db => playerHistory(db, c.get('banker').id, id)));
+    return c.json(await readSnapshot(pool, db => playerHistory(db, c.get('banker').id, id)));
   });
   app.patch('/api/players/:id', c => mutate(c, pool, v.playerCreate, async (db, banker, input) => {
     const id = v.id.parse(c.req.param('id'));
