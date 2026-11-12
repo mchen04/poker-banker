@@ -76,6 +76,8 @@ let channel: BroadcastChannel | undefined;
 const generations = new Map<string, number>();
 const blockedOwners = new Set<string>();
 const ownerRequests = new Map<string, Set<AbortController>>();
+let inFlightRequests = 0;
+export function hasInFlightRequests(): boolean { return inFlightRequests > 0; }
 const generation = (banker: string) => generations.get(banker) ?? 0;
 const syncRuns = new Map<string, symbol>();
 const draftReplays = new Map<string, symbol>();
@@ -168,6 +170,7 @@ async function http<T>(path: string, method: string, body: unknown, consume: (re
     if (!requests) { requests = new Set(); ownerRequests.set(banker, requests); }
     requests.add(controller);
   }
+  inFlightRequests++;
   try {
     const response = await fetch(path, {
       method, credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
@@ -202,6 +205,7 @@ async function http<T>(path: string, method: string, body: unknown, consume: (re
     if (method === 'GET' && result !== null && typeof result === 'object' && 'server_now' in result && typeof result.server_now === 'string') observeServerTime(result.server_now);
     return result;
   } finally {
+    inFlightRequests--;
     window.clearTimeout(timeout);
     if (banker) {
       const requests = ownerRequests.get(banker);

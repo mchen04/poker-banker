@@ -41,7 +41,7 @@ export function App() {
   const renderEpoch = epoch.current;
   const client = useMemo(() => banker ? bankerClient(banker.id) : null, [banker, renderEpoch]);
   current.current = state; chosen.current = sessionId; activeBanker.current = banker;
-  const pwa = usePwaUpdate({ sheetOpen: sheet !== null || childDialog || checking || loggingOut || formBusy || (!banker && !viewerToken), outboxCount: pending.length, busy: checking || loggingOut || formBusy || reloadingAccount });
+  const pwa = usePwaUpdate({ sheetOpen: sheet !== null || childDialog || checking || loggingOut || formBusy || recovery !== null || authCodesVisible || accountChanged || checkingForm || (!banker && !viewerToken), outboxCount: pending.length, busy: checking || loggingOut || formBusy || reloadingAccount || checkingForm });
   const dialogChange = useCallback((open: boolean) => { if (epoch.current === renderEpoch) setChildDialog(open); }, [renderEpoch]);
   const notify = useCallback((text: string) => setNotice(text), []);
   const open = useCallback((next: SheetState) => setSheet(next), []);
