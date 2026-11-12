@@ -442,11 +442,12 @@ export async function readDraft<T>(key: string, cursor?: DraftCursor, options?: 
   await draftWrites.get(key)?.catch(() => {});
   try {
     const db = await storage();
-    const record = await req(db.transaction('drafts').objectStore('drafts').get(key)) as DraftRecord | undefined;
+    const store = db.transaction('drafts').objectStore('drafts');
+    const record = await req(store.get(key)) as DraftRecord | undefined;
     const intent = draftIntents.get(key);
     const stored = record?.value as DraftValue | undefined;
     if (record && !intent && stored?.op_id && !stored.__submitted) {
-      const claim = await operationRecord(db.transaction('drafts').objectStore('drafts'), key.split('/')[0]!, { path: '', method: '', body: { op_id: stored.op_id } });
+      const claim = await operationRecord(store, key.split('/')[0]!, { path: '', method: '', body: { op_id: stored.op_id } });
       if (claim && !draftIntents.has(key)) {
         const observation = cursorFor(key, cursor);
         observation.version = draftVersion(record);
