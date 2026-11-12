@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
-import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { getCookie, setCookie } from 'hono/cookie';
 import { hash, verify, Algorithm } from '@node-rs/argon2';
 import { z } from 'zod';
 import type { Database, Transaction } from './db.js';
@@ -83,7 +83,6 @@ export async function authenticate(pool: Database, c: AppContext): Promise<Banke
   c.header('X-PB-Banker-ID', banker.id);
   const expectedBanker = c.req.header('X-PB-Expected-Banker-ID');
   if (expectedBanker && expectedBanker !== banker.id) throw new ApiError(409, 'account_changed', 'Account changed. Sign in to check your saved work.');
-  cookie(c, token);
   c.set('banker', banker);
   return banker;
 }
@@ -124,7 +123,6 @@ export function authRoutes(pool: Database, ip: (c: AppContext) => string) {
       await db.query('DELETE FROM auth_sessions WHERE banker_id = $1', [account.id]);
       return { banker: { id: account.id, username: account.username } };
     });
-    deleteCookie(c, 'pb_session', { path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
     return c.json(result);
   });
   router.use('*', async (c, next) => { await authenticate(pool, c); await next(); });
@@ -133,7 +131,6 @@ export function authRoutes(pool: Database, ip: (c: AppContext) => string) {
     const body = await c.req.text();
     z.strictObject({}).parse(body === '' ? {} : JSON.parse(body));
     await pool.query('DELETE FROM auth_sessions WHERE banker_id = $1 AND token_hash = $2', [c.get('banker').id, digest(getCookie(c, 'pb_session')!)]);
-    deleteCookie(c, 'pb_session', { path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
     return c.json({ ok: true });
   });
   router.post('/recovery-codes', async c => {

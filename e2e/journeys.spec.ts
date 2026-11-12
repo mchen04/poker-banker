@@ -5,7 +5,12 @@ import { addPlayer, call, closeSession, createAccount, current, fixtureSession, 
 
 test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
   const user = await createAccount(page, testInfo);
+  const signupCookie = (await page.context().cookies()).find(cookie => cookie.name === 'pb_session')!;
   await signOut(page);
+  expect((await page.context().cookies()).find(cookie => cookie.name === 'pb_session')).toEqual(signupCookie);
+  expect((await page.request.get('/api/auth/me')).status()).toBe(401);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Sign in to workspace', exact: true })).toBeVisible();
   await screen(page, testInfo, 'signin');
   await signIn(page, user.username);
   const state = await newSession(page, 'Recovery preserves draft');

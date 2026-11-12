@@ -53,10 +53,10 @@ afterAll(async () => {
   await database?.stop();
 });
 
-function request(jar: CookieJar, path: string, body?: unknown) {
+function request(jar: CookieJar, path: string, body?: unknown, expectedBanker?: string) {
   return fetch(`${base}/api${path}`, {
     method: body === undefined ? 'GET' : 'POST',
-    headers: { origin: base, 'content-type': 'application/json', cookie: jar.header() },
+    headers: { origin: base, 'content-type': 'application/json', cookie: jar.header(), ...(expectedBanker ? { 'X-PB-Expected-Banker-ID': expectedBanker } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
@@ -64,6 +64,8 @@ function request(jar: CookieJar, path: string, body?: unknown) {
 async function signup(jar: CookieJar) {
   const response = await request(jar, '/auth/signup', { username: `race-${randomUUID().slice(0, 16)}`, password });
   expect(response.status).toBe(200);
+  expect(response.headers.getSetCookie()).toHaveLength(1);
+  for (const attribute of ['pb_session=', 'HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/', 'Max-Age=15552000']) expect(response.headers.get('set-cookie')).toContain(attribute);
   jar.apply(response);
   return await response.json() as Account;
 }
@@ -91,18 +93,38 @@ it.each(['startup', 'logout', 'recovery', 'password', 'recovery-codes'] as const
     }
     const login = await request(jar, '/auth/login', { username: second.banker.username, password });
     expect(login.status).toBe(200);
+    expect(login.headers.getSetCookie()).toHaveLength(1);
+    expect(login.headers.get('set-cookie')).toContain('Max-Age=15552000');
     jar.apply(login);
-    const before = await request(jar, '/auth/me');
+    const before = await request(jar, '/auth/me', undefined, second.banker.id);
     expect(await before.json()).toEqual({ banker: second.banker });
     release();
     const stale = await delayed;
     expect(stale.status).toBe(200);
+    expect(stale.headers.getSetCookie()).toEqual([]);
     jar.apply(stale);
-    const after = await request(jar, '/auth/me');
+    const after = await request(jar, '/auth/me', undefined, second.banker.id);
     expect(after.status).toBe(200);
     expect(await after.json()).toEqual({ banker: second.banker });
   } finally {
     release();
     await delayed;
   }
+});
+
+it('a delayed explicit sign-in remains user intent and expected-banker binding rejects the previous account', async () => {
+  const jar = new CookieJar();
+  const first = await signup(jar);
+  const second = await signup(new CookieJar());
+  const delayed = await request(jar, '/auth/login', { username: first.banker.username, password });
+  expect(delayed.status).toBe(200);
+  const newer = await request(jar, '/auth/login', { username: second.banker.username, password });
+  jar.apply(newer);
+  expect((await request(jar, '/auth/me', undefined, second.banker.id)).status).toBe(200);
+  jar.apply(delayed);
+  const changed = await request(jar, '/sessions', undefined, second.banker.id);
+  expect(changed.status).toBe(409);
+  expect(await changed.json()).toMatchObject({ error: { code: 'account_changed' } });
+  expect(changed.headers.get('X-PB-Banker-ID')).toBe(first.banker.id);
+  expect(changed.headers.getSetCookie()).toEqual([]);
 });

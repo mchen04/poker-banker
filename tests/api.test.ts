@@ -65,7 +65,7 @@ async function close(account: Account, session: SessionState, accept?: string) {
 async function history(account: Account, player: string) { return ok<History>(await request(`/players/${player}`, 'GET', undefined, account)); }
 
 describe('accounts and recovery', () => {
-  it('signs up, hashes passwords, issues hardened cookies and slides expiry', async () => {
+  it('signs up, hashes passwords and slides server expiry without renewing the browser cookie', async () => {
     const account = await signup();
     expect(account.recovery_codes).toHaveLength(10);
     expect(new Set(account.recovery_codes).size).toBe(10);
@@ -77,8 +77,7 @@ describe('accounts and recovery', () => {
     await database.pool.query("UPDATE auth_sessions SET expires_at = now() + interval '1 day' WHERE banker_id = $1", [account.banker.id]);
     const me = await request('/auth/me', 'GET', undefined, account);
     expect(await ok(me)).toEqual({ banker: account.banker });
-    const cookie = me.headers.get('set-cookie')!;
-    for (const attr of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/', 'Max-Age=15552000']) expect(cookie).toContain(attr);
+    expect(me.headers.get('set-cookie')).toBeNull();
     const expiry = await database.pool.query('SELECT expires_at > now() + interval \'179 days\' AS sliding FROM auth_sessions WHERE banker_id = $1', [account.banker.id]);
     expect(expiry.rows[0].sliding).toBe(true);
   });
