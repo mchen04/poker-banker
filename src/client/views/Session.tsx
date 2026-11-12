@@ -75,10 +75,14 @@ function StartTimer() {
   return <button className="text-button" onClick={() => { void mutate(`/api/sessions/${state!.session.id}/start`, { op_id: crypto.randomUUID() }).catch(error => notify(error.message)); }}>Start timer</button>;
 }
 export function Activity({ state, onlyPlayer }: { state: SessionState; onlyPlayer?: string }) {
+  return <ActivityRows key={JSON.stringify([state.session.id, onlyPlayer])} state={state} onlyPlayer={onlyPlayer} />;
+}
+function ActivityRows({ state, onlyPlayer }: { state: SessionState; onlyPlayer?: string }) {
+  const [visibleCount, setVisibleCount] = useState(50);
   const { banker, open } = useClient();
   const voided = new Set(state.entries.flatMap(entry => entry.voids_entry_id ? [entry.voids_entry_id] : []));
   const rows = state.entries.filter(entry => !onlyPlayer || entry.player_id === onlyPlayer);
-  return <section className="activity" data-testid="activity"><h2>{onlyPlayer ? 'Player entries' : 'Activity'}</h2>{!rows.length && <p className="muted">No entries yet.</p>}<ul>{rows.map(entry => {
+  return <section className="activity" data-testid="activity"><h2>{onlyPlayer ? 'Player entries' : 'Activity'}</h2>{!rows.length && <p className="muted">No entries yet.</p>}{rows.length > visibleCount && <button type="button" onClick={() => setVisibleCount(count => count + 50)}>Show earlier entries</button>}<ul>{rows.slice(0, visibleCount).map(entry => {
     const cancelled = voided.has(entry.id);
     const player = state.players.find(player => player.id === entry.player_id);
     return <li key={entry.id} data-testid={`entry-${entry.id}`}><div><span className={cancelled ? 'voided' : ''}>{entry.voids_entry_id ? 'Void · ' : ''}{entryLabels[entry.kind]} · {player?.display_name} · <strong className="money-value">{money(entry.amount_minor, state.session.currency)}</strong>{entry.method && ` · ${methodLabel(entry.method)}`}</span>{cancelled && <span className="entry-status">Voided</span>}<small>{entry.occurred_at === null ? 'Time unavailable' : new Date(entry.occurred_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}{entry.note ? ` · ${entry.note}` : ''}</small></div>{banker && state.session.status === 'open' && !cancelled && !entry.voids_entry_id && <button className="small-button" aria-label={`Correct ${entryLabels[entry.kind]} ${money(entry.amount_minor, state.session.currency)}`} onClick={() => open({ kind: 'correction', entry: entry.id, player: entry.player_id })}>Correct</button>}</li>;

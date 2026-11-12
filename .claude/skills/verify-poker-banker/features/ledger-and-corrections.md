@@ -45,3 +45,5 @@ Preconditions:
 - Correcting a voided row is unavailable. Preserve its original proof and use the effective replacement for later changes.
 - Entries marked Not saved yet do not change confirmed totals. Do not confuse an offline draft with a confirmed ledger row.
 - The built-in drive's successful execution proves only the entry points present in its evidence; it does not automatically verify the other feature files.
+
+Long sessions initially render the newest 50 Activity rows. Use **Show earlier entries** for each earlier block of 50 before selecting an old correction. The complete ledger still supplies totals, void detection, drafts and snapshots. Banker and read-only viewer retain every entry in the original newest-first order; the viewer only expands history, never edits it. `e2e/activity-window.spec.ts` exercises 106 entries, expansion, an oldest-entry correction, a filtered void, reset on session/player change and anonymous viewing.
