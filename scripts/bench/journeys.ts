@@ -245,7 +245,8 @@ export async function benchmarkJourneys(args: { stack: Stack; browser: Browser; 
       throw new Error(`Unknown browser journey ${metric}`);
     } finally { try { await budget.pause(); } finally { if (second) await closeContext(second); await closeContext(owned); } }
   }
-  const metrics = ['ui.open.cold', 'ui.return.warm', 'auth.signin', 'nav.players', 'session.switch', 'entry.confirm', 'cash_out.confirm', 'undo.confirm', 'payment.confirm', 'session.close', 'report.open', 'report.filter', 'share.enable', 'viewer.first', 'viewer.open', 'viewer.delay.1', 'offline.replay'];
+  const metrics = ['ui.open.cold', 'ui.return.warm', 'nav.players', 'session.switch', 'entry.confirm', 'cash_out.confirm', 'undo.confirm', 'payment.confirm', 'session.close', 'report.open', 'report.filter', 'share.enable', 'viewer.first', 'viewer.open', 'viewer.delay.1', 'offline.replay'];
+  for (let index = 0; index < (wanted('auth.signin') ? options.samples : 0); index++) await run('auth.signin', index);
   for (let index = 0; index < options.samples; index++) for (const metric of (options.reverse !== !!(index % 2) ? [...metrics].reverse() : metrics).filter(wanted)) await run(metric, index);
   if ((options.memoryCycles ?? 0) > 0 && wanted('memory.cycles')) {
     const owned = await args.memoryContext();
