@@ -1,3 +1,4 @@
+import { closeOwnedServer } from '../scripts/close-server';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
@@ -30,7 +31,7 @@ beforeAll(async () => {
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => {
   try {
-    if (server) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    if (server) await closeOwnedServer(server);
   } finally { await database?.stop(); }
 });
 

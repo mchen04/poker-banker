@@ -1,3 +1,4 @@
+import { closeOwnedServer } from '../scripts/close-server';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -5,7 +6,7 @@ import { resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { createPool } from '../src/server/db';
-import { stopOwnedProcess } from '../scripts/owned-process';
+import { stopOwnedProcess, withShutdownDeadline } from '../scripts/owned-process';
 import { testDatabase } from './database';
 
 let database: Awaited<ReturnType<typeof testDatabase>>;
@@ -15,10 +16,11 @@ afterAll(async () => { await database?.stop(); });
 it('handles an idle backend termination without an uncaught exception and reconnects for the next query', async () => {
   const script = `
     import { createPool } from './src/server/db.ts';
+    import { withShutdownDeadline } from './scripts/owned-process.ts';
     let pool;
     let closing;
-    const close = () => closing ??= pool?.end() ?? Promise.resolve();
-    process.once('SIGTERM', () => { void close().then(() => process.exit(0)); });
+    const close = () => closing ??= withShutdownDeadline('Idle pool test shutdown', () => pool?.end());
+    process.once('SIGTERM', () => { void close().then(() => process.exit(0), () => process.exit(1)); });
     const uncaught = [];
     const logged = [];
     process.on('uncaughtException', error => { uncaught.push(error.code ?? 'unknown'); });
@@ -38,7 +40,7 @@ it('handles an idle backend termination without an uncaught exception and reconn
         process.send({ type: 'result', uncaught, logged, ...next.rows[0], poolEnded: pool.ended });
       } catch (error) {
         process.send({ type: 'failed', code: error.code ?? 'unknown' });
-      } finally { await close(); process.disconnect(); }
+      } finally { try { await close(); } catch { process.exitCode = 1; } process.disconnect(); }
     });
   `;
   const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
@@ -76,7 +78,7 @@ it('logs only the error code or a fixed safe message without exposing error or c
     expect(log.mock.calls.flat().every(value => typeof value === 'string' && !value.includes('must-not-log') && !value.includes('postgresql://'))).toBe(true);
     log.mockImplementationOnce(() => { throw new Error('Log sink unavailable'); });
     expect(() => pool.emit('error', Object.assign(new Error(message), { code: '57P01' }))).not.toThrow();
-  } finally { await pool.end(); log.mockRestore(); }
+  } finally { try { await withShutdownDeadline('Test pool shutdown', () => pool.end()); } finally { log.mockRestore(); } }
 });
 
 it.each([0, 1])('ends the local app child pool before its embedded database when the child exits %s', async childExit => {
@@ -86,18 +88,19 @@ it.each([0, 1])('ends the local app child pool before its embedded database when
   const server = createServer();
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
   const port = (server.address() as { port: number }).port;
-  await new Promise<void>(done => server.close(() => done()));
+  await closeOwnedServer(server);
   const script = `
     import { writeFile } from 'node:fs/promises';
+    import { withShutdownDeadline } from ${JSON.stringify(new URL('../scripts/owned-process.ts', import.meta.url).href)};
     import { createPool } from ${JSON.stringify(new URL('../src/server/db.ts', import.meta.url).href)};
     const pool = createPool();
     await pool.query('SELECT 1');
     process.on('SIGTERM', () => { void (async () => {
-      const result = await pool.query('SELECT 1 AS value');
-      await pool.end();
-      await writeFile(${JSON.stringify(marker)}, JSON.stringify({ value: result.rows[0].value, ended: pool.ended }));
+      const result = await withShutdownDeadline('Test shutdown query', () => pool.query('SELECT 1 AS value'));
+      await withShutdownDeadline('Test pool shutdown', () => pool.end());
+      await withShutdownDeadline('Test shutdown marker', () => writeFile(${JSON.stringify(marker)}, JSON.stringify({ value: result.rows[0].value, ended: pool.ended })));
       process.exit(${childExit});
-    })(); });
+    })().catch(() => process.exit(1)); });
     console.log('APP_READY:' + process.pid);
   `;
   const launcher = `
@@ -118,19 +121,24 @@ it.each([0, 1])('ends the local app child pool before its embedded database when
   child.stderr!.resume();
   try {
     await ready;
-    const exited = once(child, 'exit');
+    const exited = once(child, 'exit', { signal: AbortSignal.timeout(10000) });
     child.kill('SIGTERM');
     const [code] = await exited;
     expect(JSON.parse(await readFile(diagnostics, 'utf8'))).toEqual({ code: childExit, rejected: [] });
     expect(code).toBe(childExit);
     expect(JSON.parse(await readFile(marker, 'utf8'))).toEqual({ value: 1, ended: true });
   } finally {
-    if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
-    if (appPid) {
-      try { process.kill(appPid, 'SIGTERM'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-      await vi.waitFor(() => { try { process.kill(appPid!, 0); throw new Error('Owned app has not stopped'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; } }, { timeout: 10000 });
+    try {
+      if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
+    } finally {
+      try {
+        if (appPid) {
+          try { process.kill(appPid, 'SIGTERM'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+          try { await vi.waitFor(() => { try { process.kill(appPid!, 0); throw new Error('Owned app has not stopped'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; } }, { timeout: 3000 }); }
+          catch (error) { try { process.kill(appPid, 'SIGKILL'); } catch (killError) { if ((killError as NodeJS.ErrnoException).code !== 'ESRCH') throw killError; } throw error; }
+        }
+      } finally { await withShutdownDeadline('Test directory cleanup', () => rm(directory, { recursive: true, force: true })); }
     }
-    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -140,10 +148,11 @@ it('ends a live migration pool before PostgreSQL when local startup is cancelled
   const server = createServer();
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
   const port = (server.address() as { port: number }).port;
-  await new Promise<void>(done => server.close(() => done()));
+  await closeOwnedServer(server);
   const script = `
     import pg from 'pg';
     import { writeFile } from 'node:fs/promises';
+    import { withShutdownDeadline } from ${JSON.stringify(new URL('../scripts/owned-process.ts', import.meta.url).href)};
     let release;
     const held = new Promise(done => { release = done; });
     process.on('message', message => { if (message === 'continue') release(); });
@@ -160,9 +169,9 @@ it('ends a live migration pool before PostgreSQL when local startup is cancelled
         })();
       }
       async end() {
-        const result = await this.query('SELECT 1 AS value');
-        await super.end();
-        await writeFile(${JSON.stringify(marker)}, JSON.stringify({ value: result.rows[0].value, ended: this.ended }));
+        const result = await withShutdownDeadline('Test shutdown query', () => this.query('SELECT 1 AS value'));
+        await withShutdownDeadline('Test pool shutdown', () => super.end());
+        await withShutdownDeadline('Test shutdown marker', () => writeFile(${JSON.stringify(marker)}, JSON.stringify({ value: result.rows[0].value, ended: this.ended })));
       }
     };
     await import(${JSON.stringify(new URL('../scripts/db-local.ts', import.meta.url).href)});
@@ -179,8 +188,9 @@ it('ends a live migration pool before PostgreSQL when local startup is cancelled
     expect((await exited)[0]).toBe(0);
     expect(JSON.parse(await readFile(marker, 'utf8'))).toEqual({ value: 1, ended: true });
   } finally {
-    if (child.connected) child.send('continue');
-    if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
-    await rm(directory, { recursive: true, force: true });
+    try {
+      if (child.connected) child.send('continue', () => {});
+      if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
+    } finally { await withShutdownDeadline('Test directory cleanup', () => rm(directory, { recursive: true, force: true })); }
   }
 });

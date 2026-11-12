@@ -1,3 +1,4 @@
+import { closeOwnedServer } from '../scripts/close-server';
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -19,8 +20,8 @@ beforeAll(async () => {
   url = `http://127.0.0.1:${address.port}`;
 });
 afterAll(async () => {
-  if (server) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  await database?.stop();
+  try { if (server) await closeOwnedServer(server); }
+  finally { await database?.stop(); }
 });
 
 it('serves real HTTP via the Vercel Node adapter and preserves secure cookies', async () => {

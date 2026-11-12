@@ -1,3 +1,4 @@
+import { closeOwnedServer } from '../scripts/close-server';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -11,7 +12,7 @@ async function availablePort(): Promise<number> {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('No test port');
-  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  await closeOwnedServer(server);
   return address.port;
 }
 export async function testDatabase(options: { migrationDirectory?: string; postgresFlags?: string[] } = {}) {

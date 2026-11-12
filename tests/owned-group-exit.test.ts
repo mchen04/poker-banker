@@ -24,7 +24,7 @@ async function cleanup(child: ChildProcess, group: boolean, descendant?: number)
     if (group && child.pid && (child.exitCode === null && child.signalCode === null || descendant && alive(descendant))) process.kill(-child.pid, 'SIGKILL');
     else if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-  await withShutdownDeadline('Owned group regression cleanup', () => exited);
+  await withShutdownDeadline('Owned group regression cleanup', async () => { await exited; });
 }
 
 for (const code of [0, 1]) it(`removes remaining owned group descendants after wrapper exit ${code} and preserves an unrelated sibling`, async () => {

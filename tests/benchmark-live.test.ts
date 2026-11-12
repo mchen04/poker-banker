@@ -1,3 +1,6 @@
+import { closeOwnedServer } from '../scripts/close-server';
+import { cleanupLeaves } from './teardown';
+import { stopOwnedProcess, withShutdownDeadline } from '../scripts/owned-process';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -101,7 +104,7 @@ it('counts a non-JSON HTTP failure once and keeps its body out of diagnostics', 
   try {
     await expect(client.request('/api/view/synthetic-owned-viewer-token')).rejects.toThrow('Controller GET /api/view/OWNED_TOKEN failed (SyntaxError)');
     expect(client.counts).toEqual({ requests: 1, mutations: 0, errors: 1, statuses: { '400': 1 } });
-  } finally { await client.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  } finally { await cleanupLeaves(() => client.close(), () => closeOwnedServer(server)); }
 });
 
 it('scopes the bypass header to every controller request and never follows a redirect with credentials', async () => {
@@ -135,8 +138,7 @@ it('scopes the bypass header to every controller request and never follows a red
     await expect(client.request(`http://127.0.0.1:${externalAddress.port}/`)).rejects.toThrow('origin');
   } finally {
     if (previous === undefined) delete process.env.PB_VERCEL_BYPASS; else process.env.PB_VERCEL_BYPASS = previous;
-    await client.close();
-    for (const owned of [server, external]) { owned.closeAllConnections(); await new Promise<void>(resolve => owned.close(() => resolve())); }
+    await cleanupLeaves(() => client.close(), ...[server, external].map(owned => () => closeOwnedServer(owned)));
   }
 });
 it('persists a private owned seed, reuses its banker across loopback origins without mutations, and compares raw bodies', async () => {
@@ -219,10 +221,8 @@ it('persists a private owned seed, reuses its banker across loopback origins wit
     expect(cookies[0]!.path).toBe('/');
   } finally {
     if (previous === undefined) delete process.env.PB_VERCEL_BYPASS; else process.env.PB_VERCEL_BYPASS = previous;
-    await client.close(); await reused.close();
-    for (const server of servers) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
-    await rm(cache, { recursive: true, force: true });
-    for (const directory of [evidence, seedEvidence, reuseEvidence, compareEvidence, invalidEvidence, missingReuseEvidence]) await rm(directory, { recursive: true, force: true });
+    await cleanupLeaves(() => client.close(), () => reused.close(), ...servers.map(server => () => closeOwnedServer(server)),
+      ...[cache, evidence, seedEvidence, reuseEvidence, compareEvidence, invalidEvidence, missingReuseEvidence].map(directory => () => rm(directory, { recursive: true, force: true })));
   }
 }, 60000);
 it('accepts only five complete wins above both MADs with matching raw responses and zero errors', () => {
@@ -257,9 +257,11 @@ it('adds browser bypass headers only to the exact target origin including assets
   if (!address || typeof address === 'string') throw new Error('No browser test port');
   const client = await LiveClient.create(`http://127.0.0.1:${address.port}`);
   let browser: Awaited<ReturnType<typeof webkit.launch>> | undefined;
+  let browserServer: Awaited<ReturnType<typeof webkit.launchServer>> | undefined;
   try {
     await client.request('/api/auth/signup', { method: 'POST', body: { username: `browser-${randomUUID().slice(0, 12)}`, password: `test-only-${randomUUID()}` } });
-    browser = await webkit.launch();
+    browserServer = await webkit.launchServer();
+    browser = await webkit.connect(browserServer.wsEndpoint());
     const context = await browser.newContext({ serviceWorkers: 'block' });
     await context.addCookies((await client.context.storageState()).cookies);
     await scopeLiveBrowserRequests(context, client);
@@ -275,10 +277,10 @@ it('adds browser bypass headers only to the exact target origin including assets
     expect(received.some(request => request.path === '/asset.js')).toBe(true);
     expect(received.some(request => request.path === '/api/auth/me')).toBe(true);
     expect(received.every(request => request.header === sentinel)).toBe(true);
-    await context.close();
+    await withShutdownDeadline('Test browser context close', () => context.close());
   } finally {
     if (previous === undefined) delete process.env.PB_VERCEL_BYPASS; else process.env.PB_VERCEL_BYPASS = previous;
-    await browser?.close(); await client.close();
-    for (const owned of [server, external]) { owned.closeAllConnections(); await new Promise<void>(resolve => owned.close(() => resolve())); }
+    try { await cleanupLeaves(() => browser?.close(), () => browserServer?.close(), () => client.close(), ...[server, external].map(owned => () => closeOwnedServer(owned))); }
+    finally { if (browserServer) await stopOwnedProcess(browserServer.process(), 'signal', true); }
   }
 }, 30000);

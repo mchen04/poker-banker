@@ -1,3 +1,4 @@
+import { closeOwnedServer } from '../scripts/close-server';
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -49,8 +50,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (server) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  await database?.stop();
+  try { if (server) await closeOwnedServer(server); }
+  finally { await database?.stop(); }
 });
 
 function request(jar: CookieJar, path: string, body?: unknown, expectedBanker?: string) {
