@@ -51,7 +51,7 @@ const stopForSignal = (signal: NodeJS.Signals) => {
   if (interrupted) return;
   interrupted = signal; process.exitCode = signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 129;
   interruptionController.abort(new Error(`Benchmark interrupted by ${signal}`));
-  signalStop = withShutdownDeadline('Benchmark startup shutdown', () => stackTask?.then(stack => stack.stop())).catch(error => { signalCleanupError = error; });
+  signalStop = withShutdownDeadline('Benchmark startup shutdown', () => stackTask).then(stack => stack?.stop()).catch(error => { signalCleanupError = error; });
 };
 const checkInterrupted = () => { if (interrupted) throw new Error(`Benchmark interrupted by ${interrupted}`); };
 function running<T>(action: () => Promise<T>): Promise<T> {

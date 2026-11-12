@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
@@ -54,7 +54,7 @@ it('finishes the installed PostgreSQL owner before local database shutdown exits
     const exits: { code: number; ownerAlive: boolean }[] = [];
     const errors: string[] = [];
     const fakeProcess = { exitCode: 0, exit: (code: number) => { exits.push({ code, ownerAlive: alive(child) }); } };
-    const lifecycle = new Function('stopOwnedProcess', 'stopDatabase', 'database', 'process', 'errors', `let requested=false,stopping,exitCode=0;const startup=Promise.resolve();const child=undefined;const endPool=()=>Promise.resolve();function fail(message){exitCode=1;process.exitCode=1;errors.push(message);}${source.slice(start, end)};return {stop,finish};`)(stopOwnedProcess, database.stop.bind(database), database, fakeProcess, errors);
+    const lifecycle = new Function('stopOwnedProcess', 'stopDatabase', 'database', 'ChildProcess', 'process', 'errors', `let requested=false,stopping,exitCode=0;const startup=Promise.resolve();const child=undefined;const endPool=()=>Promise.resolve();function fail(message){exitCode=1;process.exitCode=1;errors.push(message);}${source.slice(start, end)};return {stop,finish};`)(stopOwnedProcess, database.stop.bind(database), database, ChildProcess, fakeProcess, errors);
     lifecycle.finish(0);
     await lifecycle.stop();
     await Promise.resolve();

@@ -1,6 +1,6 @@
 import { access, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import EmbeddedPostgres from 'embedded-postgres';
 import { createPool } from '../src/server/db';
 import { migrate } from './migrate';
@@ -57,7 +57,18 @@ function stop(): Promise<void> {
       if (child && child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
     } catch { fail('Local app shutdown failed'); }
     try { await endPool(); } catch { fail('Local database pool shutdown failed'); }
-    try { await stopOwnedProcess.withDeadline('Local database shutdown', stopDatabase); } catch { fail('Local database shutdown failed'); }
+    const databaseChild: unknown = Reflect.get(database, 'process');
+    try { await stopOwnedProcess.withDeadline('Local database shutdown', stopDatabase); }
+    catch {
+      fail('Local database shutdown failed');
+      if (databaseChild && databaseChild instanceof ChildProcess && databaseChild.pid) {
+        if (databaseChild.exitCode === null && databaseChild.signalCode === null) {
+          try { if (!databaseChild.kill('SIGKILL')) fail('Local database SIGKILL failed'); } catch { fail('Local database SIGKILL failed'); }
+        }
+        try { await stopOwnedProcess(databaseChild, 'signal'); }
+        catch { if (databaseChild.exitCode === null && databaseChild.signalCode === null) fail('Local database forced shutdown failed'); }
+      }
+    }
   })();
 }
 function finish(code: number) {
