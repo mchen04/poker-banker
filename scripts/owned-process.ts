@@ -88,7 +88,16 @@ function stopGroup(group: Group): Promise<void> {
     try {
       if (exists(group)) {
         try { await authorizeTerm(group); } catch (error) { errors.push(error); }
-        try { if (signal(group, 'SIGTERM')) group.termRequested = true; signal(group, 'SIGCONT'); await waitGone(group); }
+        try {
+          if (signal(group, 'SIGTERM')) group.termRequested = true;
+          try { signal(group, 'SIGCONT'); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+            try { await waitGone(group); }
+            catch (failure) { throw new AggregateError([error, failure], 'Owned process could not resume or exit'); }
+          }
+          await waitGone(group);
+        }
         catch (error) {
           errors.push(error, new Error(`Owned process group ${group.pid} required SIGKILL`));
           try { signal(group, 'SIGKILL'); await waitGone(group); } catch (failure) { errors.push(failure); }
