@@ -1,3 +1,4 @@
+import { X509Certificate, createHash } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createServer as createHttpsServer } from 'node:https';
@@ -50,7 +51,9 @@ export async function benchmarkStack(output: string, signal?: AbortSignal, optio
     await runOwned(owner, 'openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', certificate], { stdio: 'ignore' });
     const port = await starting(availablePort); const backend = `https://127.0.0.1:${port}`;
     proxy = new ShapedProxy(backend);
-    listener = createHttpsServer({ key: await starting(() => readFile(key)), cert: await starting(() => readFile(certificate)) }, proxy.handle);
+    const cert = await starting(() => readFile(certificate));
+    const certificateSpki = createHash('sha256').update(new X509Certificate(cert).publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
+    listener = createHttpsServer({ key: await starting(() => readFile(key)), cert }, proxy.handle);
     await starting(() => new Promise<void>((resolve, reject) => { listener!.once('error', reject); listener!.listen(0, '127.0.0.1', resolve); }));
     const address = listener.address(); if (!address || typeof address === 'string') throw new Error('No shaping port');
     const origin = `https://127.0.0.1:${address.port}`;
@@ -65,7 +68,7 @@ export async function benchmarkStack(output: string, signal?: AbortSignal, optio
     const login = await starting(() => client!.request('/api/auth/login', { method: 'POST', body: { username: fixture.username, password: fixture.password } }));
     if (login.status !== 200) throw new Error(`Owned benchmark sign-in failed ${login.status}`);
     client.cookie();
-    return { fixture, database, backend, origin, client, proxy, serverPid: child.pid!, stop, owner };
+    return { fixture, database, backend, origin, client, proxy, certificateSpki, serverPid: child.pid!, stop, owner };
   } catch (error) {
     try { await stop(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Owned benchmark startup and cleanup failed'); }
     throw error;

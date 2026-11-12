@@ -34,7 +34,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   owner.addCleanup('Benchmark memory browser server close', 'cleanup', () => memoryServer?.close());
   owner.addCleanup('Benchmark memory browser close', 'cleanup', () => memoryBrowser?.close());
   const closeBrowser = () => owner.stop();
-  server = await owner.launch(async () => server = memoryOnly ? await chromium.launchServer({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }) : await webkit.launchServer({ executablePath: engine.executable, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
+  server = await owner.launch(async () => server = memoryOnly ? await chromium.launchServer({ args: [`--ignore-certificate-errors-spki-list=${stack.certificateSpki}`], handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }) : await webkit.launchServer({ executablePath: engine.executable, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
   try { browser = await owner.launch(async () => browser = await (memoryOnly ? chromium : webkit).connect(server!.wsEndpoint())); }
   catch (error) {
     try { await closeBrowser(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Benchmark browser connection and cleanup failed'); }
@@ -43,17 +43,24 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   const connectedBrowser = browser;
   budget = new CpuBudget(engine.engine, server, owner);
   const errors: string[] = [];
-  const teardownErrors: { url: string; message: string }[] = [];
-  const pageErrors: { page: Page; url: string; message: string }[] = [];
+  const teardownErrors: { url: string; message: string; epoch: number }[] = [];
+  const pageErrors: { page: Page; url: string; message: string; epoch: number }[] = [];
   const offline = new WeakSet<Page>();
-  const offlineFailures: { page: Page; url: string; failure: string }[] = [];
+  const updating = new WeakSet<Page>();
+  const requestFailures: { page: Page; url: string; method: string; failure: string; epoch: number; startedEpoch: number; offline: boolean; closing: boolean }[] = [];
+  const getResponses: { page: Page; url: string; method: string; status: number; startedEpoch: number; responseEpoch: number }[] = [];
+  const navigations: { page: Page; url: string; epoch: number; phase: 'start' | 'commit'; update: boolean }[] = [];
   const expectedOfflineErrors: { page: string; requestPath: string; message: string }[] = [];
+  const expectedNavigationErrors: { page: string; requestPath: string; message: string; failureEpoch?: number; requestStartedEpoch?: number; responseEpoch?: number; status?: number; errorEpoch: number; navigationEpoch: number; navigationPhase?: string; confirmedRelease?: string; proof?: string }[] = [];
+  let classifiedPageErrors = 0;
+  let journeysCompleted = false;
   const closing = new WeakSet<Page>();
   const fixture = stack.fixture;
   let initial: Awaited<ReturnType<typeof stack.client.request>>;
   try { initial = await stack.client.request(`/api/sessions/${fixture.sessionId}`); expect(initial.status).toBe(200); } catch (error) { await closeBrowser(); throw error; }
   let state = initial.body as SessionState;
   expect(state.entries).toHaveLength(fixture.counts.main_open_entries!);
+  const sanitize = (value: string) => value.replaceAll(fixture.username, 'OWNED_USER').replaceAll(fixture.password, 'OWNED_SECRET').replace(/\/(api\/view|v)\/[A-Za-z0-9_-]+/g, '/$1/OWNED_TOKEN');
   const context = async (banker: boolean, target: Browser = connectedBrowser) => {
     const value = await target.newContext({ ...devices['iPhone 15'], baseURL: stack.origin, ignoreHTTPSErrors: true, locale: 'en-US', timezoneId: 'UTC' });
     await value.addInitScript({ content: `Object.defineProperty(navigator, 'standalone', { configurable: true, value: true }); { const native = window.matchMedia.bind(window); window.matchMedia = query => { const result = native(query); if (query.includes('display-mode') && query.includes('standalone')) Object.defineProperty(result, 'matches', { configurable: true, value: true }); return result; }; }` });
@@ -63,9 +70,39 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
     return value;
   };
   function watch(page: Page) {
-    page.on('pageerror', error => { if (closing.has(page)) teardownErrors.push({ url: safePath(page.url()), message: error.message }); else pageErrors.push({ page, url: safePath(page.url()), message: error.message }); });
-    page.on('requestfailed', request => { if (offline.has(page)) offlineFailures.push({ page, url: request.url(), failure: request.failure()?.errorText ?? 'Request failed while explicitly offline' }); });
-    page.on('response', response => { const path = safePath(response.url()); if (response.url().includes('/api/') && response.status() >= 400 && !(options.journeys && path === '/api/auth/me' && response.status() === 401)) errors.push(`${response.status()} ${path}`); });
+    page.on('pageerror', error => { const epoch = Date.now(); if (closing.has(page)) teardownErrors.push({ url: safePath(page.url()), message: sanitize(error.message), epoch }); else pageErrors.push({ page, url: safePath(page.url()), message: error.message, epoch }); });
+    page.on('requestfailed', request => { requestFailures.push({ page, url: request.url(), method: request.method(), failure: request.failure()?.errorText ?? 'Request failed without browser failure details', epoch: Date.now(), startedEpoch: request.timing().startTime, offline: offline.has(page), closing: closing.has(page) }); });
+    page.on('request', request => { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigations.push({ page, url: request.url(), epoch: Date.now(), phase: 'start', update: updating.has(page) }); });
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations.push({ page, url: frame.url(), epoch: Date.now(), phase: 'commit', update: updating.has(page) }); });
+    page.on('response', response => { const request = response.request(); if (request.method() === 'GET') getResponses.push({ page, url: response.url(), method: request.method(), status: response.status(), startedEpoch: request.timing().startTime, responseEpoch: Date.now() }); const path = safePath(response.url()); if (response.url().includes('/api/') && response.status() >= 400 && !(options.journeys && path === '/api/auth/me' && response.status() === 401)) errors.push(`${response.status()} ${path}`); });
+  }
+  function classifyPageErrors() {
+    for (const error of pageErrors.slice(classifiedPageErrors)) {
+      const matchesUrl = (url: string) => {
+        if (error.message.includes(url)) return true;
+        const path = new URL(url).pathname; const index = error.message.indexOf(path);
+        return index >= 0 && /^(?:[?\s"'.,)]|$)/.test(error.message.slice(index + path.length));
+      };
+      const matching = /due to access control checks\.?/i.test(error.message) ? requestFailures.filter(failure => {
+        if (failure.page !== error.page || failure.method !== 'GET') return false;
+        return matchesUrl(failure.url);
+      }) : [];
+      const offlineFailure = matching.find(failure => failure.offline);
+      const canceled = matching.find(failure => /abort|cancel/i.test(failure.failure) && Math.abs(error.epoch - failure.epoch) <= 2000 && navigations.some(navigation => navigation.page === error.page && navigation.phase === 'start' && navigation.update && failure.startedEpoch <= navigation.epoch && Math.abs(navigation.epoch - failure.epoch) <= 2000));
+      const successful = journeysCompleted && options.updateReleases && /due to access control checks\.?/i.test(error.message) ? getResponses.find(response => response.page === error.page && (response.status === 200 || response.status === 304) && matchesUrl(response.url) && navigations.some(navigation => navigation.page === error.page && navigation.update && response.startedEpoch > 0 && response.startedEpoch < navigation.epoch && Math.abs(error.epoch - navigation.epoch) <= 2000 && Math.abs(response.responseEpoch - navigation.epoch) <= 2000)) : undefined;
+      if (offlineFailure) expectedOfflineErrors.push({ page: error.url, requestPath: safePath(offlineFailure.url), message: sanitize(error.message) });
+      else if (canceled) {
+        const navigation = navigations.find(navigation => navigation.page === error.page && navigation.phase === 'start' && navigation.update && canceled.startedEpoch <= navigation.epoch && Math.abs(navigation.epoch - canceled.epoch) <= 2000)!;
+        expectedNavigationErrors.push({ page: error.url, requestPath: safePath(canceled.url), message: sanitize(error.message), failureEpoch: canceled.epoch, errorEpoch: error.epoch, navigationEpoch: navigation.epoch });
+      } else if (successful) {
+        const navigation = navigations.find(navigation => navigation.page === error.page && navigation.update && successful.startedEpoch < navigation.epoch && Math.abs(error.epoch - navigation.epoch) <= 2000 && Math.abs(successful.responseEpoch - navigation.epoch) <= 2000)!;
+        expectedNavigationErrors.push({ page: error.url, requestPath: safePath(successful.url), message: sanitize(error.message), requestStartedEpoch: successful.startedEpoch, responseEpoch: successful.responseEpoch, status: successful.status, errorEpoch: error.epoch, navigationEpoch: navigation.epoch, navigationPhase: navigation.phase, confirmedRelease: options.updateReleases!.afterRelease, proof: 'Same-page WebKit access-control network message matched a successful pre-navigation GET during automatic update; update journey subsequently confirmed the new document, worker release, and financial UI state' });
+      } else errors.push(`${error.url}: ${sanitize(error.message)}`);
+    }
+    classifiedPageErrors = pageErrors.length;
+  }
+  async function writeDiagnostics(failure?: unknown) {
+    await writeFile(join(output, 'profile.json'), JSON.stringify({ cpu: profiled ? budget!.summary() : null, network: stack.proxy.profile(), proxyCounts: stack.proxy.counts, engineHashes: engine.hashes, browserVersion: connectedBrowser.version(), browserErrors: errors, pageErrors: pageErrors.map(error => ({ page: error.url, message: sanitize(error.message), epoch: error.epoch })), teardownErrors, expectedOfflineErrors, expectedNavigationErrors, expectedOfflineFailures: requestFailures.filter(failure => failure.offline).map(failure => ({ page: safePath(failure.page.url()), requestPath: safePath(failure.url), method: failure.method, failure: sanitize(failure.failure), epoch: failure.epoch })), requestFailures: requestFailures.map(failure => ({ page: safePath(failure.page.url()), requestPath: safePath(failure.url), method: failure.method, failure: sanitize(failure.failure), epoch: failure.epoch, startedEpoch: failure.startedEpoch, offline: failure.offline, closing: failure.closing })), getResponses: getResponses.map(response => ({ page: safePath(response.page.url()), requestPath: safePath(response.url), method: response.method, status: response.status, startedEpoch: response.startedEpoch, responseEpoch: response.responseEpoch })), mainFrameNavigations: navigations.map(navigation => ({ page: safePath(navigation.page.url()), path: safePath(navigation.url), epoch: navigation.epoch, phase: navigation.phase, update: navigation.update })), ...(failure === undefined ? {} : { benchmarkFailure: sanitize(String(failure)) }) }, null, 2));
   }
   const closingContexts = new WeakMap<BrowserContext, Promise<void>>();
   function closeContext(context: BrowserContext) {
@@ -158,12 +195,13 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
   try {
     const memoryContext = async () => {
       if (memoryOnly) return context(true);
-      memoryServer = await owner.launch(async () => memoryServer = await chromium.launchServer({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
+      memoryServer = await owner.launch(async () => memoryServer = await chromium.launchServer({ args: [`--ignore-certificate-errors-spki-list=${stack.certificateSpki}`], handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
       memoryBrowser = await owner.launch(async () => memoryBrowser = await chromium.connect(memoryServer!.wsEndpoint()));
       return context(true, memoryBrowser);
     };
     const markOffline = (page: Page, value: boolean) => { if (value) offline.add(page); else offline.delete(page); };
-    if (options.journeys) await benchmarkJourneys({ stack, browser: connectedBrowser, context, memoryContext, closeContext, watch, markOffline, budget, record, options, output });
+    const markUpdate = (page: Page, value: boolean) => { if (value) updating.add(page); else updating.delete(page); };
+    if (options.journeys) { await benchmarkJourneys({ stack, browser: connectedBrowser, context, memoryContext, closeContext, watch, markOffline, markUpdate, budget, record, options, output }); journeysCompleted = true; }
     if (!options.journeys) {
     const targets: Target[] = options.reverse ? ['viewer', 'workspace'] : ['workspace', 'viewer'];
     const caches = options.reverse ? ['warm', 'cold'] as const : ['cold', 'warm'] as const;
@@ -214,23 +252,17 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
     }
     }
     }
-    const sanitize = (value: string) => value.replaceAll(fixture.username, 'OWNED_USER').replaceAll(fixture.password, 'OWNED_SECRET').replace(/\/(api\/view|v)\/[A-Za-z0-9_-]+/g, '/$1/OWNED_TOKEN');
-    for (const error of pageErrors) {
-      const failed = /due to access control checks\.?/i.test(error.message) ? offlineFailures.find(failure => {
-        if (failure.page !== error.page) return false;
-        if (error.message.includes(failure.url)) return true;
-        const path = new URL(failure.url).pathname; const index = error.message.indexOf(path);
-        return index >= 0 && /^(?:[?\s"'.,)]|$)/.test(error.message.slice(index + path.length));
-      }) : undefined;
-      if (failed) expectedOfflineErrors.push({ page: error.url, requestPath: safePath(failed.url), message: sanitize(error.message) });
-      else errors.push(`${error.url}: ${sanitize(error.message)}`);
-    }
+    classifyPageErrors();
+    await writeDiagnostics();
     expect(errors).toEqual([]);
     const cpu = profiled ? budget!.summary() : null;
     if (cpu) { expect(cpu.cycles).toBeGreaterThan(0);
     expect(cpu.actualRunnableFraction).toBeGreaterThan(.15); expect(cpu.actualRunnableFraction).toBeLessThan(.35); }
-    await writeFile(join(output, 'profile.json'), JSON.stringify({ cpu, network: stack.proxy.profile(), proxyCounts: stack.proxy.counts, engineHashes: engine.hashes, browserVersion: connectedBrowser.version(), browserErrors: errors, teardownErrors, expectedOfflineErrors, expectedOfflineFailures: offlineFailures.map(failure => ({ page: safePath(failure.page.url()), requestPath: safePath(failure.url), failure: sanitize(failure.failure) })) }, null, 2));
     return { cpu, errors };
+  } catch (error) {
+    classifyPageErrors();
+    try { await writeDiagnostics(error); } catch (diagnosticError) { throw new AggregateError([error, diagnosticError], 'Benchmark failed and browser diagnostics could not be written'); }
+    throw error;
   } finally {
     stack.proxy.enabled = false;
     for (const context of connectedBrowser.contexts()) for (const page of context.pages()) closing.add(page);
