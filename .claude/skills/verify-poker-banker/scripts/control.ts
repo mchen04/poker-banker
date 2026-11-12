@@ -7,7 +7,7 @@ import { openSync, closeSync } from 'node:fs';
 import { resolve, relative, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
-import { webkit, devices, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { webkit, devices, expect, type Browser, type BrowserServer, type BrowserContext, type Page } from '@playwright/test';
 import type { SessionState } from '../../../../src/domain/session';
 import { createAccount, signIn, current } from '../../../../e2e/helpers';
 import { ledger } from './ledger';
@@ -73,6 +73,7 @@ async function daemon() {
   const meta: Meta = { runId, pid: process.pid, socket, evidence, baseURL: target ? new URL(target).origin : '', local, state: 'starting' };
   let child: ChildProcess | undefined;
   let browser: Browser | undefined;
+  let browserServer: BrowserServer | undefined;
   let user: Awaited<ReturnType<typeof createAccount>> | undefined;
   const pages = new Map<Mode, Page>();
   let busy = false;
@@ -80,7 +81,19 @@ async function daemon() {
   let startupTask: Promise<void> | undefined;
   let stopping = false;
   let browserClosing: Promise<void> | undefined;
-  const closeBrowser = () => browser ? browserClosing ??= withShutdownDeadline('Verification browser close', () => browser!.close()) : Promise.resolve();
+  const closeBrowser = () => browser || browserServer ? browserClosing ??= (async () => {
+    const results = await Promise.allSettled([
+      browser ? withShutdownDeadline('Verification browser close', () => browser!.close()) : Promise.resolve(),
+      (async () => {
+        const owned = browserServer;
+        if (!owned) return;
+        try { await withShutdownDeadline('Verification browser server close', () => owned.close()); }
+        finally { await stopOwnedProcess(owned.process(), 'signal', true); }
+      })(),
+    ]);
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
+    if (errors.length) throw new AggregateError(errors, `Verification browser cleanup failed: ${errors.map(String).join('; ')}`);
+  })() : Promise.resolve();
   const starting = () => { if (stopping) throw new Error('Verification launch was stopped'); };
   const saveMeta = () => json(metadata, meta);
   function cleanup(): Promise<void> {
@@ -212,8 +225,11 @@ async function daemon() {
       meta.listenerPid = Number(execFileSync('lsof', ['-nP', `-iTCP:${meta.port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).trim());
     }
     starting();
-    browser = await webkit.launch({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+    browserServer = await webkit.launchServer({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
     if (stopping) await closeBrowser();
+    starting();
+    browser = await webkit.connect(browserServer.wsEndpoint());
+    if (stopping) await withShutdownDeadline('Late verification browser close', () => browser!.close());
     starting();
     const page = await contextPage('iphone-webkit');
     starting();
@@ -264,11 +280,11 @@ else if (action === 'launch') {
     const settle = async (action: () => unknown | Promise<unknown>) => { try { await action(); } catch (error) { errors.push(error); } };
     if (child.exitCode === null && child.signalCode === null) {
       await settle(() => request({ action: 'cleanup' }));
-      await settle(async () => {
-        if (child.exitCode === null && child.signalCode === null) owned({ runId, pid: child.pid! });
-        await stopOwnedProcess(child, 'signal', true);
-      });
     }
+    await settle(async () => {
+      if (child.exitCode === null && child.signalCode === null) owned({ runId, pid: child.pid! });
+      await stopOwnedProcess(child, 'signal', true);
+    });
     if (child.exitCode !== null || child.signalCode !== null) {
       if (child.exitCode !== 0 && child.signalCode !== 'SIGTERM') errors.push(new Error(`Owned verification daemon exited ${child.exitCode ?? child.signalCode}`));
       await settle(() => withShutdownDeadline('Verification launch socket removal', () => rm(socket, { force: true })));

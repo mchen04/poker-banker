@@ -33,8 +33,11 @@ async function invoke(body: string) {
       result = { methods: Object.keys(entry).sort(), status: response.status, body, cookie,
         me: me ? { status: me.status, body: await me.json() } : null };
     } finally {
-      await Promise.all(pools.map(pool => withShutdownDeadline('Vercel test pool shutdown', () => pool.end())));
-      pg.Pool = Pool;
+      try {
+        const results = await Promise.allSettled(pools.map(pool => withShutdownDeadline('Vercel test pool shutdown', () => pool.end())));
+        const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+        if (failures.length) throw new AggregateError(failures, 'Vercel test pools failed to close');
+      } finally { pg.Pool = Pool; }
     }
     console.log(JSON.stringify({ ...result, poolsEnded: pools.length > 0 && pools.every(pool => pool.ended) }));
     process.exit(0);

@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { SHUTDOWN_GRACE_MS, withShutdownDeadline } from '../scripts/owned-process';
 
-type Phase = 'healthy' | 'browser' | 'startup' | 'write' | 'manifest';
+type Phase = 'healthy' | 'browser' | 'browser-server' | 'startup' | 'write' | 'manifest';
 type Result = {
   events: string[];
   rejected: string[];
@@ -65,8 +65,14 @@ async function probe(phase: Phase): Promise<Result> {
       });
       const fixtures = {
         browser: { close: async () => { events.push('browser-close'); if (phase === 'browser') await hang(); } },
+        ownedBrowserServer: phase === 'browser-server' ? { close: hang, process: () => child } : undefined,
         startupTask: phase === 'startup' ? hang() : Promise.resolve(),
-        child, meta, runId, evidence, metadata, socket, join, process, withShutdownDeadline, stopOwnedProcess,
+        child, meta, runId, evidence, metadata, socket, join, process, withShutdownDeadline,
+        stopOwnedProcess: (owned, mode, group) => {
+          if (owned !== child || group !== true) throw new Error('Unexpected fixture ownership');
+          if (mode === 'signal') events.push('server-owner-finalized');
+          return stopOwnedProcess(owned, mode, false);
+        },
         files: async path => (await readdir(path)).map(name => join(path, name)),
         json: async (path, value) => {
           events.push('cleanup-write');
@@ -81,10 +87,10 @@ async function probe(phase: Phase): Promise<Result> {
         server: { close() { events.push('listener-close'); } },
         rm: async (path, options) => {
           events.push(path === socket ? 'socket-remove' : path === metadata ? 'metadata-remove' : 'unexpected-remove');
-          await rm(path, options);
+          await withShutdownDeadline('Test directory cleanup', () => rm(path, options));
         },
       };
-      const setup = 'let cleanupTask, browserClosing; let stopping = false;\\n';
+      const setup = 'let cleanupTask, browserClosing; let browserServer = ownedBrowserServer; let stopping = false;\\n';
       const cleanup = new Function(...Object.keys(fixtures), setup + source.slice(closeStart, closeEnd) + '\\n' + source.slice(cleanupStart, cleanupEnd) + '; return cleanup;')(...Object.values(fixtures));
       const started = performance.now();
       const pending = cleanup();
@@ -103,7 +109,7 @@ async function probe(phase: Phase): Promise<Result> {
       const failure = settled.find(result => result.status === 'rejected')?.reason?.message;
       process.stdout.write(JSON.stringify({ events, rejected, outcomes: settled.map(result => result.status), failure, metadataPreserved, metadataUnchanged, socketPreserved, proofsPreserved, cleanupProofCount, elapsed }));
     } finally {
-      await rm(directory, { recursive: true, force: true });
+      await withShutdownDeadline('Test directory cleanup', () => rm(directory, { recursive: true, force: true }));
     }
   `;
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -159,6 +165,12 @@ it('bounds a verification browser close that never settles and continues owned c
   const result = await probe('browser');
   expectCleanup(result, 'Verification browser close');
   expect(result.cleanupProofCount).toBe(2);
+});
+
+it('finalizes the owned browser server process after its close deadline', async () => {
+  const result = await probe('browser-server');
+  expectCleanup(result, 'Verification browser server close');
+  expect(result.events).toContain('server-owner-finalized');
 });
 
 it('bounds a verification startup barrier that never settles and continues remaining cleanup', async () => {
