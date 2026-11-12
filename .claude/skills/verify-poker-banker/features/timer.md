@@ -30,13 +30,13 @@ Preconditions:
 ```ts
 import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
-import { addPlayer, call, closeSession, current, menu, money, newSession } from '../e2e/helpers';
+import { addPlayer, call, closeSession, current, menu, money, newSession, workspaceReady } from '../e2e/helpers';
 import type { SessionState } from '../src/domain/session';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, context, browser, baseURL, runId, step, checkState }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   await newSession(page, 'Verify manual timer');
   await expect(page.getByTestId('session-timer')).toHaveText('Timer not started');
   await step('timer-manual-start-before');

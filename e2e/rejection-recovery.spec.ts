@@ -1,7 +1,7 @@
 import { typeInput } from './input';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { addPlayer, call, createAccount, current, newSession, openMoney } from './helpers';
+import { openNewSession, addPlayer, call, createAccount, current, newSession, openMoney } from './helpers';
 import type { OutboxItem } from '../src/client/data';
 import type { SessionState } from '../src/domain/session';
 
@@ -127,7 +127,7 @@ for (const status of [431, 503]) {
       if (unavailable) await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error: { code: 'invalid_request', message: 'Untrusted platform rejection' } }) });
       else await route.fulfill({ response });
     });
-    await page.getByRole('button', { name: 'New session', exact: true }).click();
+    await openNewSession(page);
     await typeInput(page.getByLabel('Session name', { exact: true }), 'Committed during delivery failure');
     await typeInput(page.getByLabel('Location', { exact: true }), 'Preserved uncertain location');
     await page.getByRole('button', { name: 'Create session', exact: true }).click();

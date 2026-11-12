@@ -1,14 +1,24 @@
 import { typeInput } from './input';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, createAccount, current, keepMoneyDraft, money, newSession, openMoney } from './helpers';
+import { switchSession, addPlayer, createAccount, current, keepMoneyDraft, money, newSession, openMoney } from './helpers';
 
 test('money cancellation, last buy-in, method selection and compact controls preserve clear choices', async ({ page }, info) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await createAccount(page);
-  await newSession(page, 'Clear choices');
+  const originalSession = await newSession(page, 'Clear choices');
   const player = await addPlayer(page, 'Justin');
   await money(page, player.id, '40', { method: 'cash' });
   await money(page, player.id, '60', { method: 'venmo' });
+  const beforeVoid = await current(page);
+  const firstBuy = beforeVoid.entries.find(entry => entry.kind === 'buy_in' && entry.amount_minor === '4000')!;
+  await page.getByTestId(`entry-${firstBuy.id}`).getByRole('button').click();
+  await page.getByRole('button', { name: 'Void entry', exact: true }).click();
+  await expect(page.getByRole('alertdialog', { name: 'Void ledger entry', exact: true })).toBeVisible();
+  expect((await current(page)).revision).toBe(beforeVoid.revision);
+  await page.getByRole('button', { name: 'Keep entry', exact: true }).click();
+  await expect(page.getByLabel('Replacement amount', { exact: true })).toHaveValue('40.00');
+  expect((await current(page)).revision).toBe(beforeVoid.revision);
+  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
   await openMoney(page, player.id);
   const amount = page.getByTestId('money-amount');
   await amount.focus();
@@ -51,9 +61,8 @@ test('money cancellation, last buy-in, method selection and compact controls pre
     });
     expect(fits, `${name} is a single line at 375px`).toBe(true);
   }
-  const tabs = await page.getByRole('tablist', { name: 'Sessions' }).boundingBox();
-  const history = await page.getByRole('button', { name: 'History', exact: true }).boundingBox();
-  expect(tabs && history && Math.abs(tabs.y - history.y) < 10).toBe(true);
+  await expect(page.getByRole('navigation', { name: 'Workspace navigation' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Switch session', exact: true })).toBeVisible();
   await page.getByTestId('activity').locator('li').last().scrollIntoViewIfNeeded();
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   const last = await page.getByTestId('activity').locator('li').last().boundingBox();
@@ -64,21 +73,25 @@ test('money cancellation, last buy-in, method selection and compact controls pre
   await expect(page.getByRole('region', { name: 'Account', exact: true })).toBeVisible();
   await screen(page, info, 'account');
   await page.getByRole('button', { name: 'Workspace', exact: true }).click();
-  await newSession(page, 'A long early session name that keeps its complete selected border');
-  await newSession(page, 'A long later session name that keeps its complete selected border');
-  const targetTab = page.getByRole('tab').last();
-  const targetId = (await targetTab.getAttribute('data-testid'))!;
-  const targetLabel = (await targetTab.textContent())!;
-  await page.getByRole('tab').first().click();
-  await page.getByRole('button', { name: 'History', exact: true }).click();
-  await page.getByRole('dialog').getByRole('button', { name: new RegExp(targetLabel) }).click();
-  const activeTab = page.getByTestId(targetId);
-  await expect(activeTab).toHaveAttribute('aria-selected', 'true');
-  await expect.poll(() => activeTab.evaluate(button => {
-    const parent = button.parentElement!;
-    const strip = parent.getBoundingClientRect();
-    const tab = button.getBoundingClientRect();
-    return tab.left >= strip.left && tab.right <= strip.left + parent.clientWidth;
-  })).toBe(true);
+  const early = await newSession(page, 'A long early session name that keeps its complete selected border');
+  const later = await newSession(page, 'A long later session name that keeps its complete selected border');
+  await switchSession(page, early.session.id);
+  await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+  await page.getByRole('dialog').getByTestId(`session-tab-${later.session.id}`).click();
+  const active = page.getByRole('button', { name: 'Switch session', exact: true });
+  await expect(active).toHaveAttribute('data-testid', `session-tab-${later.session.id}`);
+  expect(await active.evaluate(button => button.getBoundingClientRect().right <= innerWidth)).toBe(true);
   await screen(page, info, 'selected-session-border');
+  await switchSession(page, originalSession.session.id);
+  await page.getByTestId(`repeat-buy-in-${player.id}`).click();
+  await expect(amount).toHaveValue('17.');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
+  await page.getByTestId(`repeat-buy-in-${player.id}`).click();
+  await expect(amount).toHaveValue('60.00');
+  await keepMoneyDraft(page);
+  await page.reload();
+  await openMoney(page, player.id);
+  await expect(amount).toHaveValue('60.00');
+
 });

@@ -33,12 +33,12 @@ Preconditions:
 ```ts
 import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
-import { addPlayer, current, menu, newSession, openMoney, workerReady } from '../e2e/helpers';
+import { addPlayer, current, menu, newSession, openMoney, workerReady, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, context, baseURL, runId, step, checkState }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   const session = await newSession(page, 'Verify offline queue');
   const player = await addPlayer(page, `Offline ${runId.slice(-8)}`);
   await workerReady(page);
@@ -93,12 +93,12 @@ export default async function ({ page, context, baseURL, runId, step, checkState
 import { typeInput } from '../e2e/input';
 import { randomUUID } from 'node:crypto';
 import { expect } from '@playwright/test';
-import { addPlayer, closeSession, menu, money, newSession, openMoney } from '../e2e/helpers';
+import { addPlayer, closeSession, menu, money, newSession, openMoney, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, context, browser, baseURL, runId, step, checkState }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   const tag = `${runId.slice(-8)}-${randomUUID().slice(0, 6)}`;
   const sessionName = `Verify rejected queue ${tag}`;
   const session = await newSession(page, sessionName);
@@ -131,7 +131,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     await expect(other.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Retry', exact: true }).click();
-    await expect(page.getByTestId(`player-${player.id}`)).toContainText('in $150.00');
+    await expect(page.getByTestId(`player-${player.id}`)).toContainText('Bought $150.00');
     await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
     const buyIns = (await checkState()).entries.filter(entry => entry.kind === 'buy_in').sort((left, right) => BigInt(left.revision) < BigInt(right.revision) ? -1 : BigInt(left.revision) > BigInt(right.revision) ? 1 : 0);
     expect(buyIns.map(entry => entry.amount_minor)).toEqual(['10000', '2000', '3000']);
@@ -155,13 +155,13 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
 import { typeInput } from '../e2e/input';
 import { execFileSync } from 'node:child_process';
 import { expect } from '@playwright/test';
-import { addPlayer, newSession, openMoney, workerReady } from '../e2e/helpers';
+import { addPlayer, newSession, openMoney, workerReady, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, context, baseURL, runId, step, checkState }: RecipeContext) {
   if (new URL(baseURL).hostname !== '127.0.0.1') throw new Error('A/B update proof requires an owned local server; no deployment is authorized');
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   await newSession(page, 'Verify update preservation');
   const player = await addPlayer(page, `Update ${runId.slice(-8)}`);
   await workerReady(page);

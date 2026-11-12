@@ -45,7 +45,7 @@ export async function createAccount(page: Page, testInfo?: TestInfo) {
   await expect(page.getByRole('button', { name: 'Continue to workspace', exact: true })).toBeDisabled();
   await page.getByLabel('I saved these codes', { exact: true }).check();
   await page.getByRole('button', { name: 'Continue to workspace', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   return { username, codes, ...(await call<{ banker: { id: string; username: string } }>(page, '/auth/me')) };
 }
 export async function signIn(page: Page, username: string, secret = password) {
@@ -54,7 +54,7 @@ export async function signIn(page: Page, username: string, secret = password) {
   await typeInput(page.getByLabel('Username', { exact: true }), username);
   await typeInput(page.getByLabel('Password', { exact: true }), secret);
   await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
 }
 export async function signOut(page: Page) {
   await page.getByRole('button', { name: 'Players', exact: true }).click();
@@ -67,8 +67,39 @@ export async function signOut(page: Page) {
   await confirm.click();
   await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
 }
+export async function workspaceReady(page: Page) {
+  const workspace = page.getByRole('navigation', { name: 'Workspace navigation', exact: true }).getByRole('button', { name: 'Workspace', exact: true });
+  await expect(workspace).toBeVisible();
+  await expect(workspace).toHaveAttribute('aria-pressed', 'true');
+  const selected = page.getByRole('button', { name: 'Switch session', exact: true }).and(page.locator('[data-testid^="session-tab-"]'));
+  const welcome = page.getByRole('button', { name: 'Create your first session', exact: true });
+  await expect(selected.or(welcome)).toBeVisible();
+}
+export async function openNewSession(page: Page) {
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('navigation', { name: 'Workspace navigation', exact: true }).getByRole('button', { name: 'Workspace', exact: true }).click();
+  await workspaceReady(page);
+  const existing = await call<{ sessions: { id: string }[] }>(page, '/sessions');
+  if (!existing.sessions.length) await page.getByRole('button', { name: 'Create your first session', exact: true }).click();
+  else {
+    await expect(page.getByRole('button', { name: 'Switch session', exact: true })).toHaveAttribute('data-testid', /^session-tab-/);
+    await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+    await page.getByRole('dialog', { name: 'History', exact: true }).getByRole('button', { name: 'New session', exact: true }).click();
+  }
+  await expect(page.getByRole('dialog', { name: 'New session', exact: true })).toBeVisible();
+}
+export async function switchSession(page: Page, id: string) {
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('navigation', { name: 'Workspace navigation', exact: true }).getByRole('button', { name: 'Workspace', exact: true }).click();
+  await workspaceReady(page);
+  await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+  await page.getByRole('dialog', { name: 'History', exact: true }).getByTestId(`session-tab-${id}`).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Switch session', exact: true })).toHaveAttribute('data-testid', `session-tab-${id}`);
+  await expect.poll(() => new URL(page.url()).searchParams.get('session')).toBe(id);
+}
 export async function newSession(page: Page, name: string, testInfo?: TestInfo) {
-  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  await openNewSession(page);
   await typeInput(page.getByLabel('Session name', { exact: true }), name);
   await typeInput(page.getByLabel('Session date', { exact: true }), '2026-11-10');
   if (testInfo) await screen(page, testInfo, 'new-session');
@@ -120,7 +151,7 @@ export async function closeSession(page: Page, discrepancy = false) {
   await menu(page, 'Close session');
   if (discrepancy) await page.getByRole('checkbox').check();
   await page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true }).click();
-  await expect(page.getByText(discrepancy ? /Closed, off by/ : 'Closed, balanced', { exact: !discrepancy })).toBeVisible();
+  await expect(page.getByText(discrepancy ? 'Closed · chip discrepancy' : 'Closed · chips balanced', { exact: true })).toBeVisible();
   return current(page);
 }
 export async function share(page: Page) {

@@ -5,12 +5,12 @@ import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RecipeContext } from './control';
-import { addPlayer, newSession, openMoney, call } from '../../../../e2e/helpers';
+import { addPlayer, newSession, openMoney, call, workspaceReady } from '../../../../e2e/helpers';
 import type { SessionState } from '../../../../src/domain/session';
 
 export async function ledger({ page, runId, evidence, step, checkState }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   const tag = `${runId.slice(-8)}-${randomUUID().slice(0, 6)}`;
   const session = await newSession(page, `Verify ledger ${tag}`);
   const player = await addPlayer(page, `Ledger Justin ${tag}`);
@@ -41,7 +41,7 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   await expect(page.getByTestId('activity')).toContainText('Venmo');
   await step('bottom-buy-in-confirmed');
   await record('20', 'player-sheet-rebuy', 'Buy-in', false);
-  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Owes $20.00');
+  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Collect $20.00');
   await step('player-sheet-rebuy-unpaid-result');
   await record('20', 'payment-zelle', 'Record payment', undefined, 'Zelle');
   await step('payment-zelle-confirmed');
@@ -68,6 +68,7 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   await page.getByRole('dialog').getByTestId(`entry-${expense.id}`).getByRole('button').click();
   await step('player-entries-void-action');
   await page.getByRole('button', { name: 'Void entry', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm void', exact: true }).click();
   await expect(page.getByTestId(`entry-${expense.id}`)).toContainText('Voided');
   await step('player-entries-void-result');
   state = await checkState();

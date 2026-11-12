@@ -100,7 +100,7 @@ for (const group of ['ledger', 'commands'] as const) {
       if (command.label === 'existing-player') { expect(requests[1]).toMatchObject({ player_id: command.value }); expect(requests[1]).not.toHaveProperty('new_player_name'); }
       if (command.label === 'correction') expect(requests[1]).not.toHaveProperty('replacement_amount_minor');
       if (command.label === 'settings') expect(Object.keys(requests[1]!).sort()).toEqual(['location', 'op_id']);
-      if (command.label === 'rename') await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+      if (command.label === 'rename') await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toBeVisible();
       await page.unroute(`**${command.path}`);
     }
   });

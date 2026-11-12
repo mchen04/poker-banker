@@ -1,0 +1,124 @@
+import { typeInput } from './input';
+import { test, expect, screen } from './fixtures';
+import { addPlayer, closeSession, createAccount, current, menu, newSession, openMoney, storedDraft } from './helpers';
+
+test('cents, invalid precision and zero cash-out agree across saved entries, totals and reports', async ({ page }, info) => {
+  const account = await createAccount(page);
+  const session = await newSession(page, 'Cents at the kitchen table');
+  const player = await addPlayer(page, 'Alexandra with a long player name');
+  await page.getByTestId(`buy-in-${player.id}`).click();
+  const amount = page.getByTestId('money-amount');
+  await typeInput(amount, '12.005');
+  await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+  await expect(page.getByText('Enter no more than 2 decimal places for USD.', { exact: true })).toBeVisible();
+  await expect(amount).toHaveValue('12.005');
+  const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
+  await expect.poll(async () => (await storedDraft<{ amount: string }>(page, key))?.amount).toBe('12.005');
+  await typeInput(amount, '$12.50');
+  await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('saved-confirmation')).toContainText('$12.50');
+  let state = await current(page);
+  expect(state.totals.total_in_minor).toBe('1250');
+  expect(state.players[0]!.payment_in_minor).toBe('1250');
+  await openMoney(page, player.id, 'Tips and meals');
+  await typeInput(amount, '.75');
+  await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
+  await openMoney(page, player.id, 'Cash out');
+  await expect(amount).toHaveValue('');
+  await page.getByRole('button', { name: 'No chips left · $0.00', exact: true }).click();
+  await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
+  state = await current(page);
+  expect(state.players[0]).toMatchObject({ state: 'cashed_out', result_minor: '-1250' });
+  expect(state.players[0]!.expense_minor).toBe('75');
+  expect(state.players[0]!.balance_minor).toBe('0');
+  expect(state.entries.filter(entry => entry.kind === 'payment_out')).toHaveLength(0);
+  await expect(page.getByTestId(`result-${player.id}`)).toContainText('−$12.50');
+  await closeSession(page, true);
+  await page.getByRole('button', { name: 'Players', exact: true }).click();
+  await page.getByTestId(`roster-player-${player.id}`).click();
+  await expect(page.getByTestId('report-profit_loss_minor')).toContainText('−$12.50');
+  await expect(page.getByTestId('report-net_after_expenses_minor')).toContainText('−$13.25');
+  await screen(page, info, 'ux-cents-report');
+});
+
+test('mobile chrome clears the last row and keyboard sheets keep their actions visible', async ({ page }, info) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await createAccount(page);
+  await newSession(page, 'A long friendly Friday game name that wraps without pushing the menu off screen');
+  const player = await addPlayer(page, 'Alexandra Montgomery with a very long name');
+  const nav = page.getByRole('navigation', { name: 'Workspace navigation' });
+  await expect(nav.getByRole('button', { name: 'Workspace', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const geometry = await page.evaluate(() => {
+    const nav = document.querySelector('.bottom-navigation')!.getBoundingClientRect();
+    const actions = document.querySelector('.bottom-bar')!.getBoundingClientRect();
+    return { navBottom: nav.bottom, navTop: nav.top, actionBottom: actions.bottom, height: innerHeight };
+  });
+  expect(geometry.navBottom).toBe(geometry.height);
+  expect(geometry.actionBottom).toBeLessThanOrEqual(geometry.navTop);
+  await page.getByTestId(`repeat-buy-in-${player.id}`).count().then(count => expect(count).toBe(0));
+  await page.getByTestId(`buy-in-${player.id}`).click();
+  const viewport = page.viewportSize()!;
+  await page.setViewportSize({ width: viewport.width, height: 430 });
+  await typeInput(page.getByTestId('money-amount'), '12.50');
+  await page.getByText('Record an earlier time or note', { exact: true }).click();
+  await typeInput(page.getByLabel('Note', { exact: true }), 'Keyboard keeps this amount visible');
+  await expect(page.getByRole('button', { name: 'Save entry', exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(page.getByLabel('Note', { exact: true })).toBeInViewport({ ratio: 1 });
+  await screen(page, info, 'ux-keyboard-sheet');
+  await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
+  await page.setViewportSize(viewport);
+  await page.evaluate(() => scrollTo(0, document.body.scrollHeight));
+  const last = await page.getByTestId('activity').locator('li').last().boundingBox();
+  const bar = await page.getByTestId('session-bottom-bar').boundingBox();
+  expect(last && bar && last.y + last.height <= bar.y).toBe(true);
+  const tooSmall = await nav.getByRole('button').evaluateAll(buttons => buttons.filter(button => button.getBoundingClientRect().height < 44).length);
+  expect(tooSmall).toBe(0);
+  await screen(page, info, 'ux-mobile-workspace');
+  await menu(page, 'Share');
+  await page.getByRole('button', { name: 'Enable sharing', exact: true }).click();
+  const link = await page.getByLabel('Viewer link', { exact: true }).inputValue();
+  await page.getByRole('button', { name: 'Rotate link', exact: true }).click();
+  await expect(page.getByLabel('Viewer link', { exact: true })).toHaveValue(link);
+  await page.getByRole('button', { name: 'Keep link', exact: true }).click();
+  await expect(page.getByLabel('Viewer link', { exact: true })).toHaveValue(link);
+});
+
+test.describe('recovery layout', () => {
+  test.use({ serviceWorkers: 'block' });
+
+test('expanded recovery controls remain reachable beside a money form at keyboard height', async ({ page }) => {
+  const { banker } = await createAccount(page);
+  const session = await newSession(page, 'Recovery at keyboard height');
+  const player = await addPlayer(page, 'Recoverable player');
+  const path = `/api/sessions/${session.session.id}/entries`;
+  await page.route(`**${path}`, route => route.fulfill({ status: 409, contentType: 'application/json', headers: { 'X-PB-Banker-ID': banker.id }, body: JSON.stringify({ error: { code: 'idempotency_mismatch', message: 'Review the saved entry' } }) }));
+  await page.evaluate(async ({ banker, session, player, path }) => {
+    const db = await new Promise<IDBDatabase>(resolve => { const opening = indexedDB.open('poker-banker'); opening.onsuccess = () => resolve(opening.result); });
+    const op = crypto.randomUUID();
+    const tx = db.transaction('outbox', 'readwrite');
+    tx.objectStore('outbox').put({ banker_id: banker, session_id: session, op_id: op, path, method: 'POST', body: { op_id: op, player_id: player, kind: 'payment_out', amount_minor: '5000', method: 'cash', occurred_at: null }, label: 'Recoverable payment', order: 1, status: 'pending', delivery: 'not_sent', attempts: 0, next_attempt_at: 0 });
+    await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); });
+    db.close(); window.dispatchEvent(new Event('pb-data'));
+  }, { banker: banker.id, session: session.session.id, player: player.id, path });
+  await expect(page.getByRole('region', { name: 'Needs review', exact: true })).toBeVisible();
+  await page.getByTestId(`buy-in-${player.id}`).click();
+  await page.setViewportSize({ width: 375, height: 430 });
+  const recovery = page.getByRole('dialog').getByRole('region', { name: 'Needs review', exact: true });
+  await recovery.getByText('Review recovered edit', { exact: true }).click();
+  await typeInput(recovery.getByLabel('Amount', { exact: true }), '50.75');
+  const discard = recovery.getByRole('button', { name: 'Discard recovered draft', exact: true });
+  await discard.scrollIntoViewIfNeeded();
+  await expect(discard).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole('button', { name: 'Save entry', exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport({ ratio: 1 });
+});
+
+});

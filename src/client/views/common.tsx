@@ -5,7 +5,7 @@ import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
 
-export type SheetState = { kind: string; player?: string; entry?: string } | null;
+export type SheetState = { kind: string; player?: string; entry?: string; amount?: string } | null;
 export type ClientState = {
   banker: Banker | null;
   client: BankerClient | null;
@@ -434,6 +434,7 @@ export function DraftSaveStatus() {
 export function ErrorText({ text }: { text: string }) { return text ? <p role="alert" className="error">{text}</p> : null; }
 export function Sheet({ title, children, close, leadingClose = false, closeLabel = 'Done', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const shownError = useRef('');
   const client = useContext(ClientContext);
   const updateBanner = client?.updateBanner;
   const busy = client?.formBusy ?? false;
@@ -469,8 +470,66 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
     document.body.style.overflow = 'hidden';
     return () => { observer.disconnect(); document.removeEventListener('keydown', keyboard); document.body.style.overflow = oldOverflow; previous?.focus(); };
   }, []);
+  useLayoutEffect(() => {
+    const panel = ref.current;
+    const backdrop = panel?.parentElement;
+    const viewport = window.visualViewport;
+    let frame = 0;
+    const keepVisible = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (!panel || !backdrop) return;
+        const height = viewport?.height ?? window.innerHeight;
+        backdrop.style.height = `${height}px`;
+        backdrop.style.setProperty('--sheet-viewport-height', `${height}px`);
+        backdrop.style.top = `${viewport?.offsetTop ?? 0}px`;
+        backdrop.style.bottom = 'auto';
+        const active = document.activeElement;
+        if (!(active instanceof HTMLElement) || !panel.contains(active) || !active.matches('input,select,textarea')) return;
+        const body = active.closest<HTMLElement>('.form-body,.money-fields,.sheet-fields,.sheet-status');
+        if (!body) return;
+        const field = active.getBoundingClientRect();
+        const bounds = body.getBoundingClientRect();
+        if (field.bottom > bounds.bottom - 16) body.scrollTop += field.bottom - bounds.bottom + 16;
+        else if (field.top < bounds.top + 16) body.scrollTop -= bounds.top + 16 - field.top;
+      });
+    };
+    keepVisible();
+    viewport?.addEventListener('resize', keepVisible);
+    viewport?.addEventListener('scroll', keepVisible);
+    window.addEventListener('resize', keepVisible);
+    panel?.addEventListener('focusin', keepVisible);
+    return () => {
+      cancelAnimationFrame(frame);
+      viewport?.removeEventListener('resize', keepVisible);
+      viewport?.removeEventListener('scroll', keepVisible);
+      window.removeEventListener('resize', keepVisible);
+      panel?.removeEventListener('focusin', keepVisible);
+    };
+  }, []);
+  useLayoutEffect(() => {
+    const panel = ref.current;
+    const revealError = () => {
+      const error = panel?.querySelector<HTMLElement>('.error');
+      const message = error?.textContent ?? '';
+      if (message && message !== shownError.current && error) {
+        const body = error.closest<HTMLElement>('.form-body,.money-fields,.sheet-fields,.sheet-status');
+        if (body) {
+          const bounds = body.getBoundingClientRect();
+          const content = error.getBoundingClientRect();
+          if (content.bottom > bounds.bottom - 16) body.scrollTop += content.bottom - bounds.bottom + 16;
+          else if (content.top < bounds.top + 16) body.scrollTop -= bounds.top + 16 - content.top;
+        }
+      }
+      shownError.current = message;
+    };
+    const observer = new MutationObserver(revealError);
+    if (panel) observer.observe(panel, { childList: true, subtree: true, characterData: true });
+    revealError();
+    return () => observer.disconnect();
+  }, []);
   const closeButton = <button type="button" aria-label={leadingClose ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
   return <div className="sheet-backdrop"><div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
-    {updateBanner}<DraftSaveStatus /><div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><fieldset className="sheet-fields" disabled={busy}>{children}</fieldset>
+    <div className="sheet-status">{updateBanner}<DraftSaveStatus /></div><div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><div className="sheet-fields"><fieldset className="sheet-controls" disabled={busy}>{children}</fieldset></div>
   </div></div>;
 }

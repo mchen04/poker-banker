@@ -32,3 +32,11 @@ Screenshots are written under ignored `evidence/screenshots/` in phone and deskt
 Round 5 was built from a clean source archive on this Mac with Node 22, a fresh frozen-lockfile install and `vercel build --prod`. Only the explicitly supplied `.vercel/project.json` link metadata was copied; no environment files were copied, read or downloaded. The clean copy received nonsecret local build settings (Vite, `pnpm build`, `pnpm install --frozen-lockfile`, `dist`, Node `22.x`) so the check did not need `vercel pull` or `--yes`. Receipts and exact source/patch hashes are in `evidence/vercel/r5-final/`.
 
 `cle1` is the function region. Existing locked optional dependencies now include the Linux ARM64 binding required by the emitted function. Server/domain/API relative imports use explicit `.js` suffixes so the emitted ESM loads under plain Node 22. The artifact check imported the complete handler, loaded bundled `pg`, and hashed/verified Argon2id with zero database queries. It verified the matching Linux GNU ELF binding is present; this Mac cannot prove that binary executes on Linux. No deploy or remote database was used. The mini runner excludes `.vercel/` along with environment files.
+
+## Phone UX and money entry
+
+`docs/UX.md` inventories the surfaces and defines the measured control-tap journeys. The shell uses `Workspace navigation`, `Switch session`, player `buy-in-ID` / `repeat-buy-in-ID`, and the separate `session-bottom-bar`. Shared browser helpers follow those real entry points; verification recipes use the same helpers.
+
+Focused checks are `tests/money-input.test.ts`, `tests/domain.test.ts`, `tests/recovery-reachability.test.ts`, and `e2e/mobile-ux.spec.ts` with `e2e/polish.spec.ts` / `e2e/journeys.spec.ts`. The money journey saves cents, retains invalid precision in its draft, cashes out at zero, and checks exact totals and report values. The layout journey checks footer reservation, long names, 44 px navigation targets, short-viewport focused fields/actions and an expanded recovery editor.
+
+A resized visual viewport is a keyboard approximation. Real iOS Home Screen installation, software-keyboard panning, physical home-indicator clearance and suspension still need device checks. Service-worker activation/update behavior is unchanged in this UI round.

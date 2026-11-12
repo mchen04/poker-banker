@@ -45,6 +45,6 @@ test('an update waits for the signup reply and restores its unacknowledged recov
     await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
     await expect(page.getByTestId('recovery-codes')).toHaveText(codes!);
     await expect(page.getByRole('button', { name: 'Continue to workspace', exact: true })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'New session', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toHaveCount(0);
   } finally { await page.evaluate(() => window.dispatchEvent(new Event('release-signup-reply'))).catch(() => {}); }
 });

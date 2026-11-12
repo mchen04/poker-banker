@@ -31,12 +31,12 @@ Preconditions:
 ```ts
 import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
-import { fixtureSession } from '../e2e/helpers';
+import { fixtureSession, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, runId, step, checkState }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   const first = await fixtureSession(page, undefined, { name: 'Verify report one', day: '2026-11-10', result: '6000', hours: 2, blind: '200', expense: '300' });
   const player = first.players[0]!.id;
   await fixtureSession(page, player, { name: 'Verify report two', day: '2026-11-17', result: '-2000', hours: 1, blind: '100', expense: '500' });
@@ -58,6 +58,8 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
     else await typeInput(page.getByLabel(label, { exact: true }), value);
     await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
     await expect(page.getByTestId('report-profit_loss_minor').locator('dd')).toHaveText(expected);
+    if (label === 'Filter weekday') await expect(page.getByRole('button', { name: 'Filter: weekday Tuesday', exact: true })).toBeVisible();
+    if (label === 'Filter month') await expect(page.getByRole('button', { name: 'Filter: month November 2026', exact: true })).toBeVisible();
     if (label === 'From date' || label === 'To date') await expect(page.getByTestId('report-variation_per_hour_minor')).toContainText('Unavailable · needs two sessions');
     await step(`reports-filter-${label.toLowerCase().replaceAll(' ', '-')}`);
     await page.getByRole('button', { name: /^Filter: / }).click();

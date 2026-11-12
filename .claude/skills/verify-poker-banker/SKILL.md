@@ -15,7 +15,7 @@ From the repository root, run:
 .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
 ```
 
-Keep the returned run ID. Local launch builds production assets, starts a fresh embedded Postgres with migrations and the same local Hono server used by `pnpm start:local`, and starts an owned headless WebKit browser. Ready means the helper has signed up its own banker, acknowledged the recovery codes and loaded Workspace. A listening port alone is insufficient.
+Keep the returned run ID. Local launch builds production assets, starts a fresh embedded Postgres with migrations and the same local Hono server used by `pnpm start:local`, and starts an owned headless WebKit browser. Ready means the helper has signed up its own banker, acknowledged the recovery codes and loaded Workspace. Ready requires the active Workspace navigation plus the selected Switch session control or the empty workspace’s Create your first session action. A listening port alone is insufficient.
 
 For a deployed URL, explicitly select live mode:
 
@@ -48,7 +48,7 @@ Every later command takes `--run RUN_ID`. Run IDs keep ports, data directories, 
 .claude/skills/verify-poker-banker/scripts/verify.sh doctor --run RUN_ID
 ```
 
-Require success before driving. This single read-only check verifies the owned process, build identity, local port ownership when applicable, authenticated banker ID and usable Workspace. It must report the intended base URL and banker. On a mismatch, stop driving and clean up that run. Do not reuse another run or the user's browser.
+Require success before driving. This check returns the owned page to Workspace without dismissing an open sheet, then verifies the owned process, build identity, local port ownership when applicable, authenticated banker ID and usable Workspace. It must report the intended base URL and banker. On a mismatch, stop driving and clean up that run. Do not reuse another run or the user's browser.
 
 ## Drive
 
@@ -77,7 +77,7 @@ rsync -az .cache/verify-sessions.ts mini:worktrees/poker-banker/.cache/verify-se
 
 Alternatively write the shown recipe inside the mini checkout. Do not synchronize other cache content.
 
-A recipe exports an async default function receiving `RecipeContext` from `scripts/control.ts`. Its `page` is already signed into this run's banker. `step(name)` captures the primary page's action/result evidence. `checkState()` reads the selected session through the public API. Use `expect`, ARIA names and repository test IDs. Do not set application state, edit IndexedDB or call test-only endpoints to manufacture a pass. Fresh contexts created by a recipe must be closed in `finally`.
+A recipe exports an async default function receiving `RecipeContext` from `scripts/control.ts`. Its `page` is already signed into this run's banker. `step(name)` captures the primary page's action/result evidence. `checkState()` reads the selected session through the public API. Use `expect`, ARIA names and repository test IDs. Navigate through `workspaceReady`, `openNewSession` and `switchSession` from `e2e/helpers.ts`; session choices live in the History dialog opened by Switch session. Do not set application state, edit IndexedDB or call test-only endpoints to manufacture a pass. Fresh contexts created by a recipe must be closed in `finally`.
 
 Run each feature from its declared prerequisites. A missing fixture fails the recipe and belongs in its Gotchas. A convenient path does not prove the other listed entry points. These files are maintained recipes, not a claim that every feature was executed this round.
 

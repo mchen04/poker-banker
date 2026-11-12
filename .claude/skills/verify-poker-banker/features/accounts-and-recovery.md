@@ -30,12 +30,12 @@ Preconditions:
 import { typeInput } from '../e2e/input';
 import { writeFile } from 'node:fs/promises';
 import { expect } from '@playwright/test';
-import { addPlayer, createAccount, newSession, signIn, signOut } from '../e2e/helpers';
+import { addPlayer, createAccount, newSession, signIn, signOut, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, browser, baseURL, evidence, step }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   const options = { baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', locale: 'en-US', timezoneId: 'UTC' };
   const accountContext = await browser.newContext(options);
   const oldContext = await browser.newContext(options);

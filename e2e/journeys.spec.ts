@@ -1,7 +1,7 @@
 import { typeInput } from './input';
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newSession, openMoney, share, signIn, signOut, storedDraft, workerReady } from './helpers';
+import { switchSession, addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newSession, openMoney, share, signIn, signOut, storedDraft, workerReady } from './helpers';
 
 test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
   const user = await createAccount(page, testInfo);
@@ -42,7 +42,7 @@ test('account signup acknowledgement, sign-in and one-use recovery revoke old co
     await typeInput(page.getByLabel('Password', { exact: true }), recoveredPassword);
     await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
     await expect(page.getByTestId(`session-tab-${state.session.id}`)).toBeVisible();
-    await page.getByTestId(`session-tab-${state.session.id}`).click();
+    await switchSession(page, state.session.id);
     await expect(page.getByRole('heading', { name: 'Recovery preserves draft', exact: true })).toBeVisible();
     await openMoney(page, player.id);
     await expect(page.getByTestId('money-amount')).toHaveValue('42.');
@@ -69,7 +69,7 @@ test('two bankers cannot open each other session or private history', async ({ p
   } finally { await bContext.close(); }
 });
 
-test('same-day session tabs and month history restore separate drafts after reload', async ({ page }, testInfo) => {
+test('same-day session picker and month history restore separate drafts after reload', async ({ page }, testInfo) => {
   const account = await createAccount(page);
   const first = await newSession(page, 'Early game', testInfo);
   const justin = await addPlayer(page, 'Justin', testInfo);
@@ -89,11 +89,11 @@ test('same-day session tabs and month history restore separate drafts after relo
   await openMoney(page, justin.id);
   await expect(page.getByTestId('money-amount')).toHaveValue('34.');
   await keepMoneyDraft(page);
-  await page.getByTestId(`session-tab-${first.session.id}`).click();
+  await switchSession(page, first.session.id);
   await openMoney(page, justin.id);
   await expect(page.getByTestId('money-amount')).toHaveValue('12.');
   await keepMoneyDraft(page);
-  await page.getByRole('button', { name: 'History', exact: true }).click();
+  await page.getByRole('button', { name: 'Switch session', exact: true }).click();
   await typeInput(page.getByLabel('Search sessions', { exact: true }), 'Late');
   await screen(page, testInfo, 'history');
   await page.getByRole('dialog').getByRole('button', { name: /Late game/ }).click();
@@ -112,12 +112,12 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   await page.getByTestId(`player-${player.id}`).click();
   await screen(page, testInfo, 'player-sheet');
   await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
-  await expect(page.getByTestId(`result-${player.id}`)).toContainText('Playing, in $150.00');
+  await expect(page.getByTestId(`result-${player.id}`)).toHaveText('Playing');
   await money(page, player.id, '180', { kind: 'Cash out', testInfo });
   await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$30.00 up');
-  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Bank owes $180.00');
+  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Pay $180.00');
   await money(page, player.id, '20', { paid: false });
-  await expect(page.getByTestId(`result-${player.id}`)).toContainText('Playing, in $170.00');
+  await expect(page.getByTestId(`result-${player.id}`)).toHaveText('Playing');
   let state = await money(page, player.id, '10', { kind: 'Cash out' });
   const original = state.entries.find(entry => entry.kind === 'cash_out' && entry.amount_minor === '1000')!;
   await page.getByTestId(`entry-${original.id}`).getByRole('button').click();
@@ -183,16 +183,18 @@ test('payment methods persist through reload, later settlement and visible corre
     await expect(page.getByTestId('activity')).toContainText('Cash');
     await money(page, player.id, '5', { method: 'venmo' });
     const savedAt = Date.now();
-    await expect(viewer.getByTestId(`player-${player.id}`)).toContainText('in $65.00', { timeout: 3000 });
+    await expect(viewer.getByTestId(`player-${player.id}`)).toContainText('Bought $65.00', { timeout: 3000 });
     expect(Date.now() - savedAt).toBeLessThan(3000);
     await menu(page, 'Share');
     await screen(page, testInfo, 'share');
     await page.getByRole('button', { name: 'Rotate link', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm rotate', exact: true }).click();
     await expect(page.getByLabel('Viewer link', { exact: true })).not.toHaveValue(viewerLink);
     const rotatedLink = await page.getByLabel('Viewer link', { exact: true }).inputValue();
     await viewer.reload();
     await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Disable sharing', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm disable', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Enable sharing', exact: true })).toBeVisible();
     await viewer.goto(rotatedLink);
     await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();
@@ -310,8 +312,8 @@ test('offline queue excludes unconfirmed totals, survives reload, saves once and
     await expect(page.getByText(/Offline/).first()).toBeVisible();
     await expect(page.getByText('Not saved yet', { exact: true }).first()).toBeVisible();
     await page.context().setOffline(false);
-    await expect(page.getByTestId(`player-${player.id}`)).toContainText('in $20.00');
-    await expect(viewer.getByTestId(`player-${player.id}`)).toContainText('in $20.00', { timeout: 3000 });
+    await expect(page.getByTestId(`player-${player.id}`)).toContainText('Bought $20.00');
+    await expect(viewer.getByTestId(`player-${player.id}`)).toContainText('Bought $20.00', { timeout: 3000 });
     const confirmed = await current(page);
     expect(confirmed.entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(1);
     const item = queued[0]!;

@@ -1,7 +1,7 @@
 import { typeInput } from './input';
 import type { Request } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { addPlayer, call, closeSession, createAccount, current, menu, money, newSession, signOut } from './helpers';
+import { openNewSession, addPlayer, call, closeSession, createAccount, current, menu, money, newSession, signOut } from './helpers';
 import type { SessionState } from '../src/domain/session';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
@@ -21,13 +21,13 @@ test('a lost create response reconciles the submitted draft before a fresh sessi
     expect(response.status()).toBe(200);
     await route.abort('failed');
   });
-  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  await openNewSession(page);
   await typeInput(page.getByLabel('Session name', { exact: true }), 'First committed game');
   await page.getByRole('button', { name: 'Create session', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
   await expect(page.getByLabel('Session name', { exact: true })).toHaveCount(0);
   await page.reload();
-  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  await openNewSession(page);
   await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'First committed game', exact: true })).toBeVisible();
@@ -53,19 +53,19 @@ for (const recovery of ['sheet', 'workspace'] as const) {
       expect((await route.fetch()).status()).toBe(400);
       await route.abort('failed');
     });
-    await page.getByRole('button', { name: 'New session', exact: true }).click();
+    await openNewSession(page);
     await typeInput(page.getByLabel('Session name', { exact: true }), '   ');
     await typeInput(page.getByLabel('Location', { exact: true }), 'Retained typed location');
     await page.getByRole('button', { name: 'Create session', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
     await page.reload();
     if (recovery === 'sheet') {
-      await page.getByRole('button', { name: 'New session', exact: true }).click();
+      await openNewSession(page);
       await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
     } else {
       await page.getByRole('button', { name: 'Check saved form: New session', exact: true }).click();
       await expect(page.getByRole('region', { name: 'Unconfirmed forms', exact: true })).toHaveCount(0);
-      await page.getByRole('button', { name: 'New session', exact: true }).click();
+      await openNewSession(page);
     }
     await expect(page.getByLabel('Session name', { exact: true })).toHaveValue('   ');
     await expect(page.getByLabel('Location', { exact: true })).toHaveValue('Retained typed location');
@@ -241,7 +241,7 @@ test('a late form acknowledgement after another tab signs out cannot restore pri
       if (!heldRequest.failure()) await route.fulfill({ response });
     } finally { settled(); }
   });
-  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  await openNewSession(page);
   await typeInput(page.getByLabel('Session name', { exact: true }), 'Held server acknowledgement');
   await page.getByRole('button', { name: 'Create session', exact: true }).click();
   await committedRequest;

@@ -62,11 +62,11 @@ for (const failure of ['draft quota', 'restoration marker'] as const) {
     await page.reload();
     await expect(page.getByTestId('recovery-codes')).toBeVisible();
     expect((await page.getByTestId('recovery-codes').textContent())!.match(/[a-f0-9]{8}(?:-[a-f0-9]{8}){3}/g)).toEqual(codes);
-    await expect(page.getByRole('button', { name: 'New session', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toHaveCount(0);
     await expect(proceed).toBeDisabled();
     await page.getByLabel('I saved these codes', { exact: true }).check();
     await proceed.click();
-    await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem('pb-pending-codes'))).toBeNull();
     expect(await recoveryDraft(page, key)).toBeUndefined();
   });
@@ -94,7 +94,7 @@ test('recovery-code restoration requires a successful owner draft read even when
   });
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Restore your recovery codes', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toHaveCount(0);
   await page.evaluate(() => window.dispatchEvent(new Event('recovery-read-restored')));
   await page.getByRole('button', { name: 'Retry restoring recovery codes', exact: true }).click();
   await expect(page.getByTestId('recovery-codes')).toHaveText(codes);
@@ -102,5 +102,5 @@ test('recovery-code restoration requires a successful owner draft read even when
   await expect(page.getByRole('button', { name: 'Continue to workspace', exact: true })).toBeDisabled();
   await page.getByLabel('I saved these codes', { exact: true }).check();
   await page.getByRole('button', { name: 'Continue to workspace', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toBeVisible();
 });

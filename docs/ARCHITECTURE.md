@@ -165,19 +165,20 @@ Hand-written `public/sw.js`, stamped at build with a release version and the pre
 
 ## UI
 
-One workspace, phone-first, readable vertical scrolling, no horizontal tables.
+One workspace, phone and installed-iOS first, readable vertical scrolling, no horizontal tables. The round-35 continuation replaces the former top navigation and session strip.
 
-- Top: a session strip with the open and most recent sessions as tabs labeled `Nov 10 · Friday game`, scrollable sideways if needed, plus a History button that opens a searchable picker sheet grouped by month, and a New session action.
-- Header: name, date, currency, status in words ("Open", "Closed, balanced", "Closed, off by $20").
-- Totals strip: In, Out, On table or Off by, Owed to bank, Bank owes.
-- Player list: two-line rows. Line one is name and either "Playing, in $100" or the result with sign and word ("+$40 up", "−$60 down", "Even"). Line two is the detail ("In $100, 1 rebuy, Out $140") and payment state as text with a glyph ("Settled", "Owes $60", "Bank owes $40").
-- Player sheet: that player's entries with void or correct actions, plus Buy-in, Cash out, and Record payment.
-- Money sheet: a large amount field with `inputmode="decimal"`, quick amounts (last buy-in, session default, double), the Paid now switch, and a saved confirmation showing the stored amount.
-- Activity: newest first, one line per entry, voids struck through and labeled "Voided" in text.
-- Bottom bar within thumb reach: Add player and Buy-in as the primary action, with Close or Reopen in the session menu.
-- Players screen: the roster with per-currency cumulative results from closed sessions and outstanding balances. Player detail lists past sessions. Rename keeps history.
-- Viewer page: the same session view without controls, labeled "View only, updated 9:42 PM".
-- Design tokens: Apple-like type scale (28, 20, 17, 15, 13 px in rem), weights 400 and 600, spacing 4 to 32, warm grays plus one muted accent, tabular figures right-aligned, 44 px minimum targets, safe-area padding, light and dark themes, 4.5:1 contrast. Status always has a word or glyph, never color alone. No gradients, glass, emoji, avatar blobs or pills on every value.
+- A single safe-area-aware bottom navigation bar provides Workspace and Players. A separate transaction footer sits above it in the workspace. Its primary action follows the current session; other actions are secondary. Main content reserves the complete height of both fixed regions, and viewers receive neither banker navigation nor transaction controls.
+- One session picker opens the recent sessions and searchable, month-grouped History, with New session in that picker and the empty workspace. Existing session IDs remain the switch targets; changing sessions preserves each form's own draft.
+- The session header presents the game name, date, currency, timer and a plain open/closed state. Long names wrap or truncate without pushing controls outside the viewport.
+- Session priorities distinguish playing chips, payments still to collect and money still to pay. Buy-in and cash-out totals remain available at lower visual weight. A discrepancy is explained as the difference between chips bought and chips returned, without treating payments as profit.
+- Player rows use plain states such as Not bought in, Playing and Cashed out, and No payment due instead of Seated or Settled. A contextual buy-in or repeat action opens a reviewable money sheet; it never writes immediately. Player details retain cash-out, payment, tips/meals and complete correction history.
+- Money entry has an integrated currency label, exact saved-amount feedback, and visible validation. Paid now stays on by default for buy-ins, with the last effective session payment method or Cash. Last buy-in repeats are explicit prefills and never replace an existing draft. Cash-out is not guessed from money in; a banker supplies the actual chips returned. Payment balances may be suggested explicitly.
+- Sheets share one layout, with a scrollable body and separated action footer. Visual viewport changes keep the editor and save action above the software keyboard. Draft, submission, cancellation, correction, void, close and sign-out safeguards remain in force.
+- Close explains playing-player and pending-entry blockers in place. A discrepancy requires consent to its exact amount and revision. Reopen still requires a reason. Share rotation/disabling and financial corrections retain explicit confirmation.
+- Players and player detail retain per-currency closed-session results, outstanding balances, rename/history, all report metrics, groupings and filters. Viewer pages retain live, read-only session data and the last-updated label.
+- One type and spacing scale, warm neutral surfaces and a restrained accent apply to access, workspace, roster, reports and sheets, in light and dark. Controls have at least 44 px targets, visible focus and textual state. No gradients, glass, emoji, avatar blobs or pills on every value.
+
+Money input is normalized as a string, never a float. Currency-appropriate symbols, correctly grouped commas, leading decimal amounts and outer whitespace may be accepted; excessive fractional digits and malformed grouping are rejected with actionable text. JPY accepts whole units. Zero is valid only where the ledger permits it. The per-entry and blind limit is PostgreSQL signed bigint's 9223372036854775807 minor units, matching the HTTP validation limit; there is no smaller convenience cap.
 
 ## Deployment order
 

@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 import { webkit, devices, expect, type Browser, type BrowserServer, type BrowserContext, type Page } from '@playwright/test';
 import type { SessionState } from '../../../../src/domain/session';
-import { createAccount, signIn, current } from '../../../../e2e/helpers';
+import { createAccount, signIn, current, workspaceReady } from '../../../../e2e/helpers';
 import { ledger } from './ledger';
 import { createProcessOwner, spawnOwned, stopOwned, withShutdownDeadline, type ProcessOwner } from '../../../../scripts/owned-process';
 import { ownedMain, runOwned } from '../../../../scripts/owned-command';
@@ -134,7 +134,9 @@ async function daemon() {
     const release = (await shell.text()).match(/name="pb-release" content="([^"]+)"/)?.[1];
     expect(release).toBe(meta.release);
     const history = await page.request.get(`${meta.baseURL}/api/sessions`); expect(history.status()).toBe(200);
-    await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await page.getByRole('navigation', { name: 'Workspace navigation', exact: true }).getByRole('button', { name: 'Workspace', exact: true }).click();
+    await workspaceReady(page);
     if (local) {
       const listener = Number((await runOwned(owner, 'lsof', ['-nP', `-iTCP:${meta.port}`, '-sTCP:LISTEN', '-t'])).trim());
       expect(listener).toBe(meta.listenerPid);
@@ -232,7 +234,7 @@ async function daemon() {
     starting();
     user = await createAccount(page);
     starting();
-    await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+    await workspaceReady(page);
     const shell = await page.request.get(meta.baseURL);
     meta.release = (await shell.text()).match(/name="pb-release" content="([^"]+)"/)?.[1];
     if (!meta.release) throw new Error('Build release stamp is missing');

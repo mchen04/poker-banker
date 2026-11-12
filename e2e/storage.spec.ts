@@ -2,7 +2,7 @@ import { typeInput } from './input';
 import type { Request } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, call, createAccount, current, keepMoneyDraft, money, newSession, openMoney } from './helpers';
+import { switchSession, addPlayer, call, createAccount, current, keepMoneyDraft, money, newSession, openMoney } from './helpers';
 import type { SessionState } from '../src/domain/session';
 
 test('a version 1 database upgrades forward and preserves both session drafts exactly', async ({ page }) => {
@@ -35,7 +35,7 @@ test('a version 1 database upgrades forward and preserves both session drafts ex
   await expect(page.getByTestId('money-amount')).toHaveValue('73.45');
   await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await keepMoneyDraft(page);
-  await page.getByTestId(`session-tab-${second.session.id}`).click();
+  await switchSession(page, second.session.id);
   await openMoney(page, player.id);
   await expect(page.getByTestId('money-amount')).toHaveValue('91.');
   const migrated = await page.evaluate(async () => {
@@ -74,7 +74,7 @@ test('rejected writes stay visible, block the session in order, and support retr
   state = await call<SessionState>(page, `/sessions/${state.session.id}/reopen`, 'POST', { op_id: randomUUID(), reason: 'Apply queued entries' });
   state = await call<SessionState>(page, `/sessions/${state.session.id}/timing`, 'PATCH', { op_id: randomUUID(), started_at: state.session.started_at, ended_at: null });
   await page.getByTestId(`pending-${queued[0]!.op_id}`).getByRole('button', { name: 'Retry', exact: true }).click();
-  await expect(page.getByTestId(`player-${player.id}`)).toContainText('in $150.00');
+  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Bought $150.00');
   state = await current(page);
   expect(state.entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(3);
   const buys = state.entries.filter(entry => entry.kind === 'buy_in').sort((a, b) => Number(a.revision) - Number(b.revision));
