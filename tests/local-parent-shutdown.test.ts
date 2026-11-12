@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn } from './processes';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { expect, it } from 'vitest';
@@ -13,9 +13,10 @@ for (const phase of ['ready', 'before-import'] as const) it(`stops its detached 
   const port = (socket.address() as { port: number }).port;
   await closeOwnedServer(socket);
   const script = `
-    const { spawn } = require('node:child_process');
+    const { createProcessOwner, spawnOwned } = await import(${JSON.stringify(new URL('../scripts/owned-process.ts', import.meta.url).href)});
+    const registry = createProcessOwner();
     const args = ${JSON.stringify(phase === 'ready' ? ['--import', 'tsx', 'src/server/local.ts'] : ['--import', 'tsx', '--input-type=module', '-e', "setTimeout(() => { void import('./src/server/local.ts'); }, 200);"])};
-    const child = spawn(process.execPath, args, {
+    const child = spawnOwned(registry, process.execPath, args, {
       detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: process.env,
     });
     if (${JSON.stringify(phase)} === 'before-import') process.send({ pid: child.pid });
@@ -26,7 +27,7 @@ for (const phase of ['ready', 'before-import'] as const) it(`stops its detached 
     });
     child.stderr.resume();
   `;
-  const owner = spawn(process.execPath, ['-e', script], {
+  const owner = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
     detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     env: { ...process.env, DATABASE_URL: database.pool.options.connectionString, PORT: String(port) },
   });
@@ -44,11 +45,7 @@ for (const phase of ['ready', 'before-import'] as const) it(`stops its detached 
     expect((await database.pool.query('SELECT 1 AS value')).rows[0]!.value).toBe(1);
   } finally {
     try {
-      if (app) {
-        try { process.kill(-app, 'SIGKILL'); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-      }
-      await stopOwnedProcess(owner, 'signal', true).catch(error => {
+      await stopOwnedProcess(owner).catch(error => {
         if (!String(error).includes('Owned process exited SIGKILL')) throw error;
       });
     } finally { await database.stop(); }

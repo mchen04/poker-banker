@@ -1,5 +1,5 @@
 import { closeOwnedServer } from '../scripts/close-server';
-import { spawn } from 'node:child_process';
+import { spawn } from './processes';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -59,7 +59,7 @@ it('handles an idle backend termination without an uncaught exception and reconn
     expect(result.value).toBe(1);
     expect(result.pid).not.toBe(first.pid);
     expect(result.poolEnded).toBe(true);
-  } finally { await stopOwnedProcess(child, 'signal'); }
+  } finally { await stopOwnedProcess(child); }
 });
 
 it('logs only the error code or a fixed safe message without exposing error or connection details', async () => {
@@ -113,32 +113,24 @@ it.each([0, 1])('ends the local app child pool before its embedded database when
   const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', launcher, 'db-local', process.execPath, '--import', 'tsx', '--input-type=module', '-e', script], { cwd: directory, env: { ...process.env, PG_LOCAL_PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
   let appPid: number | undefined;
   let output = '';
+  let diagnosticsOutput = '';
   const ready = new Promise<void>((done, reject) => {
     child.stdout!.on('data', chunk => { output += String(chunk); const match = /APP_READY:(\d+)/.exec(output); if (match) { appPid = Number(match[1]); done(); } });
     child.once('error', reject);
     child.once('exit', () => { if (!appPid) reject(new Error('Local app exited before readiness')); });
   });
-  child.stderr!.resume();
+  child.stderr!.on('data', bytes => { diagnosticsOutput += String(bytes); });
   try {
     await ready;
     const exited = once(child, 'exit', { signal: AbortSignal.timeout(10000) });
     child.kill('SIGTERM');
     const [code] = await exited;
-    expect(JSON.parse(await readFile(diagnostics, 'utf8'))).toEqual({ code: childExit, rejected: [] });
+    expect(JSON.parse(await readFile(diagnostics, 'utf8')), diagnosticsOutput).toEqual({ code: childExit, rejected: [] });
     expect(code).toBe(childExit);
     expect(JSON.parse(await readFile(marker, 'utf8'))).toEqual({ value: 1, ended: true });
   } finally {
-    try {
-      if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
-    } finally {
-      try {
-        if (appPid) {
-          try { process.kill(appPid, 'SIGTERM'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-          try { await vi.waitFor(() => { try { process.kill(appPid!, 0); throw new Error('Owned app has not stopped'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; } }, { timeout: 3000 }); }
-          catch (error) { try { process.kill(appPid, 'SIGKILL'); } catch (killError) { if ((killError as NodeJS.ErrnoException).code !== 'ESRCH') throw killError; } throw error; }
-        }
-      } finally { await withShutdownDeadline('Test directory cleanup', () => rm(directory, { recursive: true, force: true })); }
-    }
+    try { await stopOwnedProcess(child).catch(error => { if (child.exitCode !== childExit) throw error; }); }
+    finally { await withShutdownDeadline('Test directory cleanup', () => rm(directory, { recursive: true, force: true })); }
   }
 });
 
@@ -176,7 +168,9 @@ it('ends a live migration pool before PostgreSQL when local startup is cancelled
     };
     await import(${JSON.stringify(new URL('../scripts/db-local.ts', import.meta.url).href)});
   `;
-  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { cwd: directory, env: { ...process.env, PG_LOCAL_PORT: String(port) }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { cwd: directory, env: { ...process.env, PG_LOCAL_PORT: String(port) }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  let diagnosticsOutput = '';
+  child.stderr!.on('data', bytes => { diagnosticsOutput += String(bytes); });
   try {
     const [ready] = await once(child, 'message', { signal: AbortSignal.timeout(10000) }) as [{ type: string }];
     expect(ready.type).toBe('migration');
@@ -185,12 +179,12 @@ it('ends a live migration pool before PostgreSQL when local startup is cancelled
     child.kill('SIGTERM');
     expect((await cancelled)[0]).toEqual({ type: 'cancelled' });
     child.send('continue');
-    expect((await exited)[0]).toBe(0);
+    expect((await exited)[0], diagnosticsOutput).toBe(0);
     expect(JSON.parse(await readFile(marker, 'utf8'))).toEqual({ value: 1, ended: true });
   } finally {
     try {
       if (child.connected) child.send('continue', () => {});
-      if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
+      if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child);
     } finally { await withShutdownDeadline('Test directory cleanup', () => rm(directory, { recursive: true, force: true })); }
   }
 });

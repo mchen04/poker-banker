@@ -1,5 +1,6 @@
 import { closeOwnedServer } from '../scripts/close-server';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from './processes';
+import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -98,7 +99,7 @@ it('removes its database after its owning process exits without calling stop', a
 it('reports a failed spawn without waiting for an exit event that cannot arrive', async () => {
   const child = spawn(`${marker}/missing-owned-process`, [], { stdio: 'ignore' });
   await new Promise<void>(resolve => child.once('error', () => resolve()));
-  await expect(stopOwnedProcess(child)).rejects.toThrow('Owned process failed to start');
+  await expect(stopOwnedProcess(child)).rejects.toThrow('ENOENT');
 });
 
 it('removes a database when its owner exits during startup before readiness', async () => {
@@ -122,9 +123,9 @@ it('removes a database when its owner exits during startup before readiness', as
 
 it('accepts requested termination before a handler is installed but rejects unrelated failed exits', async () => {
   const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
-  await stopOwnedProcess(child, 'signal');
+  await stopOwnedProcess(child);
   expect(child.signalCode).toBe('SIGTERM');
   const failed = spawn(process.execPath, ['-e', 'process.exit(17)'], { stdio: 'ignore' });
   await exited(failed);
-  await expect(stopOwnedProcess(failed, 'signal')).rejects.toThrow('Owned process exited 17');
+  await expect(stopOwnedProcess(failed)).rejects.toThrow('Owned process exited 17');
 });

@@ -1,10 +1,8 @@
-import { execFile } from 'node:child_process';
+import { execute } from './processes';
 import { randomUUID } from 'node:crypto';
-import { promisify } from 'node:util';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { testDatabase } from './database';
 
-const execute = promisify(execFile);
 const origin = 'https://poker-banker.example';
 let database: Awaited<ReturnType<typeof testDatabase>>;
 beforeAll(async () => { database = await testDatabase(); });
