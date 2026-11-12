@@ -10,8 +10,16 @@ describe('money entry', () => {
     expect(parseMoney(input, 'USD')).toBe(minor);
   });
 
-  it.each(['1,23.45', '12,34,567.89', '1234,567.89', ',123', '1,,234', '1,234,', '1.234,56', '12 34', '1e2', '12.50x', '12.50 USD', '€12.50', '$$12.50', '12.', '+12', 'NaN', 'Infinity'])('rejects malformed USD entry %j with a usable example', input => {
-    expect(() => parseMoney(input, 'USD')).toThrow('Enter a USD amount like 12.50 or 1,234.56. Use commas only in groups of three digits.');
+  it.each(['1,23.45', '12,34,567.89', '1234,567.89', ',123', '1,,234', '1,234,', '1.234,56', '12 34', '1e2', '12.50x', '12.50 USD', '€12.50', '$$12.50', '+12', 'NaN', 'Infinity'])('rejects malformed USD entry %j with a usable example', input => {
+    expect(() => parseMoney(input, 'USD')).toThrow('Enter a USD amount like 12.50 or 1,234.56. Use one decimal separator or commas in groups of three digits.');
+  });
+
+  it.each([
+    ['12,5', 'USD', 1250n], ['12,50', 'USD', 1250n], ['1234,56', 'EUR', 123456n],
+    ['€12,50', 'EUR', 1250n], ['12.', 'USD', 1200n], ['1,234.', 'USD', 123400n],
+    ['1,234', 'USD', 123400n], ['1,234', 'KWD', 1234000n], ['1234,567', 'KWD', 1234567n],
+  ])('accepts unambiguous comma decimals or trailing periods %j in %s', (input, currency, expected) => {
+    expect(parseMoney(input, currency)).toBe(expected);
   });
 
   it.each(['', '  ', '$'])('asks for a missing amount %j', input => {

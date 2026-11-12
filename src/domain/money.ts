@@ -17,10 +17,12 @@ export function parseMoney(input: string, currency: string): bigint {
   if (symbol) amount = amount.slice(symbol.length).trimStart();
   if (!amount) throw new Error(`Enter an amount in ${currency}.`);
   if (/^[-−]/.test(amount)) throw new Error('Enter zero or a positive amount; remove the minus sign.');
-  if (!/^(?:(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?|\.\d+)$/.test(amount)) {
+  const commaDecimal = /^(\d*),(\d+)$/.exec(amount);
+  if (exponent > 0 && commaDecimal && commaDecimal[2]!.length <= exponent && !/^\d{1,3},\d{3}$/.test(amount)) amount = amount.replace(',', '.');
+  if (!/^(?:(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d*)?|\.\d+)$/.test(amount)) {
     throw new Error(exponent === 0
       ? `Enter a whole ${currency} amount like 1234 or 1,234.`
-      : `Enter a ${currency} amount like 12.50 or 1,234.56. Use commas only in groups of three digits.`);
+      : `Enter a ${currency} amount like 12.50 or 1,234.56. Use one decimal separator or commas in groups of three digits.`);
   }
   const [whole = '', fraction = ''] = amount.replaceAll(',', '').split('.');
   if (fraction.length > exponent) {
