@@ -3,7 +3,6 @@ import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
-import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { createPool } from '../src/server/db';
 import { stopOwnedProcess } from '../scripts/owned-process';
@@ -80,9 +79,10 @@ it('logs only the error code or a fixed safe message without exposing error or c
   } finally { await pool.end(); log.mockRestore(); }
 });
 
-it('ends the local app child pool before stopping its embedded database', async () => {
+it.each([0, 1])('ends the local app child pool before its embedded database when the child exits %s', async childExit => {
   const directory = await mkdtemp(resolve('.cache/db-launcher-'));
   const marker = resolve(directory, 'child-stopped.json');
+  const diagnostics = resolve(directory, 'launcher-exit.json');
   const server = createServer();
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
   const port = (server.address() as { port: number }).port;
@@ -96,11 +96,18 @@ it('ends the local app child pool before stopping its embedded database', async 
       const result = await pool.query('SELECT 1 AS value');
       await pool.end();
       await writeFile(${JSON.stringify(marker)}, JSON.stringify({ value: result.rows[0].value, ended: pool.ended }));
-      process.exit(0);
+      process.exit(${childExit});
     })(); });
     console.log('APP_READY:' + process.pid);
   `;
-  const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('../scripts/db-local.ts', import.meta.url)), process.execPath, '--import', 'tsx', '--input-type=module', '-e', script], { cwd: directory, env: { ...process.env, PG_LOCAL_PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const launcher = `
+    import { writeFileSync } from 'node:fs';
+    const rejected = [];
+    process.on('unhandledRejection', error => rejected.push(error instanceof Error ? error.message : 'Unknown failure'));
+    process.on('exit', code => writeFileSync(${JSON.stringify(diagnostics)}, JSON.stringify({ code, rejected })));
+    await import(${JSON.stringify(new URL('../scripts/db-local.ts', import.meta.url).href)});
+  `;
+  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', launcher, 'db-local', process.execPath, '--import', 'tsx', '--input-type=module', '-e', script], { cwd: directory, env: { ...process.env, PG_LOCAL_PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
   let appPid: number | undefined;
   let output = '';
   const ready = new Promise<void>((done, reject) => {
@@ -113,7 +120,9 @@ it('ends the local app child pool before stopping its embedded database', async 
     await ready;
     const exited = once(child, 'exit');
     child.kill('SIGTERM');
-    expect((await exited)[0]).toBe(0);
+    const [code] = await exited;
+    expect(JSON.parse(await readFile(diagnostics, 'utf8'))).toEqual({ code: childExit, rejected: [] });
+    expect(code).toBe(childExit);
     expect(JSON.parse(await readFile(marker, 'utf8'))).toEqual({ value: 1, ended: true });
   } finally {
     if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
