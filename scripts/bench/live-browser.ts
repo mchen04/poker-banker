@@ -7,6 +7,7 @@ import { observationScript } from './observe';
 import { publicCall, type LiveFixture } from './live-seed';
 import type { LiveClient } from './live-client';
 import type { RecordSample } from './types';
+import { stopOwnedProcess, withShutdownDeadline } from '../owned-process';
 
 type ObservedWindow = Window & { __pbObserveSaved?: (note: string, total: string) => Promise<number> };
 export async function scopeLiveBrowserRequests(context: BrowserContext, client: LiveClient) {
@@ -15,20 +16,50 @@ export async function scopeLiveBrowserRequests(context: BrowserContext, client: 
     try {
       const response = await route.fetch({ headers: client.scopedHeaders(route.request().url(), route.request().headers()), maxRedirects: 0 });
       if (response.status() >= 300 && response.status() < 400) {
-        await response.dispose();
-        await route.abort('blockedbyclient');
+        await withShutdownDeadline('Live browser response disposal', () => response.dispose());
+        await withShutdownDeadline('Live browser redirect abort', () => route.abort('blockedbyclient'));
         return;
       }
       await route.fulfill({ response });
-      await response.dispose();
-    } catch { await route.abort().catch(() => {}); }
+      await withShutdownDeadline('Live browser response disposal', () => response.dispose());
+    } catch { await withShutdownDeadline('Live browser route abort', () => route.abort()).catch(() => {}); }
   });
 }
 export async function liveBrowser(client: LiveClient, fixture: LiveFixture, record: RecordSample, reverse: boolean, samples: number, directory: string, allowLoopbackCertificate = false) {
   let state = await publicCall<SessionState>(client, `/api/sessions/${fixture.sessionId}`);
-  const browser = await webkit.launch();
+  const server = await webkit.launchServer({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+  const child = typeof server.process === 'function' ? server.process() : undefined;
+  let closingServer: Promise<void> | undefined;
+  const closeServer = () => closingServer ??= (async () => {
+    const errors: unknown[] = [];
+    try { await withShutdownDeadline('Live browser server close', () => server.close()); } catch (error) { errors.push(error); }
+    try {
+      if (child) await stopOwnedProcess(child, 'signal', true);
+      else if (errors.length && typeof server.kill === 'function') await withShutdownDeadline('Live browser server kill', () => server.kill());
+    } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, 'Live browser server cleanup failed');
+  })();
+  let browser: Awaited<ReturnType<typeof webkit.connect>>;
+  try { browser = await webkit.connect(server.wsEndpoint()); }
+  catch (error) {
+    try { await closeServer(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Live browser connection and cleanup failed'); }
+    throw error;
+  }
   const errors: string[] = [];
   const retiring = new WeakSet<Page>();
+  const contextClosures = new WeakMap<BrowserContext, Promise<void>>();
+  const closeContext = (owned: BrowserContext) => {
+    let closing = contextClosures.get(owned);
+    if (!closing) { closing = withShutdownDeadline('Live browser context close', () => owned.close()); contextClosures.set(owned, closing); }
+    return closing;
+  };
+  const closeContexts = async (owned: BrowserContext[]) => {
+    const results = await Promise.allSettled(owned.map(closeContext));
+    const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (failures.length) throw new AggregateError(failures, 'Live browser contexts failed to close');
+  };
+  let closingBrowser: Promise<void> | undefined;
+  const closeBrowser = () => closingBrowser ??= withShutdownDeadline('Live browser close', () => browser.close());
   const context = async (banker: boolean) => {
     const owned = await browser.newContext({ ...devices['iPhone 15'], baseURL: client.baseURL, locale: 'en-US', timezoneId: 'UTC', ignoreHTTPSErrors: allowLoopbackCertificate, serviceWorkers: 'block' });
     await scopeLiveBrowserRequests(owned, client);
@@ -36,6 +67,7 @@ export async function liveBrowser(client: LiveClient, fixture: LiveFixture, reco
     await owned.addInitScript({ content: observationScript.replace('__PB_EXPECTED__', JSON.stringify({ name: state.session.name, total: formatMoney(BigInt(state.totals.total_in_minor), 'USD'), ids: fixture.playerIds.slice(0, 9), endpoint: banker ? `/api/sessions/${fixture.sessionId}` : `/api/view/${fixture.token}` })) });
     const page = await owned.newPage();
     page.on('pageerror', error => { if (!retiring.has(page)) errors.push(`Browser page failed (${error.name})`); });
+    page.on('requestfailed', () => { if (!retiring.has(page)) errors.push('Browser request failed'); });
     page.on('response', response => { if (!retiring.has(page) && response.url().includes('/api/') && response.status() >= 400) errors.push(`Browser HTTP ${response.status()}`); });
     await page.goto(banker ? `/?session=${fixture.sessionId}` : `/v/${fixture.token}`, { waitUntil: 'commit' });
     await expect(page.getByRole('heading', { name: state.session.name, exact: true })).toBeVisible();
@@ -87,8 +119,15 @@ export async function liveBrowser(client: LiveClient, fixture: LiveFixture, reco
           } catch (error) { record({ metric: count ? `viewer.delay.${count}` : 'entry.confirm', ms: 0, ok: false, work: { batch, concurrency: count }, error: `Browser benchmark failed (${error instanceof Error ? error.name : 'Error'})` }); throw new Error('Browser benchmark failed'); }
         }
         await (viewers[0]?.page ?? banker.page).screenshot({ path: join(directory, count ? `viewers-${count}.png` : 'save-confirmed.png') });
-      } finally { for (const viewer of viewers) { retiring.add(viewer.page); await viewer.owned.close(); } }
+      } finally { for (const viewer of viewers) retiring.add(viewer.page); await closeContexts(viewers.map(viewer => viewer.owned)); }
     }
     expect(errors).toEqual([]);
-  } catch { throw new Error('Browser benchmark failed'); } finally { for (const owned of browser.contexts()) for (const page of owned.pages()) retiring.add(page); await browser.close(); }
+  } catch { throw new Error('Browser benchmark failed'); } finally {
+    for (const owned of browser.contexts()) for (const page of owned.pages()) retiring.add(page);
+    const errors: unknown[] = [];
+    try { await closeContexts(browser.contexts()); } catch (error) { errors.push(error); }
+    try { await closeBrowser(); } catch (error) { errors.push(error); }
+    try { await closeServer(); } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, 'Live browser cleanup failed');
+  }
 }

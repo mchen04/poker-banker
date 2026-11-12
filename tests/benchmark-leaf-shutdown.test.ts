@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { SHUTDOWN_GRACE_MS } from '../scripts/owned-process';
 
 const fixtures = vi.hoisted(() => ({
@@ -8,7 +8,9 @@ const fixtures = vi.hoisted(() => ({
   connect: vi.fn(),
   launch: vi.fn(),
   newContext: vi.fn(),
+  stop: vi.fn(async () => {}),
 }));
+vi.mock('../scripts/owned-process', async importOriginal => ({ ...(await importOriginal<typeof import('../scripts/owned-process')>()), stopOwnedProcess: fixtures.stop }));
 vi.mock('node:fs/promises', () => ({
   mkdtemp: async () => '/owned-engine', cp: async () => {},
   readFile: async () => Buffer.from('identical engine'),
@@ -25,6 +27,7 @@ import { LiveClient } from '../scripts/bench/live-client';
 import { liveBrowser } from '../scripts/bench/live-browser';
 
 const never = () => new Promise<never>(() => {});
+beforeEach(() => { fixtures.launchServer.mockResolvedValue({ wsEndpoint: () => 'owned', close: async () => {} }); fixtures.stop.mockResolvedValue(undefined); });
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
 async function outcome(task: Promise<unknown>) {
   let result = 'pending';
@@ -68,7 +71,7 @@ it('a live controller disposal has its own bound', async () => {
 
 it('live browser failure settles when final browser close stalls', async () => {
   vi.useFakeTimers();
-  fixtures.launch.mockResolvedValue({ newContext: async () => { throw new Error('owned context failed'); }, contexts: () => [], close: never });
+  fixtures.connect.mockResolvedValue({ newContext: async () => { throw new Error('owned context failed'); }, contexts: () => [], close: never });
   const client = { request: async () => ({ status: 200, body: { session: { name: 'Owned' } } }) } as unknown as LiveClient;
   await outcome(liveBrowser(client, { sessionId: 'owned' } as Parameters<typeof liveBrowser>[1], () => {}, false, 1, '/owned-evidence'));
 });
@@ -117,7 +120,7 @@ it('live browser cleanup closes every context and browser even when one context 
   const first = { pages: () => [], close: vi.fn(never) };
   const second = { pages: () => [], close: vi.fn(async () => {}) };
   const browserClose = vi.fn(async () => {});
-  fixtures.launch.mockResolvedValue({ newContext: async () => { throw new Error('setup failed'); }, contexts: () => [first, second], close: browserClose });
+  fixtures.connect.mockResolvedValue({ newContext: async () => { throw new Error('setup failed'); }, contexts: () => [first, second], close: browserClose });
   const client = { request: async () => ({ status: 200, body: { session: { name: 'Owned' } } }) } as unknown as LiveClient;
   await outcome(liveBrowser(client, { sessionId: 'owned' } as Parameters<typeof liveBrowser>[1], () => {}, false, 1, '/owned-evidence'));
   expect(first.close).toHaveBeenCalledOnce();
@@ -131,7 +134,7 @@ it('a players diagnostic signal leaves a stalled main operation and finishes bou
   const { EventEmitter } = await import('node:events');
   const { withShutdownDeadline } = await import('../scripts/owned-process');
   const source = stripTypeScriptTypes(await readFile(new URL('../scripts/bench/players-profile.ts', import.meta.url), 'utf8'));
-  const start = source.indexOf('const stackTask = benchmarkStack(output)');
+  const start = source.indexOf('const stackController = new AbortController()');
   expect(start).toBeGreaterThan(0);
   vi.useFakeTimers();
   const process = Object.assign(new EventEmitter(), { exitCode: 0 });
@@ -150,4 +153,32 @@ it('a players diagnostic signal leaves a stalled main operation and finishes bou
   expect(process.exitCode).toBe(143);
   expect(stop).toHaveBeenCalled();
   await observed;
+});
+
+it.each([false, true])('priming finalizes its owned detached group when graceful close fails=%s', async failed => {
+  const owned = { fixture: 'owned-browser-group' };
+  fixtures.launchServer.mockResolvedValue({ wsEndpoint: () => 'owned', process: () => owned, close: async () => { if (failed) throw new Error('RPC close failed'); } });
+  fixtures.connect.mockResolvedValue({ newPage: async () => ({ setContent: async () => {}, screenshot: async () => {} }), close: async () => {} });
+  const task = primeEngine({ executable: 'owned' } as Awaited<ReturnType<typeof isolatedEngine>>);
+  if (failed) await expect(task).rejects.toThrow('Primed browser cleanup failed');
+  else await expect(task).resolves.toBeUndefined();
+  expect(fixtures.stop).toHaveBeenCalledExactlyOnceWith(owned, 'signal', true);
+});
+
+it('priming preserves a detached-group cleanup failure after successful RPC close', async () => {
+  const owned = { fixture: 'owned-browser-group' };
+  fixtures.stop.mockRejectedValue(new Error('group cleanup failed'));
+  fixtures.launchServer.mockResolvedValue({ wsEndpoint: () => 'owned', process: () => owned, close: async () => {} });
+  fixtures.connect.mockResolvedValue({ newPage: async () => ({ setContent: async () => {}, screenshot: async () => {} }), close: async () => {} });
+  await expect(primeEngine({ executable: 'owned' } as Awaited<ReturnType<typeof isolatedEngine>>)).rejects.toThrow('Primed browser cleanup failed');
+  expect(fixtures.stop).toHaveBeenCalledExactlyOnceWith(owned, 'signal', true);
+});
+
+it('a failed live browser connection still finalizes its owned detached server group', async () => {
+  const owned = { fixture: 'owned-live-browser-group' };
+  fixtures.launchServer.mockResolvedValue({ wsEndpoint: () => 'owned', process: () => owned, close: async () => {} });
+  fixtures.connect.mockRejectedValue(new Error('connect failed'));
+  const client = { request: async () => ({ status: 200, body: { session: { name: 'Owned' } } }) } as unknown as LiveClient;
+  await expect(liveBrowser(client, { sessionId: 'owned' } as Parameters<typeof liveBrowser>[1], () => {}, false, 1, '/owned-evidence')).rejects.toThrow('connect failed');
+  expect(fixtures.stop).toHaveBeenCalledExactlyOnceWith(owned, 'signal', true);
 });
