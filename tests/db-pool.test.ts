@@ -124,3 +124,54 @@ it('ends the local app child pool before stopping its embedded database', async 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('ends a live migration pool before PostgreSQL when local startup is cancelled', async () => {
+  const directory = await mkdtemp(resolve('.cache/db-launcher-'));
+  const marker = resolve(directory, 'migration-ended.json');
+  const server = createServer();
+  await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>(done => server.close(() => done()));
+  const script = `
+    import pg from 'pg';
+    import { writeFile } from 'node:fs/promises';
+    let release;
+    const held = new Promise(done => { release = done; });
+    process.on('message', message => { if (message === 'continue') release(); });
+    process.on('SIGTERM', () => process.send({ type: 'cancelled' }));
+    const Pool = pg.Pool;
+    let first = true;
+    pg.Pool = class extends Pool {
+      connect(...args) {
+        if (args.length) return super.connect(...args);
+        return (async () => {
+          const client = await super.connect();
+          if (first) { first = false; process.send({ type: 'migration' }); await held; }
+          return client;
+        })();
+      }
+      async end() {
+        const result = await this.query('SELECT 1 AS value');
+        await super.end();
+        await writeFile(${JSON.stringify(marker)}, JSON.stringify({ value: result.rows[0].value, ended: this.ended }));
+      }
+    };
+    await import(${JSON.stringify(new URL('../scripts/db-local.ts', import.meta.url).href)});
+  `;
+  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { cwd: directory, env: { ...process.env, PG_LOCAL_PORT: String(port) }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+  try {
+    const [ready] = await once(child, 'message', { signal: AbortSignal.timeout(10000) }) as [{ type: string }];
+    expect(ready.type).toBe('migration');
+    const cancelled = once(child, 'message', { signal: AbortSignal.timeout(10000) });
+    const exited = once(child, 'exit', { signal: AbortSignal.timeout(10000) });
+    child.kill('SIGTERM');
+    expect((await cancelled)[0]).toEqual({ type: 'cancelled' });
+    child.send('continue');
+    expect((await exited)[0]).toBe(0);
+    expect(JSON.parse(await readFile(marker, 'utf8'))).toEqual({ value: 1, ended: true });
+  } finally {
+    if (child.connected) child.send('continue');
+    if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child, 'signal');
+    await rm(directory, { recursive: true, force: true });
+  }
+});
