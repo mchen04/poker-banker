@@ -16,15 +16,21 @@ test('large Activity histories stay correctable, filtered and read only for view
       op_id: randomUUID(), player_id: justin.id, kind: 'buy_in', amount_minor: '100', paid_now: false, occurred_at: null, note: `Justin entry ${index + 1}`,
     });
   }
+  const occurredAt = new Date(Date.now() - 60000);
+  const hour = occurredAt.getUTCHours();
+  const expectedTime = `${hour % 12 || 12}:${String(occurredAt.getUTCMinutes()).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
   state = await call<SessionState>(page, `/sessions/${sessionId}/entries`, 'POST', {
-    op_id: randomUUID(), player_id: morgan.id, kind: 'buy_in', amount_minor: '200', paid_now: false, occurred_at: null, note: 'Morgan latest entry',
+    op_id: randomUUID(), player_id: morgan.id, kind: 'buy_in', amount_minor: '200', paid_now: false, occurred_at: occurredAt.toISOString(), note: 'Morgan latest entry',
   });
+  const timedEntry = state.entries.find(entry => entry.note === 'Morgan latest entry')!;
   const oldest = state.entries.find(entry => entry.note === 'Justin entry 1')!;
   const second = state.entries.find(entry => entry.note === 'Justin entry 2')!;
   await page.reload();
   const activity = page.locator('.session-board').getByTestId('activity');
   await expect(activity.getByRole('listitem')).toHaveCount(state.entries.length);
   await expect(activity).toContainText('Morgan latest entry');
+  await expect(activity.getByTestId(`entry-${timedEntry.id}`).locator('small')).toHaveText(`${expectedTime} · Morgan latest entry`);
+  await expect(activity.getByTestId(`entry-${oldest.id}`).locator('small')).toHaveText('Time unavailable · Justin entry 1');
   expect(await activity.getByRole('listitem').evaluateAll(rows => rows.map(row => row.getAttribute('data-testid')))).toEqual(state.entries.map(entry => `entry-${entry.id}`));
   await activity.getByTestId(`entry-${oldest.id}`).scrollIntoViewIfNeeded();
   await activity.getByTestId(`entry-${oldest.id}`).getByRole('button').click();
@@ -64,6 +70,8 @@ test('large Activity histories stay correctable, filtered and read only for view
     await viewer.goto(link);
     const viewerActivity = viewer.getByTestId('activity');
     await expect(viewerActivity.getByRole('listitem')).toHaveCount(state.entries.length);
+    await expect(viewerActivity.getByTestId(`entry-${timedEntry.id}`).locator('small')).toHaveText(`${expectedTime} · Morgan latest entry`);
+    await expect(viewerActivity.getByTestId(`entry-${oldest.id}`).locator('small')).toHaveText('Time unavailable · Justin entry 1');
     await expect(viewerActivity.getByRole('button', { name: /^Correct / })).toHaveCount(0);
     expect(await viewerActivity.getByRole('listitem').evaluateAll(rows => rows.map(row => row.getAttribute('data-testid')))).toEqual(state.entries.map(entry => `entry-${entry.id}`));
     await expect(viewerActivity.getByTestId(`entry-${oldest.id}`)).toContainText('Voided');
