@@ -13,3 +13,12 @@ export function autoStartedTimer(receipt: SessionState, entryId: string): string
 export function retainedTimerAfterUndo(state: SessionState, startedAt: string | null): string | null {
   return startedAt !== null && state.session.started_at === startedAt && state.session.ended_at === null && !effectiveEntries(state.entries).some(entry => entry.kind === 'buy_in') ? startedAt : null;
 }
+
+export function retainedTimerStart(state: SessionState): string | null {
+  const startedAt = state.session.started_at;
+  if (state.session.status !== 'open' || startedAt === null || state.session.ended_at !== null || effectiveEntries(state.entries).some(entry => entry.kind === 'buy_in')) return null;
+  const voidedBuys = state.entries.filter(entry => entry.kind === 'buy_in' && entry.voids_entry_id !== null && state.entries.some(original => original.id === entry.voids_entry_id && original.kind === 'buy_in' && original.voids_entry_id === null));
+  if (!voidedBuys.length) return null;
+  const latestVoid = voidedBuys.reduce((latest, entry) => BigInt(entry.revision) > latest ? BigInt(entry.revision) : latest, 0n);
+  return state.events.some(event => event.kind === 'timing_corrected' && BigInt(event.revision) > latestVoid) ? null : startedAt;
+}
