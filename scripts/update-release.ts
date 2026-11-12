@@ -1,11 +1,34 @@
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { buildProduction } from './build';
 import { runOwned } from './owned-command';
 import type { ProcessOwner } from './owned-process';
 
-export async function buildUpdateRelease(owner: ProcessOwner, release: string, previousDataPath?: string) {
+export type WorkerObservationOptions = { workerObservation?: { queryType: string } };
+export type ReleaseAsset = { path: string; bytes: number; sha256: string };
+
+async function releaseProof(options?: WorkerObservationOptions) {
+  const base = await readFile('dist/sw.js', 'utf8');
+  const paths = JSON.parse(base.match(/const PRECACHE = (\[[^\n]+\]);/)?.[1] ?? 'null') as string[] | null;
+  if (!paths?.includes('/index.html')) throw new Error('Update proof requires the stamped production precache inventory');
+  const assets = await Promise.all(paths.map(async path => {
+    const body = await readFile(join('dist', path.slice(1)));
+    return { path, bytes: body.length, sha256: createHash('sha256').update(body).digest('hex') };
+  }));
+  const baseWorkerSha256 = createHash('sha256').update(base).digest('hex');
+  const productionObserverAbsent = !base.includes('PB_PROOF_OBSERVE_');
+  if (!productionObserverAbsent) throw new Error('Production worker unexpectedly contains proof observation code');
+  const queryType = options?.workerObservation?.queryType;
+  if (!queryType) return { assets, baseWorkerSha256, observedWorkerSha256: baseWorkerSha256, productionObserverAbsent, observation: null };
+  if (!/^PB_PROOF_OBSERVE_[a-zA-Z0-9_]{8,100}$/.test(queryType)) throw new Error('Worker observation requires a unique proof query type');
+  const listener = `\n;(() => {\n  const instanceId = crypto.randomUUID();\n  const fetches = [];\n  const activations = [];\n  self.addEventListener('fetch', event => { fetches.push({ at: Date.now(), clientId: event.clientId, method: event.request.method, path: new URL(event.request.url).pathname }); });\n  self.addEventListener('message', event => {\n    if (event.data?.type === 'ACTIVATE') activations.push({ at: Date.now(), clientId: event.source?.id || null, updateProtocol: event.data.updateProtocol ?? null });\n    if (event.data?.type === ${JSON.stringify(queryType)}) event.ports[0]?.postMessage({ release: RELEASE, instanceId, fetches: fetches.slice(), activations: activations.slice() });\n  });\n})();\n`;
+  const observed = base + listener;
+  await writeFile('dist/sw.js', observed);
+  return { assets, baseWorkerSha256, observedWorkerSha256: createHash('sha256').update(observed).digest('hex'), productionObserverAbsent, observation: { queryType, appendedListenerSha256: createHash('sha256').update(listener).digest('hex'), appendedListener: listener, productionPrefixUnchanged: observed.slice(0, base.length) === base } };
+}
+
+export async function buildUpdateRelease(owner: ProcessOwner, release: string, previousDataPath?: string, options?: WorkerObservationOptions) {
   const source = `export const release = ${JSON.stringify(release)};\n`;
   const probe = `/assets/update-probe-${createHash('sha256').update(source).digest('hex').slice(0, 12)}.js`;
   const discoverySource = `export const purpose = 'discovery';\n${source}`;
@@ -23,7 +46,7 @@ export async function buildUpdateRelease(owner: ProcessOwner, release: string, p
     },
   }] });
   if (previousDataPath && !previousReader) throw new Error('Previous-source reader chunk was not emitted');
-  return { release, probe, discoveryProbe, previousReader };
+  return { release, probe, discoveryProbe, previousReader, ...await releaseProof(options) };
 }
 
 export const previousSourceSha = 'dc2082b09d7bf8ad124f0e21f8826ef75c0b4e1f';
@@ -36,7 +59,7 @@ export async function buildPreviousUpdateRelease(owner: ProcessOwner, release: s
   } : undefined));
 }
 
-export async function buildArchivedUpdateRelease(owner: ProcessOwner, release: string, sourceSha: string, input?: PreviousSourceInput) {
+export async function buildArchivedUpdateRelease(owner: ProcessOwner, release: string, sourceSha: string, input?: PreviousSourceInput, options?: WorkerObservationOptions) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha)) throw new Error('Archived update source requires a complete commit SHA');
   if (!/^[a-zA-Z0-9._-]{1,100}$/.test(release)) throw new Error('Archived update release stamp is invalid');
   await mkdir('.cache', { recursive: true });
@@ -68,5 +91,5 @@ export async function buildArchivedUpdateRelease(owner: ProcessOwner, release: s
   await runOwned(owner, 'pnpm', ['build'], { cwd: tree, env: { ...process.env, RELEASE_VERSION: release } });
   await rm('dist', { recursive: true, force: true });
   await cp(join(tree, 'dist'), 'dist', { recursive: true });
-  return { release, sourceSha, archiveSha256, manifestSha256, previousDataPath: join(tree, 'src/client/data.ts') };
+  return { release, sourceSha, archiveSha256, manifestSha256, previousDataPath: join(tree, 'src/client/data.ts'), ...await releaseProof(options) };
 }

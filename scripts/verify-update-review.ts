@@ -2,13 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { expect, type BrowserContext, type Page } from '@playwright/test';
-import { addPlayer, call, current, keepMoneyDraft, newContextLike, newSession, workerReady, workspaceReady } from '../e2e/helpers';
+import { addPlayer, call, current, keepMoneyDraft, money, newContextLike, newSession, workerReady, workspaceReady } from '../e2e/helpers';
 import { ownedMain } from './owned-command';
-import { buildArchivedUpdateRelease, buildUpdateRelease, type PreviousSourceInput } from './update-release';
+import { buildArchivedUpdateRelease, buildUpdateRelease, type PreviousSourceInput, type ReleaseAsset, type WorkerObservationOptions } from './update-release';
 import { capture, controllerRelease, databaseSnapshot, draft, releaseIs, restoredDraft, visible, type UpdateJourneyOptions } from './verify-update-journey';
 import { createUpdateProofProxy } from './update-proof-proxy';
 
-export const reviewBaselineSourceSha = '958e1141117b7a2a44e8de27544b9e2ad258e55f';
+export const reviewBaselineSourceSha = '6d810fdea69be3a932c9fb62aab1c47905b80dc4';
 export const liveLegacySourceSha = '30209c1bff774172c89e8dba1901a1e597e860b6';
 type ReviewMode = 'baseline' | 'fixed';
 type ReviewRow = { case: string; regressionObserved: boolean; [key: string]: unknown };
@@ -33,6 +33,40 @@ async function candidateRelease(page: Page) {
 async function lifecycle(page: Page) {
   await visible(page, true);
   await page.evaluate(() => { window.dispatchEvent(new Event('focus')); window.dispatchEvent(new Event('pageshow')); window.dispatchEvent(new Event('online')); });
+}
+
+type CacheInventory = { key: string; entries: { url: string; path: string; method: string; bytes: number; sha256: string }[]; bodyBytes: number };
+async function cacheInventory(page: Page): Promise<CacheInventory[]> {
+  return page.evaluate(async () => {
+    const result = [];
+    for (const key of (await caches.keys()).filter(key => key.startsWith('poker-banker-') && !key.includes('metadata')).sort()) {
+      const cache = await caches.open(key);
+      const entries = [];
+      for (const request of (await cache.keys()).slice().sort((left, right) => left.url.localeCompare(right.url))) {
+        const response = await cache.match(request);
+        if (!response) throw new Error('Cache entry disappeared during proof snapshot');
+        const body = await response.arrayBuffer();
+        const digest = await crypto.subtle.digest('SHA-256', body);
+        entries.push({ url: request.url, path: new URL(request.url).pathname, method: request.method, bytes: body.byteLength, sha256: [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('') });
+      }
+      result.push({ key, entries, bodyBytes: entries.reduce((sum, entry) => sum + entry.bytes, 0) });
+    }
+    return result;
+  });
+}
+type WorkerObservation = { release: string; instanceId: string; fetches: { at: number; clientId: string; method: string; path: string }[]; activations: { at: number; clientId: string | null; updateProtocol: number | null }[] };
+async function observeWorker(page: Page, queryType: string, target: 'waiting' | 'active'): Promise<WorkerObservation> {
+  return page.evaluate(async ({ queryType, target }) => {
+    const registration = await navigator.serviceWorker.getRegistration('/');
+    const worker = registration?.[target];
+    if (!worker) throw new Error(`No ${target} worker for dispatch observation`);
+    return new Promise<WorkerObservation>((accept, reject) => {
+      const channel = new MessageChannel();
+      const timer = setTimeout(() => { channel.port1.close(); reject(new Error('Worker dispatch observation timed out')); }, 3000);
+      channel.port1.onmessage = event => { clearTimeout(timer); channel.port1.close(); accept(event.data); };
+      worker.postMessage({ type: queryType }, [channel.port2]);
+    });
+  }, { queryType, target });
 }
 
 export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { mode?: ReviewMode; cases?: string[]; lockHeld?: boolean }) {
@@ -64,9 +98,9 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
     const close = async (context: BrowserContext) => { await context.close(); contexts.delete(context); };
     const id = randomUUID().slice(0, 8);
     const builds: unknown[] = [];
-    const build = async (release: string, legacy = false) => {
-      const result = legacy ? await buildArchivedUpdateRelease(owner, release, liveLegacySourceSha, fixture('PB_UPDATE_LIVE_LEGACY')) : mode === 'baseline'
-        ? await buildArchivedUpdateRelease(owner, release, reviewBaselineSourceSha, fixture('PB_UPDATE_BASELINE')) : await buildUpdateRelease(owner, release);
+    const build = async (release: string, legacy = false, observation?: WorkerObservationOptions) => {
+      const result = legacy ? await buildArchivedUpdateRelease(owner, release, liveLegacySourceSha, fixture('PB_UPDATE_LIVE_LEGACY'), observation) : mode === 'baseline'
+        ? await buildArchivedUpdateRelease(owner, release, reviewBaselineSourceSha, fixture('PB_UPDATE_BASELINE'), observation) : await buildUpdateRelease(owner, release, undefined, observation);
       builds.push(result);
       return result;
     };
@@ -87,7 +121,8 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
       try {
         const result = await action();
         rows.push(result);
-        expect(result.regressionObserved, `${name} ${mode} expected regression=${mode === 'baseline'}`).toBe(mode === 'baseline');
+        const expectedRegression = mode === 'baseline' && ['R2-unknown-client-cache-bound', 'R5-slow-successful-initial-entry'].includes(name);
+        expect(result.regressionObserved, `${name} ${mode} expected regression=${expectedRegression}`).toBe(expectedRegression);
       } catch (error) { errors.push({ case: name, error: error instanceof Error ? error.stack ?? error.message : String(error) }); }
       finally {
         await writeFile(join(evidence, `${name}-forwarded-requests.json`), JSON.stringify(proxy.records.slice(first), null, 2));
@@ -130,13 +165,13 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
         const beforeRelease = [...navigations];
         expect(signals).toBeGreaterThan(0);
         const stalledRealResponses = gate.records.filter(record => record.upstreamFinishedAt);
-        expect(stalledRealResponses.every(record => record.status === 200 && record.bodyBytes! > 0 && record.headers?.['content-type']?.includes('text/html'))).toBe(true);
+        expect(stalledRealResponses.every(record => record.status === 200 && record.bodyBytes! > 0 && record.contentType?.includes('text/html'))).toBe(true);
         if (mode === 'fixed') {
           expect(beforeRelease).toHaveLength(1);
           await releaseIs(state.page, b, 10000);
           await capture(state.page, evidence, `R1-${phase}-cached-fallback-completed`);
         }
-          scenarios.push({ phase, regressionObserved: beforeRelease.length > 1, before: a, after: b, lifecycleSignals: signals, actualNavigationRequests: beforeRelease, fallbackDeadlineMs: 3000, withheldActualHtmlResponses: stalledRealResponses.map(record => ({ status: record.status, headers: record.headers, bodySha256: record.bodySha256 })), finalDocument: await state.page.locator('meta[name="pb-release"]').getAttribute('content') });
+          scenarios.push({ phase, regressionObserved: beforeRelease.length > 1, before: a, after: b, lifecycleSignals: signals, actualNavigationRequests: beforeRelease, fallbackDeadlineMs: 3000, withheldActualHtmlResponses: stalledRealResponses.map(record => ({ status: record.status, contentType: record.contentType, bodySha256: record.bodySha256 })), finalDocument: await state.page.locator('meta[name="pb-release"]').getAttribute('content') });
           } finally { gate.release(); await close(state.context); }
         }
         return { case: 'R1-stalled-navigation', regressionObserved: scenarios.every(scenario => scenario.regressionObserved), scenarios };
@@ -145,27 +180,89 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
 
     await run('R2-unknown-client-cache-bound', async () => {
       const legacyRelease = `r38-legacy-302-R2-${id}`;
-      await build(legacyRelease, true);
+      const legacyBuild = await build(legacyRelease, true);
       const state = await seed(await fresh(), legacyRelease, 'R2 legacy');
       await draft(state.page, state.player, '61.');
-      const records: { release: string; caches: string[] }[] = [];
+      const initial = await cacheInventory(state.page);
+      const original = initial.find(cache => cache.key === `poker-banker-${legacyRelease}`)!;
+      expect(original.entries.length).toBeGreaterThan(0);
+      const rootHtml = original.entries.find(entry => entry.path === '/index.html')!;
+      expect(rootHtml).toBeTruthy();
+      const firstAsset = original.entries.find(entry => entry.path.startsWith('/assets/'))!;
+      expect(firstAsset).toBeTruthy();
+      const inventories = new Map<string, ReleaseAsset[]>([[legacyRelease, legacyBuild.assets]]);
+      const records: { release: string; phase: string; caches: CacheInventory[]; totalEntries: number; totalBodyBytes: number; allowedRequestKeys: string[]; allowedCaches: string[]; allowedBodyBytes: number; allowedEntryCount: number; obsoleteEntries: { cache: string; path: string; bytes: number }[] }[] = [];
+      const snapshot = async (release: string, phase: string, liveReleases: string[]) => {
+        const caches = await cacheInventory(state.page);
+        const allowed = new Map<string, number>();
+        const candidates = [...inventories.keys()].filter(value => value !== legacyRelease);
+        const boundedReleases = [...new Set([legacyRelease, candidates[0]!, candidates.at(-2), ...liveReleases].filter((value): value is string => !!value))];
+        const allowedCaches = boundedReleases.map(value => `poker-banker-${value}`);
+        for (const entry of original.entries) allowed.set(entry.url, entry.bytes);
+        for (const live of boundedReleases) for (const asset of inventories.get(live) ?? []) {
+          const key = new URL(asset.path, proxy.origin).href;
+          allowed.set(key, Math.max(asset.bytes, allowed.get(key) ?? 0));
+        }
+        const obsoleteEntries = caches.flatMap(cache => cache.entries.filter(entry => entry.method !== 'GET' || !allowed.has(entry.url)).map(entry => ({ cache: cache.key, path: entry.path, bytes: entry.bytes })));
+        const actualLegacy = caches.find(cache => cache.key === original.key)!;
+        expect(actualLegacy).toBeTruthy();
+        for (const entry of original.entries) expect(actualLegacy.entries.find(value => value.url === entry.url)).toEqual(entry);
+        const allowedBodyBytes = [...allowed.values()].reduce((sum, bytes) => sum + bytes, 0) * allowedCaches.length;
+        const allowedEntryCount = allowed.size * allowedCaches.length;
+        const record = { release, phase, caches, totalEntries: caches.reduce((sum, cache) => sum + cache.entries.length, 0), totalBodyBytes: caches.reduce((sum, cache) => sum + cache.bodyBytes, 0), allowedRequestKeys: [...allowed.keys()].sort(), allowedCaches, allowedBodyBytes, allowedEntryCount, obsoleteEntries };
+        records.push(record);
+        return record;
+      };
       try {
         for (const letter of ['A', 'B', 'C', 'D', 'E', 'F']) {
-          const release = `r38-R2-${letter}-${id}`;
-          await build(release);
+          const release = `r40-R2-${letter}-${id}`;
+          const built = await build(release);
+          inventories.set(release, built.assets);
           const candidate = await state.context.newPage();
           await candidate.goto(`/?session=${state.session}`);
           await expect(candidate.locator('meta[name="pb-release"]')).toHaveAttribute('content', release);
           await expect.poll(() => candidateRelease(candidate), { timeout: 25000 }).toBe(release);
           await candidate.waitForTimeout(1800);
           await expect(state.page.getByTestId('money-amount')).toHaveValue('61.');
-          records.push({ release, caches: await state.page.evaluate(async () => (await caches.keys()).filter(key => key.startsWith('poker-banker-') && !key.includes('metadata'))) });
+          await snapshot(release, 'candidate-open-after-install', [release]);
           await candidate.close();
+          await state.page.waitForTimeout(1200);
+          await snapshot(release, 'candidate-closed-awaiting-next-worker-check', [release]);
         }
-        const final = records.at(-1)!;
-        if (mode === 'fixed') { expect(final.caches.length).toBeLessThanOrEqual(5); expect(final.caches).toContain(`poker-banker-${legacyRelease}`); }
-        await capture(state.page, evidence, 'R2-legacy-still-editing-after-six-candidates');
-        return { case: 'R2-unknown-client-cache-bound', regressionObserved: final.caches.length > 5, legacySource: liveLegacySourceSha, legacyRelease, snapshots: records, retainedCacheBound: 5, legacyDocument: await state.page.locator('meta[name="pb-release"]').getAttribute('content'), permanentNonresponse: 'Unmodified 30209c1 client has no CLIENT_RELEASE_REQUEST listener; same live document across all candidates' };
+        const release = `r40-R2-G-${id}`;
+        const built = await build(release);
+        inventories.set(release, built.assets);
+        const finalCandidate = await state.context.newPage();
+        await finalCandidate.goto(`/?session=${state.session}`);
+        await expect.poll(() => candidateRelease(finalCandidate), { timeout: 25000 }).toBe(release);
+        await finalCandidate.waitForTimeout(1800);
+        const final = await snapshot(release, 'next-install-cleans-closed-candidates', [release]);
+        await finalCandidate.close();
+        const obsoleteGrowth = final.obsoleteEntries.length > 0;
+        if (mode === 'fixed') {
+          expect(final.obsoleteEntries).toEqual([]);
+          expect(final.totalBodyBytes).toBeLessThanOrEqual(final.allowedBodyBytes);
+          const sameWorkingSet = records.filter(record => record.phase === 'candidate-open-after-install').slice(2);
+          for (const record of [...sameWorkingSet, final]) {
+            expect(record.caches.every(cache => record.allowedCaches.includes(cache.key))).toBe(true);
+            for (const cache of record.caches) {
+              expect(cache.entries.length).toBeLessThanOrEqual(record.allowedRequestKeys.length);
+              expect(cache.bodyBytes).toBeLessThanOrEqual(record.allowedBodyBytes / record.allowedCaches.length);
+            }
+            expect(record.totalEntries).toBeLessThanOrEqual(record.allowedEntryCount);
+            expect(record.totalBodyBytes).toBeLessThanOrEqual(record.allowedBodyBytes);
+            expect(record.obsoleteEntries).toEqual([]);
+          }
+        }
+        const retainedAsset = await state.page.evaluate(async ({ key, path }) => {
+          const response = await (await caches.open(key)).match(path);
+          if (!response) throw new Error('First legacy asset was removed');
+          const digest = await crypto.subtle.digest('SHA-256', await response.arrayBuffer());
+          return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+        }, { key: original.key, path: firstAsset.path });
+        expect(retainedAsset).toBe(firstAsset.sha256);
+        await capture(state.page, evidence, 'R2-legacy-still-editing-after-seven-candidates');
+        return { case: 'R2-unknown-client-cache-bound', regressionObserved: obsoleteGrowth, legacySource: liveLegacySourceSha, legacyRelease, initial, snapshots: records, releaseInventories: Object.fromEntries(inventories), workingSetRule: 'Immutable original legacy inventory, first-observed candidate fallback, prior waiting worker and current installed candidate; closed intermediate candidate assets must be removed across every retained cache by the following install. Entry and byte ceilings derive from this finite working set, including cross-cache copies.', firstLegacyAsset: firstAsset, firstLegacyAssetFinalSha256: retainedAsset, originalRootHtml: rootHtml, originalHtmlAssetsRetained: true, legacyDocument: await state.page.locator('meta[name="pb-release"]').getAttribute('content'), permanentNonresponse: 'Unmodified 30209c1 client has no CLIENT_RELEASE_REQUEST listener; same live document across all candidates' };
       } finally { await close(state.context); }
     });
 
@@ -181,6 +278,16 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
       const queuePage = await state.context.newPage();
       await queuePage.goto(`/?session=${state.session}`); await releaseIs(queuePage, legacyRelease);
       await visible(queuePage, false);
+      await visible(state.page, false);
+      const queryType = `PB_PROOF_OBSERVE_${id}_R3`;
+      const observedBuild = await build(b, false, { workerObservation: { queryType } });
+      await lifecycle(editor);
+      await expect.poll(() => candidateRelease(editor), { timeout: 25000 }).toBe(b);
+      await expect.poll(() => editor.evaluate(async () => (await navigator.serviceWorker.getRegistration('/'))?.waiting?.state)).toBe('installed');
+      expect((await current(editor, state.session)).session.started_at).toBeNull();
+      const beforePost = await observeWorker(editor, queryType, 'waiting');
+      expect(beforePost.fetches).toEqual([]);
+      expect(beforePost.activations).toEqual([]);
       const gate = proxy.hold({ path: `/api/sessions/${state.session}/start`, method: 'POST', phase: 'body' });
       let timerReloads = 0;
       state.page.on('request', request => { if (request.isNavigationRequest() && request.frame() === state.page.mainFrame()) timerReloads++; });
@@ -189,10 +296,14 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
         await expect.poll(() => gate.records.filter(record => record.upstreamFinishedAt).length).toBe(1);
         expect(gate.records[0]!.status).toBe(200);
         expect((await current(editor, state.session)).session.started_at).not.toBeNull();
-        await build(b);
         await lifecycle(state.page);
-        await expect.poll(() => candidateRelease(state.page), { timeout: 25000 }).toBe(b);
+        await expect.poll(async () => (await observeWorker(editor, queryType, 'waiting')).activations.length).toBeGreaterThan(0);
         await state.page.waitForTimeout(4200);
+        const duringHeldPost = await observeWorker(editor, queryType, 'waiting');
+        expect(duringHeldPost.instanceId).toBe(beforePost.instanceId);
+        expect(duringHeldPost.fetches).toEqual([]);
+        expect(duringHeldPost.activations.length).toBeGreaterThan(0);
+        expect(gate.records[0]!.releasedAt).toBeUndefined();
         const prematureReloads = timerReloads;
         await expect(editor.getByTestId('money-amount')).toHaveValue('43.');
         await expect(editor.locator('meta[name="pb-release"]')).toHaveAttribute('content', legacyRelease);
@@ -223,9 +334,14 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
         expect(after.drafts.find(row => row.key === durable.key)).toEqual(durable);
         const confirmed = await current(cold, state.session);
         expect(confirmed.entries.filter(entry => entry.player_id === queuedPlayer.id && entry.kind === 'buy_in' && entry.amount_minor === '2900')).toHaveLength(1);
+        const positivePath = `/manifest.webmanifest?pb-proof=${id}`;
+        const positiveStatus = await cold.evaluate(async path => (await fetch(path, { cache: 'no-store' })).status, positivePath);
+        expect(positiveStatus).toBe(200);
+        const afterColdPositiveControl = await observeWorker(cold, queryType, 'active');
+        expect(afterColdPositiveControl.fetches.some(event => event.method === 'GET' && event.path === '/manifest.webmanifest' && event.clientId.length > 0)).toBe(true);
         await restoredDraft(cold, state.player, '43.', 'Zelle');
         await capture(cold, evidence, 'R3-cold-B-restores-302-draft-and-replays-outbox');
-        return { case: 'R3-live-production-client', regressionObserved: prematureReloads > 0, legacySource: liveLegacySourceSha, before: legacyRelease, after: b, prematureReloads, realPost: gate.records[0], timerCommittedBeforeGateRelease: true, activationConstraint: 'New worker waits until every unmodified legacy document closes; no hot-upgrade safety claim for the old client', draftBeforeSha256: sha(durable), draftAfterSha256: sha(after.drafts.find(row => row.key === durable.key)), outboxBodySha256: sha(queued.body), outgoingBodiesSha256: outgoing.map(sha), idbVersion: after.version, bankerId: banker, sessionId: state.session };
+        return { case: 'R3-live-production-client', regressionObserved: prematureReloads > 0, legacySource: liveLegacySourceSha, before: legacyRelease, after: b, prematureReloads, realPost: gate.records[0], timerCommittedBeforeGateRelease: true, observedBuild, dispatchObservation: { beforePost, duringHeldPost, afterColdPositiveControl, heldObservationMs: 4200, genuineStartDispatchedAfterBInstalled: true, positivePath, positiveStatus }, quietActivationCounterexample: 'A fully installed waiting B receives legacy ACTIVATE messages while the real committed Start response remains withheld for over 3500ms, yet B receives zero fetch events; a zero waiting-worker request counter cannot establish legacy request quiescence. Removing clients.claim does not avoid controllerchange for already controlled clients: the Service Workers Activate algorithm changes their active worker before dispatching activate.', activationAlgorithm: 'https://www.w3.org/TR/service-workers/#activation-algorithm', activationConstraint: 'New worker waits until every unmodified legacy document closes; no hot-upgrade safety claim for the old client', draftBeforeSha256: sha(durable), draftAfterSha256: sha(after.drafts.find(row => row.key === durable.key)), outboxBodySha256: sha(queued.body), outgoingBodiesSha256: outgoing.map(sha), idbVersion: after.version, bankerId: banker, sessionId: state.session };
       } finally { gate.release(); await close(state.context); }
     });
 
@@ -249,8 +365,9 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
         await navigation;
         await expect.poll(() => gate.records.length).toBeGreaterThan(0);
         await expect(next.locator('meta[name="pb-release"]')).toHaveAttribute('content', b);
-        const htmlResponse = [...proxy.records].reverse().find(record => record.status === 200 && record.headers?.['content-type']?.includes('text/html') && new URL(record.path, proxy.origin).searchParams.get('session') === state.session && record.bodySha256 === shaHtml(htmlB));
-        expect(htmlResponse?.bodySha256).toBe(shaHtml(htmlB));
+        const htmlResponse = [...proxy.records].reverse().find(record => record.status === 200 && record.contentType?.includes('text/html') && new URL(record.path, proxy.origin).searchParams.get('session') === state.session && record.decodedBodySha256 === shaHtml(htmlB));
+        expect(htmlResponse?.decodedBodySha256).toBe(shaHtml(htmlB));
+        expect(htmlResponse?.bodyDecodingError).toBeUndefined();
         expect(gate.records[0]!.upstreamFinishedAt).toBeUndefined();
         await rm('dist', { recursive: true, force: true });
         await cp(join(staging, 'C'), 'dist', { recursive: true });
@@ -265,7 +382,7 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
         const finalDocument = await next.locator('meta[name="pb-release"]').getAttribute('content');
         const started = await next.getByRole('navigation', { name: 'Table navigation', exact: true }).isVisible();
         await capture(next, evidence, 'R4-real-initial-module-404-result');
-        const result: ReviewRow = { case: 'R4-initial-html-bundle-skew', regressionObserved: finalDocument === b && !started, before: a, deliveredHtml: b, deployedBeforeModuleFetch: c, initialModule: entryB, initialModuleActualHttpStatus: 404, deliveredHtmlSha256: htmlResponse?.bodySha256, moduleForwardedAfterDeployment: gate.records[0], finalDocument, appStarted: started };
+        const result: ReviewRow = { case: 'R4-initial-html-bundle-skew', regressionObserved: finalDocument === b && !started, before: a, deliveredHtml: b, deployedBeforeModuleFetch: c, initialModule: entryB, initialModuleActualHttpStatus: 404, deliveredHtmlSha256: htmlResponse?.decodedBodySha256, moduleForwardedAfterDeployment: gate.records[0], finalDocument, appStarted: started };
         await close(state.context);
         if (mode === 'fixed') {
           await build(d);
@@ -299,6 +416,115 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
         }
         return result;
       } finally { gate.release(); await navigation.catch(() => {}); if (contexts.has(state.context)) await close(state.context); }
+    });
+    await run('R5-slow-successful-initial-entry', async () => {
+      const b = `r40-R5-B-${id}`;
+      const built = await build(b);
+      const html = await readFile('dist/index.html', 'utf8');
+      const entry = html.match(/<script[^>]*type="module"[^>]*src="([^"]+)"/)?.[1];
+      if (!entry?.startsWith('/assets/')) throw new Error('Slow startup must hold the actual emitted initial module');
+      const context = await fresh();
+      const next = await context.newPage();
+      const navigations: { url: string; at: number }[] = [];
+      const pageErrors: string[] = [];
+      const failedRequests: { path: string; error: string | null }[] = [];
+      next.on('request', request => { if (request.isNavigationRequest() && request.frame() === next.mainFrame()) navigations.push({ url: request.url(), at: Date.now() }); });
+      next.on('pageerror', error => pageErrors.push(error.message));
+      next.on('requestfailed', request => failedRequests.push({ path: new URL(request.url()).pathname, error: request.failure()?.errorText ?? null }));
+      const gate = proxy.hold({ path: entry, method: 'GET', phase: 'request' });
+      try {
+        await next.goto('/?review-slow-entry=1', { waitUntil: 'commit' });
+        await expect.poll(() => gate.records.length).toBeGreaterThan(0);
+        await expect(next.locator('meta[name="pb-release"]')).toHaveAttribute('content', b);
+        expect(await next.evaluate(async () => ({ controller: !!navigator.serviceWorker.controller, registered: !!await navigator.serviceWorker.getRegistration('/') }))).toEqual({ controller: false, registered: false });
+        const pendingStartedAt = gate.records[0]!.startedAt;
+        const remaining = 18000 - (Date.now() - pendingStartedAt);
+        if (remaining > 0) await next.waitForTimeout(remaining);
+        const heldForMs = Date.now() - pendingStartedAt;
+        const beforeRelease = [...navigations];
+        const pendingErrors = [...pageErrors];
+        expect(heldForMs).toBeGreaterThanOrEqual(18000);
+        expect(gate.records.every(record => record.upstreamFinishedAt === undefined)).toBe(true);
+        if (mode === 'fixed') {
+          expect(beforeRelease).toHaveLength(1);
+          expect(pendingErrors).toEqual([]);
+          expect(failedRequests).toEqual([]);
+          await expect(next.locator('meta[name="pb-release"]')).toHaveAttribute('content', b);
+        }
+        gate.release();
+        await workspaceReady(next);
+        await workerReady(next);
+        await releaseIs(next, b);
+        await expect.poll(() => gate.records.filter(record => record.status === 200 && record.bodyBytes! > 0).length).toBeGreaterThan(0);
+        await next.waitForTimeout(1200);
+        if (mode === 'fixed') { expect(navigations).toHaveLength(1); expect(pageErrors).toEqual([]); expect(failedRequests).toEqual([]); }
+        const moduleAsset = built.assets.find(asset => asset.path === entry)!;
+        expect(gate.records.filter(record => record.status === 200).map(record => record.bodyDecodingError).filter(Boolean)).toEqual([]);
+        expect(gate.records.some(record => record.status === 200 && record.decodedBodySha256 === moduleAsset.sha256 && record.decodedBodyBytes === moduleAsset.bytes)).toBe(true);
+        await capture(next, evidence, 'R5-healthy-entry-started-after-eighteen-second-hold');
+        return { case: 'R5-slow-successful-initial-entry', regressionObserved: beforeRelease.length > 1, release: b, initialModule: entry, moduleAsset, heldForMs, buildUnchangedThroughoutHold: true, freshContextWithoutWorkerAtHold: true, navigationsBeforeRelease: beforeRelease, navigationsAfterSuccess: navigations, errorsBeforeRelease: pendingErrors, pageErrors, failedRequests, actualModuleResponses: gate.records, finalController: await controllerRelease(next), finalDocument: await next.locator('meta[name="pb-release"]').getAttribute('content'), appStarted: true };
+      } finally { gate.release(); await close(context); }
+    });
+
+    await run('R6-held-undo-response', async () => {
+      const a = `r40-R6-A-${id}`, b = `r40-R6-B-${id}`;
+      await build(a);
+      const state = await seed(await fresh(), a, 'R6 Undo');
+      const draftPlayer = await addPlayer(state.page, `R6 durable ${id}`);
+      await draft(state.page, draftPlayer.id, '47.', 'Zelle');
+      await keepMoneyDraft(state.page);
+      const durable = (await databaseSnapshot(state.page)).drafts.find(row => row.value.amount === '47.')!;
+      const saved = await money(state.page, state.player, '25', { method: 'venmo' });
+      const originalBuyIn = saved.entries.find(entry => entry.player_id === state.player && entry.kind === 'buy_in' && !entry.voids_entry_id)!;
+      const originalPayment = saved.entries.find(entry => entry.player_id === state.player && entry.kind === 'payment_in' && !entry.voids_entry_id)!;
+      expect(originalBuyIn).toBeTruthy(); expect(originalPayment).toBeTruthy();
+      expect((await databaseSnapshot(state.page)).outbox).toEqual([]);
+      await expect(state.page.getByRole('dialog')).toHaveCount(0);
+      const path = `/api/sessions/${state.session}/entries/${originalBuyIn.id}/undo`;
+      const gate = proxy.hold({ path, method: 'POST', phase: 'body' });
+      const navigations: { url: string; at: number }[] = [];
+      state.page.on('request', request => { if (request.isNavigationRequest() && request.frame() === state.page.mainFrame()) navigations.push({ url: request.url(), at: Date.now() }); });
+      const readerContext = await fresh();
+      const reader = await readerContext.newPage();
+      try {
+        await state.page.getByRole('button', { name: 'Undo', exact: true }).click();
+        await expect.poll(() => gate.records.filter(record => record.upstreamFinishedAt).length).toBe(1);
+        expect(gate.records[0]!.status).toBe(200);
+        await visible(state.page, false);
+        await build(b);
+        await reader.goto(`/?session=${state.session}`); await workspaceReady(reader);
+        const committed = await current(reader, state.session);
+        expect(committed.entries.filter(entry => entry.voids_entry_id === originalBuyIn.id)).toHaveLength(1);
+        expect(committed.entries.filter(entry => entry.voids_entry_id === originalPayment.id)).toHaveLength(1);
+        expect(committed.entries.filter(entry => entry.voids_entry_id)).toHaveLength(2);
+        await lifecycle(state.page);
+        await expect.poll(() => candidateRelease(state.page), { timeout: 25000 }).toBe(b);
+        await state.page.waitForTimeout(4200);
+        const beforeRelease = [...navigations];
+        expect(gate.records[0]!.releasedAt).toBeUndefined();
+        expect(beforeRelease).toEqual([]);
+        await expect(state.page.locator('meta[name="pb-release"]')).toHaveAttribute('content', a);
+        await expect(state.page.getByRole('dialog')).toHaveCount(0);
+        expect((await databaseSnapshot(state.page)).outbox).toEqual([]);
+        expect((await databaseSnapshot(state.page)).drafts.find(row => row.key === durable.key)).toEqual(durable);
+        await expect(state.page.getByTestId('update-reload')).toBeDisabled();
+        await capture(state.page, evidence, 'R6-closed-sheet-empty-outbox-undo-body-still-held');
+        gate.release();
+        await releaseIs(state.page, b);
+        await workspaceReady(state.page);
+        const after = await databaseSnapshot(state.page);
+        expect(after.drafts.find(row => row.key === durable.key)).toEqual(durable);
+        expect(after.outbox).toEqual([]);
+        const confirmed = await current(reader, state.session);
+        expect(confirmed.entries.filter(entry => entry.voids_entry_id === originalBuyIn.id)).toHaveLength(1);
+        expect(confirmed.entries.filter(entry => entry.voids_entry_id === originalPayment.id)).toHaveLength(1);
+        expect(confirmed.entries.filter(entry => entry.voids_entry_id)).toHaveLength(2);
+        expect(gate.records).toHaveLength(1);
+        expect((await call<{ banker: { id: string } }>(state.page, '/auth/me')).banker.id).toBe(banker);
+        await restoredDraft(state.page, draftPlayer.id, '47.', 'Zelle');
+        await capture(state.page, evidence, 'R6-B-restores-draft-after-one-paid-undo');
+        return { case: 'R6-held-undo-response', regressionObserved: beforeRelease.length > 0, before: a, after: b, originalBuyInId: originalBuyIn.id, originalPaymentId: originalPayment.id, committedBeforeResponseRelease: true, ledgerAndPaymentVoidCounts: [1, 1], postCount: gate.records.length, actualUndoResponse: gate.records[0], observationMs: 4200, navigationsBeforeResponseRelease: beforeRelease, navigationsAfterSafePoint: navigations, closedSheetAndEmptyOutboxDuringHold: true, draftBeforeSha256: sha(durable), draftAfterSha256: sha(after.drafts.find(row => row.key === durable.key)), bankerId: banker, sessionId: state.session };
+      } finally { gate.release(); await close(readerContext); await close(state.context); }
     });
     const result = { mode, rows, errors, builds, origin: proxy.origin, upstream: baseURL, bankerId: banker, actualForwarding: true, limitations: ['Loopback TLS, owned PostgreSQL and real HTTP bodies; no production writes.', 'Desktop/phone browser emulation does not prove physical iOS suspension or Home Screen behavior.', 'Legacy activation is explicitly deferred until all legacy documents close.'] };
     await writeFile(join(evidence, 'review-cases-summary.json'), JSON.stringify(result, null, 2));

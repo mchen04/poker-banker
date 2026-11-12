@@ -3,11 +3,12 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer, request as upstreamRequest } from 'node:https';
 import { resolve } from 'node:path';
 import type { Duplex } from 'node:stream';
+import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
 import { closeOwnedServer } from './close-server';
 import { runOwned } from './owned-command';
 import type { ProcessOwner } from './owned-process';
 
-export type ForwardedRequest = { id: number; path: string; method: string; navigation: boolean; startedAt: number; status?: number; headers?: Record<string, string | string[] | undefined>; bodySha256?: string; bodyBytes?: number; upstreamFinishedAt?: number; releasedAt?: number; disconnectedAt?: number };
+export type ForwardedRequest = { id: number; path: string; method: string; navigation: boolean; startedAt: number; status?: number; contentType?: string; contentEncoding?: string; bodySha256?: string; bodyBytes?: number; decodedBodySha256?: string; decodedBodyBytes?: number; bodyDecodingError?: string; upstreamFinishedAt?: number; releasedAt?: number; disconnectedAt?: number };
 type Match = { path?: string; method?: string; navigation?: boolean; phase?: 'headers' | 'body' | 'request'; limit?: number };
 type Gate = { match: Match; records: ForwardedRequest[]; release: () => void; released: Promise<void>; timer: ReturnType<typeof setTimeout> };
 
@@ -43,9 +44,22 @@ export async function createUpdateProofProxy(owner: ProcessOwner, baseURL: strin
       result.on('end', () => {
         const body = Buffer.concat(chunks);
         record.status = result.statusCode ?? 502;
-        record.headers = result.headers;
+        record.contentType = result.headers['content-type'];
+        record.contentEncoding = result.headers['content-encoding'] ?? 'identity';
         record.bodyBytes = body.length;
         record.bodySha256 = createHash('sha256').update(body).digest('hex');
+        try {
+          let decoded: Buffer = body;
+          for (const encoding of record.contentEncoding.split(',').map(value => value.trim().toLowerCase()).reverse()) {
+            if (!encoding || encoding === 'identity') continue;
+            if (encoding === 'gzip' || encoding === 'x-gzip') decoded = gunzipSync(decoded);
+            else if (encoding === 'br') decoded = brotliDecompressSync(decoded);
+            else if (encoding === 'deflate') decoded = inflateSync(decoded);
+            else throw new Error(`Unsupported content encoding: ${encoding}`);
+          }
+          record.decodedBodyBytes = decoded.length;
+          record.decodedBodySha256 = createHash('sha256').update(decoded).digest('hex');
+        } catch (error) { record.bodyDecodingError = error instanceof Error ? error.message : String(error); }
         record.upstreamFinishedAt = Date.now();
         const sendHeaders = () => { if (!response.destroyed && !response.headersSent) response.writeHead(record.status!, result.headers); };
         if (gate?.match.phase === 'body') { sendHeaders(); if (!response.destroyed) response.flushHeaders(); }

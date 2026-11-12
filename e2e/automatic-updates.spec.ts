@@ -9,6 +9,6 @@ test('automatic release adoption preserves previous clients, drafts, offline wri
   const result = await verifyUpdateJourney({ page, browser, baseURL, evidence: info.outputPath('automatic-updates'), tag: info.project.name });
   expect(result?.table).toHaveLength(5);
   expect(result?.compatibility.previousSource).toMatch(/^dc2082b/);
-  expect(result?.review?.rows).toHaveLength(4);
+  expect(result?.review?.rows).toHaveLength(6);
   expect(result?.review?.errors).toEqual([]);
 });
