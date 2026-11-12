@@ -4,8 +4,8 @@ Each game has its own settings and drafts. A banker can create multiple games on
 
 ## Sub-features
 
-- `sessions-welcome-create` creates through the empty workspace.
-- `sessions-picker-create` creates through Switch session → New session.
+- `sessions-welcome-create` creates through the empty Table.
+- `sessions-header-create` creates through the header +; `sessions-picker-create` creates through Switch session → New session.
 - `sessions-settings` saves location, game and big blind with past-value suggestions.
 - `sessions-picker-history` switches through searchable month history and player history.
 - `sessions-pagination` loads another history page when more than 30 sessions exist.
@@ -14,8 +14,8 @@ Each game has its own settings and drafts. A banker can create multiple games on
 
 ## How to get to it (user POV)
 
-- Choose `Create your first session` in an empty Workspace, or `Switch session` → `New session`.
-- Choose `Switch session`, then search History and choose a dated game; choose `Load more sessions` for older games.
+- Choose `Create your first session` in an empty Table, or the `New session` + button next to the current title.
+- Choose `Switch session`, then search Sessions and choose a dated game; choose `Load more sessions` for older games.
 - Choose `Session menu` → `Session settings` to edit settings.
 - Choose `Add player` in a session, search an existing name, or choose `Add 'Name' as new`.
 - Open a player through `Players` and choose one of their Past sessions.
@@ -25,7 +25,7 @@ Each game has its own settings and drafts. A banker can create multiple games on
 
 Preconditions:
 
-- Doctor succeeds. The recipe returns to Workspace and creates its own uniquely named sessions; earlier recipes may already have sessions.
+- Doctor succeeds. The recipe returns to Table and creates its own uniquely named sessions; earlier recipes may already have sessions.
 - This recipe intentionally creates 31 additional empty sessions through the public API as history-pagination setup. That setup does not prove the Create session UI.
 
 - **Create, reuse, switch and restore.** Save as `.cache/verify-sessions.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-sessions.ts --run RUN_ID --context iphone-webkit`. The two named games share one date, while their typed amounts remain different after reload.
@@ -34,8 +34,9 @@ Preconditions:
 import { typeInput } from '../e2e/input';
 import { randomUUID } from 'node:crypto';
 import { expect } from '@playwright/test';
-import { addPlayer, call, current, keepMoneyDraft, menu, newSession, openMoney, openNewSession, storedDraft, switchSession, workspaceReady } from '../e2e/helpers';
+import { addPlayer, call, current, keepMoneyDraft, menu, openMoney, openNewSession, storedDraft, switchSession, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
+import type { SessionState } from '../src/domain/session';
 
 export default async function ({ page, banker, runId, step, checkState }: RecipeContext) {
   await page.goto('/');
@@ -52,7 +53,7 @@ export default async function ({ page, banker, runId, step, checkState }: Recipe
     await expect(page.getByRole('button', { name: 'Switch session', exact: true })).toHaveAttribute('data-testid', /^session-tab-/);
     await expect(welcome).toHaveCount(0);
   }
-  await step(empty ? 'sessions-welcome-create-before' : 'sessions-picker-create-before');
+  await step(empty ? 'sessions-welcome-create-before' : 'sessions-header-create-before');
   await openNewSession(page);
   await typeInput(page.getByLabel('Session name', { exact: true }), firstName);
   await typeInput(page.getByLabel('Session date', { exact: true }), '2026-11-10');
@@ -66,7 +67,12 @@ export default async function ({ page, banker, runId, step, checkState }: Recipe
   await openMoney(page, player.id);
   await typeInput(page.getByTestId('money-amount'), '12.');
   await keepMoneyDraft(page);
-  const second = await newSession(page, secondName);
+  await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Sessions', exact: true }).getByRole('button', { name: 'New session', exact: true }).click();
+  await typeInput(page.getByLabel('Session name', { exact: true }), secondName);
+  await page.getByRole('button', { name: 'Create session', exact: true }).click();
+  await expect(page.getByRole('heading', { name: secondName, exact: true })).toBeVisible();
+  const second = await current(page);
   await menu(page, 'Session settings');
   await expect(page.locator('#past-locations option').filter({ hasText: 'Verify Home' })).toHaveCount(1);
   await expect(page.locator('#past-games option').filter({ hasText: 'NLH' })).toHaveCount(1);
@@ -99,18 +105,27 @@ export default async function ({ page, banker, runId, step, checkState }: Recipe
   await page.getByRole('button', { name: 'Keep editing', exact: true }).click();
   await expect(page.getByTestId('money-amount')).toHaveValue('12.');
   await keepMoneyDraft(page);
-  for (let index = 0; index < 31; index++) await call(page, '/sessions', 'POST', { op_id: randomUUID(), name: `${name} older ${index}`, played_on: `2025-${String(1 + index % 12).padStart(2, '0')}-01`, currency: 'USD' });
+  for (let index = 0; index < 31; index++) {
+    const older = await call<SessionState>(page, '/sessions', 'POST', { op_id: randomUUID(), name: `${name} older ${index}`, played_on: `2025-${String(1 + index % 12).padStart(2, '0')}-01`, currency: 'USD' });
+    await call(page, `/sessions/${older.session.id}/close`, 'POST', { op_id: randomUUID(), expected_revision: older.revision });
+  }
+  const oldOpen = await call<SessionState>(page, '/sessions', 'POST', { op_id: randomUUID(), name: `${name} unfinished`, played_on: '2024-01-01', currency: 'USD' });
   await page.getByRole('button', { name: 'Switch session', exact: true }).click();
   const matchingHistory = page.waitForResponse(response => {
     const url = new URL(response.url());
     return response.request().method() === 'GET' && url.pathname === '/api/sessions' && url.searchParams.get('q') === name && !url.searchParams.has('before');
   });
   await typeInput(page.getByLabel('Search sessions', { exact: true }), name);
-  expect((await matchingHistory).status()).toBe(200);
-  await expect(page.getByRole('dialog').getByRole('button', { name: new RegExp(name) })).toHaveCount(30);
+  const firstHistoryPage = await matchingHistory;
+  expect(firstHistoryPage.status()).toBe(200);
+  expect((await firstHistoryPage.json()).sessions.some((session: { id: string }) => session.id === oldOpen.session.id)).toBe(false);
+  await expect(page.getByRole('region', { name: 'Current and open sessions', exact: true }).getByTestId(`session-tab-${oldOpen.session.id}`)).toBeVisible();
+  await expect(page.getByRole('dialog').getByRole('button', { name: new RegExp(name) })).toHaveCount(31);
+  await expect(page.getByRole('heading', { name: 'November 2025', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Load more sessions', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Load more sessions', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Load more sessions', exact: true })).toHaveCount(0);
+  await step('sessions-closed-history-month-pagination');
   const lateHistory = page.waitForResponse(response => {
     const url = new URL(response.url());
     return response.request().method() === 'GET' && url.pathname === '/api/sessions' && url.searchParams.get('q') === secondName;
@@ -118,8 +133,8 @@ export default async function ({ page, banker, runId, step, checkState }: Recipe
   await typeInput(page.getByLabel('Search sessions', { exact: true }), secondName);
   expect((await lateHistory).status()).toBe(200);
   await expect(page.getByRole('dialog').getByRole('button', { name: new RegExp(name) })).toHaveCount(1);
-  await expect(page.getByRole('heading', { name: 'November 2026', exact: true })).toBeVisible();
-  await step('sessions-history-month-search');
+  await expect(page.getByRole('heading', { name: 'Current and open sessions', exact: true })).toBeVisible();
+  await step('sessions-pinned-open-search');
   await page.getByRole('dialog').getByRole('button', { name: new RegExp(secondName) }).click();
   await expect(page.getByRole('heading', { name: secondName, exact: true })).toBeVisible();
   expect(new URL(page.url()).searchParams.get('session')).toBe(second.session.id);
@@ -145,8 +160,8 @@ export default async function ({ page, banker, runId, step, checkState }: Recipe
 
 ## Gotchas
 
-- Workspace can briefly show the welcome before its history arrives. The recipe reads this banker's public session list and waits for the matching loaded UI before choosing the entry.
-- The recipe records the actual creation entry point. Its isolated fresh run proves the welcome path; a shared run with prior sessions proves the picker path. Neither is reported as the other.
+- Table can briefly show the welcome before its history arrives. The recipe reads this banker's public session list and waits for the matching loaded UI before choosing the entry.
+- The recipe records the actual creation entry point. Its isolated fresh run proves the welcome path; a shared run with prior sessions proves the header path. The second creation explicitly proves the picker path. None is reported as another entry point.
 - Save settings and Add player must close their sheets before saved-state reads. A completed click alone does not mean the request has committed.
 - Search must retain the actual typed text while results load. Wait for the warning or matching result, not a fixed sleep or a retry.
 - Exact duplicate names represent separate IDs only after `This is a different person` is checked. Never merge them by text alone.

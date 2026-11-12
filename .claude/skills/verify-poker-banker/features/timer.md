@@ -16,7 +16,7 @@ Session time is server state. A timer can start manually or with the first buy-i
 - Choose `Start timer` beside the session timer in a new game.
 - Alternatively record the game's first buy-in.
 - Choose `Session menu` → `Correct times`, edit `Started at` and `Ended at`, then `Save timing`.
-- Close through `Session menu` → `Close game`.
+- Close through `Session menu` → `Close session`.
 
 ## Driving it with Playwright
 
@@ -65,7 +65,8 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     await typeInput(page.getByLabel('Started at', { exact: true }), corrected.slice(0, 19));
     await typeInput(page.getByLabel('Ended at', { exact: true }), new Date(Date.parse(corrected) - 1000).toISOString().slice(0, 19));
     await page.getByRole('button', { name: 'Save timing', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('Request validation failed');
+    await expect(page.getByRole('alert')).toContainText('End must be at or after a valid start. Correct these times.');
+    await expect(page.getByLabel('Ended at', { exact: true })).toBeFocused();
     expect((await checkState()).session.started_at).toBe(started);
     await typeInput(page.getByLabel('Ended at', { exact: true }), '');
     await page.getByRole('button', { name: 'Save timing', exact: true }).click();

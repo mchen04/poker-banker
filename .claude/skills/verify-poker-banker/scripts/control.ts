@@ -135,7 +135,7 @@ async function daemon() {
     expect(release).toBe(meta.release);
     const history = await page.request.get(`${meta.baseURL}/api/sessions`); expect(history.status()).toBe(200);
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await page.getByRole('navigation', { name: 'Workspace navigation', exact: true }).getByRole('button', { name: 'Workspace', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Table navigation', exact: true }).getByRole('button', { name: 'Table', exact: true }).click();
     await workspaceReady(page);
     if (local) {
       const listener = Number((await runOwned(owner, 'lsof', ['-nP', `-iTCP:${meta.port}`, '-sTCP:LISTEN', '-t'])).trim());
@@ -154,7 +154,7 @@ async function daemon() {
     }
     if (command.action === 'doctor') return doctor();
     if (command.action === 'evidence') return manifest();
-    if (meta.state !== 'ready' || !browser || !user) throw new Error('Launch has not reached a signed-up usable workspace');
+    if (meta.state !== 'ready' || !browser || !user) throw new Error('Launch has not reached a signed-up usable table');
     const mode = command.mode ?? 'iphone-webkit';
     if (!['iphone-webkit', 'iphone-standalone', 'desktop-webkit'].includes(mode)) throw new Error('Unknown verification context');
     const page = await contextPage(mode);
@@ -306,7 +306,7 @@ else if (action === 'launch') {
     }
     if (interrupted) { await stopLaunch(); console.error(`Verification launch interrupted by ${interrupted}; evidence preserved at ${evidence}`); }
     else {
-      if (!ready) { await stopLaunch(); throw new Error(`Launch never reached workspace; evidence preserved at ${evidence}`); }
+      if (!ready) { await stopLaunch(); throw new Error(`Launch never reached the table; evidence preserved at ${evidence}`); }
       handoffTask = owner.handoff(child).then(() => { handedOff = true; });
       await handoffTask;
       if (interrupted) { await stopLaunch(); throw new Error('Verification launch was interrupted during handoff'); }

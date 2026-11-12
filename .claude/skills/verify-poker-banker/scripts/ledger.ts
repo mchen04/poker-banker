@@ -18,7 +18,8 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   async function record(amount: string, name: string, kind: 'Buy-in' | 'Cash out' | 'Record payment' | 'Tips and meals' = 'Buy-in', paid?: boolean, method?: 'Cash' | 'Venmo' | 'Zelle') {
     await openMoney(page, player.id, kind);
     await typeInput(page.getByTestId('money-amount'), amount);
-    if (paid !== undefined) await page.getByLabel(kind === 'Buy-in' ? 'Paid now' : 'Paid out now', { exact: true }).setChecked(paid);
+    if (paid === false) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Unpaid', exact: true }).click();
+    else if (paid === true && !method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
     if (method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: method, exact: true }).click();
     await step(`${name}-action`);
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
@@ -29,9 +30,11 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   }
   await step('bottom-buy-in-entrypoint');
   await page.getByTestId('session-bottom-bar').getByRole('button', { name: 'Buy-in', exact: true }).click();
-  await page.getByLabel('Player', { exact: true }).selectOption(other.id);
-  await expect(page.getByLabel('Player', { exact: true })).toHaveValue(other.id);
-  await page.getByLabel('Player', { exact: true }).selectOption(player.id);
+  await expect(page.getByRole('dialog', { name: 'Choose player', exact: true })).toBeVisible();
+  await expect(page.getByTestId('money-amount')).toHaveCount(0);
+  await page.getByTestId(`choose-buy-in-${player.id}`).click();
+  await expect(page.getByTestId('money-player')).toHaveText(player.display_name);
+  await expect(page.getByLabel('Player', { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('money-amount')).toBeEnabled();
   await typeInput(page.getByTestId('money-amount'), '40');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }).click();
@@ -41,7 +44,7 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   await expect(page.getByTestId('activity')).toContainText('Venmo');
   await step('bottom-buy-in-confirmed');
   await record('20', 'player-sheet-rebuy', 'Buy-in', false);
-  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Collect $20.00');
+  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Owes $20.00');
   await step('player-sheet-rebuy-unpaid-result');
   await record('20', 'payment-zelle', 'Record payment', undefined, 'Zelle');
   await step('payment-zelle-confirmed');

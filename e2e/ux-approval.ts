@@ -22,13 +22,13 @@ async function capture(page: Page, evidence: string, name: string) {
   await page.screenshot({ path: join(evidence, `${name}.png`), fullPage: false });
   await writeFile(join(evidence, `${name}.aria.txt`), await page.locator('body').ariaSnapshot());
   await writeFile(join(evidence, `${name}.geometry.json`), JSON.stringify(await page.evaluate(() => {
-    const rect = (element: Element) => { const box = element.getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width, height: box.height, bottom: box.bottom }; };
     return { viewport: { width: innerWidth, height: innerHeight, visualHeight: visualViewport?.height }, activeField: document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.getAttribute('data-testid'), horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
-      controls: [...document.querySelectorAll('button,input,select,[data-testid^="player-"]')].filter(element => element.getClientRects().length).map(element => ({ name: element.getAttribute('aria-label') ?? element.textContent?.trim().slice(0, 100), testid: element.getAttribute('data-testid'), ...rect(element) })) };
+      controls: [...document.querySelectorAll('button,input,select,[data-testid^="player-"]')].filter(element => element.getClientRects().length).map(element => { const box = element.getBoundingClientRect(); return { name: element.getAttribute('aria-label') ?? element.textContent?.trim().slice(0, 100), testid: element.getAttribute('data-testid'), x: box.x, y: box.y, width: box.width, height: box.height, bottom: box.bottom }; }) };
   }), null, 2));
 }
 
 export async function uxApproval({ page, browser, baseURL, evidence, runId }: UxApprovalOptions) {
+  const originalViewport = page.viewportSize();
   await mkdir(evidence, { recursive: true });
   await page.goto('/'); await workspaceReady(page);
   expect((await call<{ sessions: unknown[] }>(page, '/sessions')).sessions, 'Run this recipe first in a fresh local verification banker').toHaveLength(0);
@@ -190,11 +190,14 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
     expect(viewerCard.background).not.toBe('rgba(0, 0, 0, 0)');
     await writeFile(join(evidence, 'viewer-card-appearance.json'), JSON.stringify(viewerCard, null, 2));
     await capture(viewer, evidence, 'viewer-live');
+    await viewer.emulateMedia({ colorScheme: 'dark' }); await capture(viewer, evidence, 'viewer-live-dark');
+    await viewer.emulateMedia({ colorScheme: 'light' });
     await menu(page, 'Share'); await page.getByRole('button', { name: 'Rotate link', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm rotate', exact: true }).click();
     await viewer.reload(); await expect(viewer.getByText('This viewer link is unavailable', { exact: false })).toBeVisible();
     await expect(viewer.getByText('View only, updated', { exact: false })).toHaveCount(0);
     await capture(viewer, evidence, 'viewer-revoked');
+    await viewer.emulateMedia({ colorScheme: 'dark' }); await capture(viewer, evidence, 'viewer-revoked-dark');
     await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
   } finally { await viewerContext.close(); }
   const players = [playerId];
@@ -206,6 +209,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
     await tap(page.getByTestId('session-bottom-bar').getByRole('button', { name: 'Buy-in', exact: true }));
     await expect(page.getByRole('dialog', { name: 'Choose player', exact: true })).toBeVisible();
     await expect(page.getByTestId('money-amount')).toHaveCount(0);
+    await capture(page, evidence, 'footer-player-choice');
     await tap(page.getByTestId(`choose-buy-in-${players[1]}`));
     await expect(page.getByTestId('money-player')).toContainText('Riley');
     await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -256,5 +260,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
   for (const scheme of ['light', 'dark'] as const) { await page.emulateMedia({ colorScheme: scheme }); await page.evaluate(() => scrollTo(0, 0)); await capture(page, evidence, `desktop-table-${scheme}-1440x1000`); }
   const result = { tag, taps, rowCounts, rowMoneyFits, sessionIds: [first.session.id, second.session.id], playerIds: players, limits: ['Visual viewport emulates a keyboard; physical iOS keyboard and Home Screen behavior require a device.', 'Clipboard fallback is allowed; the copy action must give visible feedback.', 'Input focus and typing are excluded from control-tap counts. Setup actions are excluded and each journey names its starting surface.'] };
   await writeFile(join(evidence, 'ux-approval-summary.json'), JSON.stringify(result, null, 2));
+  if (originalViewport) await page.setViewportSize(originalViewport);
+  await page.emulateMedia({ colorScheme: null });
   return result;
 }

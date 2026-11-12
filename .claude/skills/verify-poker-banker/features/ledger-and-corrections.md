@@ -8,7 +8,7 @@ The banker records buy-ins and cash-outs without losing the original ledger. Res
 - `ledger-player-buy-in` records from a player sheet, including a rebuy.
 - `ledger-row-buy-in` opens review directly from a player row without recording an entry.
 - `ledger-repeat-review` suggests the last effective buy-in while retaining an existing draft.
-- `ledger-select-player` changes the player in the money sheet without mixing drafts.
+- `ledger-player-choice` requires an explicit footer player choice before opening a fixed-player money sheet.
 - `ledger-cash-out-reentry` covers early cash-out, re-entry and final cash-out.
 - `ledger-expense` records tips and meals from a player sheet.
 - `ledger-global-correct` corrects from global Activity.
@@ -17,8 +17,8 @@ The banker records buy-ins and cash-outs without losing the original ledger. Res
 
 ## How to get to it (user POV)
 
-- Choose `Buy-in` in the fixed bottom bar, then use `Player` if needed.
-- Choose the row’s `Buy-in` or `Repeat last` shortcut to review an amount. Choose the player’s name for `Buy-in`, `Cash out`, payments and `Tips and meals`.
+- Choose `Buy-in` in the single bottom navigation bar, then explicitly choose a player. The money sheet displays that player as fixed text; choose another player by cancelling and returning to the chooser.
+- Choose the row’s `Buy-in` or `Rebuy` shortcut to review an amount. Choose the player’s name for `Buy-in`, `Cash out`, payments and `Tips and meals`.
 - Choose `Correct` beside an entry in global Activity or in that player's entries.
 - Use `Replacement amount` and `Save correction`, or choose `Void entry` → `Confirm void` without replacement. `Keep entry` returns to the editor with its draft intact.
 - Add and reuse players through the [sessions recipe](sessions-and-drafts.md); that recipe owns new/existing-name search and exact-match confirmation.
@@ -30,7 +30,7 @@ Preconditions:
 - Doctor succeeds for this run. The banker is owned by this run and online.
 - The harness can create a fresh session and two uniquely named players. Missing players or a closed session fail this recipe rather than skip an entry point.
 
-- **Drive ledger and correction entry points.** Run `.claude/skills/verify-poker-banker/scripts/verify.sh drive ledger --run RUN_ID --context iphone-webkit`. The built-in recipe exercises the bottom-bar and player-sheet buy-ins, money-sheet player selector, cash-out/re-entry, tips and meals, both correction entry points, a method correction and void-only history. Each path must appear in its action/result evidence.
+- **Drive ledger and correction entry points.** Run `.claude/skills/verify-poker-banker/scripts/verify.sh drive ledger --run RUN_ID --context iphone-webkit`. The built-in recipe exercises the bottom-bar and player-sheet buy-ins, explicit player chooser, cash-out/re-entry, tips and meals, both correction entry points, a method correction and void-only history. Each path must appear in its action/result evidence.
 - **Repeat the same recipe in standalone.** Run `.claude/skills/verify-poker-banker/scripts/verify.sh drive ledger --run RUN_ID --context iphone-standalone`. Its artifacts identify the emulated standalone context. This does not prove a real Home Screen install.
 - **Repeat on desktop WebKit.** Run `.claude/skills/verify-poker-banker/scripts/verify.sh drive ledger --run RUN_ID --context desktop-webkit`. Its independent session and artifacts prove the same controls at desktop size.
 - **Check row shortcuts separately.** The focused `e2e/mobile-ux.spec.ts` journey checks direct Buy-in, Repeat last and saved-draft precedence. Require unchanged saved entries until Save entry is chosen; the built-in ledger drive alone does not prove these shortcuts.

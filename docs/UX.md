@@ -1,27 +1,27 @@
 # Mobile UX
 
-This inventory follows the approved UI continuation and the [independent baseline review](../evidence/turn3/audit/independent-baseline-ux.md). It describes the working design and acceptance scope; implementation alone does not establish that every state has passed visual or device verification. Automatic PWA update adoption is a separate continuation item.
+This inventory follows the approved UI continuation and the [independent baseline review](../evidence/turn3/audit/independent-baseline-ux.md). It describes the working design and acceptance scope; implementation alone does not establish that every state has passed visual or device verification. The safe automatic-update behavior from Round 36 remains unchanged.
 
-## Structure and alternatives
+## Structure
 
-**A: compact shell with stable destinations, selected.** Workspace and Players remain visible destinations in a labelled bottom navigation bar. An open session has a separate contextual action bar: Add player leads on an empty table, Buy-in during play, and Close game becomes prominent when players have cashed out. One searchable, month-grouped session picker replaces the persistent recent-session strip. Concise session metadata, chips in play, money to collect/pay, player state and activity form the reading order. Direct Buy-in and Repeat last on a player open a review sheet; neither commits an entry.
+The phone has one safe-area-aware bar: Table, one contextual action, and Players. The action adds the first player, opens an explicit player chooser for a buy-in, or reviews closing once everyone has cashed out. A money sheet never chooses a player implicitly. The session title opens Sessions; a separate + beside it opens New session directly. Current and open sessions precede the month-grouped closed history. Desktop moves navigation to the top and places activity beside the wider table. Session names the saved record; Game in settings and reports means the poker variant.
 
-**B: game command desk.** The table would become the root, with local table/activity/results sections, one changing command region and full-height financial editors. Roster and reports would move behind a directory entry. This recovers vertical space and simplifies an editor's keyboard geometry, but makes reusable players/results less discoverable, adds navigation and requires more restoration when returning to a game. A preserves the established roster/ledger model while improving repeated entry.
+The integrated bar replaces the former two-bar design. Rows keep player identity, position and payment balance together with a direct state-aware action. Playing rows show chips bought, never invented live profit; a net result appears only after cash-out. Financial review, duplicate-name checks, exact discrepancy acceptance and destructive confirmations remain.
 
-A deliberately spends phone height on two distinct footer regions. Redundant branding stays on desktop; the phone begins with the session picker. On phones, long titles/names clamp cleanly to two lines while their full text remains in the accessible name and detail/settings view. Their combined space, 136 px on phones plus the home indicator inset, is reserved in the document. The picker adds a step when returning to an immediately visible recent game; the gain is less permanent chrome and access to the complete history. Save review, duplicate-name checks, discrepancy acceptance and destructive-action confirmation remain more valuable than the smallest possible tap count.
+The supplied Pookie Budget PDF was inspected offline, including its footer/navigation screenshots on pages 3 and 4. It shows one integrated bar with a central action. This revision follows that structural economy without copying its gradients or decoration. No reference-app visit or account access was performed.
 
 ## Screen, sheet and dialog inventory
 
 | Surface | Contents and required states |
 | --- | --- |
-| Startup and account gate | Opening/loading; authenticated restoration; expired/revoked authentication; Account changed with explicit Reload account state; recovery-code restore failure with retry before workspace access. |
+| Startup and account gate | Opening/loading; authenticated restoration; expired/revoked authentication; Account changed with explicit Reload account state; recovery-code restore failure with retry before table access. |
 | Account access | Sign in; Sign up; Recover account with username, one-time code and new password; busy/error/password-reset feedback. |
 | Recovery codes | Code display, saved acknowledgement and Continue; device-backup failure/retry; backup changed in another tab; restored unacknowledged codes. Codes remain visible until acknowledgement. |
-| Workspace | First-session empty state; active session; empty table; seated, playing, cashed-out and re-entered players; open/closed balanced/closed discrepant session; loading/load error; read-only offline snapshot. |
+| Table | First-session empty state; active session; empty table; seated, playing, cashed-out and re-entered players; open/closed balanced/closed discrepant session; loading/load error; read-only offline snapshot. |
 | Session overview | Session/date/currency/location/game/blind, timer not started/live/stopped/unknown, chips bought/returned/in play or discrepancy, collect/pay totals, Total/Per hour/BB display, unavailable time/blind metrics, activity including original/void/replacement. |
-| History picker | New session, search, month groups, current-session marker, open/closed/currency labels, load more, no matches and load error. |
+| Sessions picker | New session, search, month groups, current-session marker, open/closed/currency labels, load more, no matches and load error. |
 | New session / Session settings | Name, date, currency on creation, location/game suggestions and optional positive big blind; restoring/submitting/error/frozen form. Currency is fixed after creation; closed settings cannot be saved. |
-| Session menu | Settings, Correct times, Share session and Close game or Reopen game. |
+| Session menu | Settings, Correct times, Share session and Close session or Reopen session. |
 | Add player | Search/loading/results, reuse existing player, already seated, add new person, exact-name match with explicit different-person acknowledgement, error/frozen form. |
 | Session player sheet | Balance, playing duration, Buy-in, Cash out, Record payment, Tips and meals, and that player's full entry history. Closed sessions retain history without write actions. |
 | Financial sheets | Buy-in/rebuy, cash-out, payment in/out and tips/meals; player, amount/currency, appropriate suggestions, paid state/method, optional time/note, interpreted amount, validation, saving and pending result. Payment direction stays explicit. |
@@ -43,8 +43,8 @@ Frozen forms offer **Check saved result** before further editing or a new copy. 
 
 | Journey | Route and correctness checkpoints |
 | --- | --- |
-| Get access | Sign up → save/acknowledge recovery codes → workspace; sign in/return; recover password → sign in. Exercise restoration failure, invalid credentials and account change. |
-| Start or resume a game | First session or picker → create/settings → table; switch between sessions with independently restored drafts; return from history/player reports to the chosen game. |
+| Get access | Sign up → save/acknowledge recovery codes → table; sign in/return; recover password → sign in. Exercise restoration failure, invalid credentials and account change. |
+| Start or resume a session | First session or picker → create/settings → table; switch between sessions with independently restored drafts; return from history/player reports to the chosen game. |
 | Seat players | Add → existing player or new person; distinguish identical names and prevent seating the same person twice. |
 | Record play | Buy-in → amount/paid state/method → review/save; repeat/rebuy keeps prior history and opens review; unpaid buy-in records chips without inventing a payment. |
 | Settle a player | Cash out actual chips, including zero → choose whether paid; record partial/full payment in either direction with Cash/Venmo/Zelle; re-entry returns a cashed-out player to Playing without showing a premature result. |
@@ -62,7 +62,7 @@ Reports retain profit/loss, money per hour, money per session, playing duration,
 
 | Field | Input and domain rule |
 | --- | --- |
-| Buy-in/rebuy amount | Positive minor-unit value; paid-now defaults on for a new buy-in. Last/default/double suggestions apply only to buy-ins and remain reviewable. The session-default shortcut is exactly 20 major units; there is no separate configurable default-amount field. |
+| Buy-in/rebuy amount | Positive minor-unit value; paid-now defaults on for a new buy-in. Last and typical use effective saved buy-ins; ×2 doubles the current valid input. Suggestions fit one row and remain reviewable. Typical means the most frequent session buy-in, with ties keeping the current suggestion; it is hidden when none exists. Method defaults to that player's last effective method, otherwise Cash. |
 | Cash-out amount | Nonnegative; zero is valid for no chips left and creates no payment. Enter actual chips returned. Paid-out-now defaults off. |
 | Payment in/out amount | Positive; direction and method explicit. Outstanding balance can seed a reviewable suggestion. |
 | Tips/meals amount | Positive; expense detail separate; no buy-in amount shortcut. |
@@ -72,7 +72,7 @@ Reports retain profit/loss, money per hour, money per session, playing duration,
 | Legacy recovered raw minor units | Whole digits only, with actionable precision/range errors and exact bigint normalization; nullable blind and derived signed discrepancy are preserved. The API still enforces kind-specific zero rules. Missing currency for major-unit editing requires review. |
 | Close discrepancy | Derived signed exact sum, accepted by checkbox against the current revision; no user decimal conversion. It may exceed one entry's limit because it is a sum. |
 
-Money inputs have no artificial HTML maximum or text-length cap. Arithmetic and conversion use strings/BigInt, with no floating-point parsing or rounding. The parser accepts outer whitespace, a leading currency-appropriate standard/narrow symbol with optional following space, ordinary digits or strict three-digit comma groups, and a period with up to the currency's allowed decimal places. Fraction-only input is accepted when the currency has decimals: USD `12.5`, `12.50`, `.75`, `$1,234.56`. JPY accepts `¥1,234` and rejects decimal parts. KWD retains three-decimal precision. The existing supported-ISO-currency check remains unchanged; the session selector offers USD, JPY, CAD, EUR, GBP, SGD, HKD and AUD.
+Money inputs have no artificial HTML maximum or text-length cap. Arithmetic and conversion use strings/BigInt, with no floating-point parsing or rounding. The parser accepts outer whitespace, a leading currency-appropriate standard/narrow symbol with optional following space, ordinary digits or strict three-digit comma groups, and a period with up to the currency's allowed decimal places. A trailing period is accepted. One unambiguous comma may act as a decimal separator; valid three-digit grouping takes precedence, and mixed decimal conventions such as `1.234,56` or malformed grouping are rejected. Fraction-only input is accepted when the currency has decimals: USD `12.5`, `12.50`, `.75`, `$1,234.56`. JPY accepts `¥1,234` and rejects decimal parts. KWD retains three-decimal precision. The existing supported-ISO-currency check remains unchanged; the session selector offers USD, JPY, CAD, EUR, GBP, SGD, HKD and AUD.
 
 Negative values, junk, malformed grouping and excessive precision are rejected with a corrective example or precision instruction. Empty input asks for an amount; overflow names the actual maximum. Parsing zero is valid; the form/API/database enforce where zero is allowed.
 
@@ -80,25 +80,26 @@ The database/API per-entry maximum is **9,223,372,036,854,775,807 minor units**,
 
 ## Measured action counts
 
-Counts below are measured baseline values from the [standalone recipe JSON](../evidence/verify/20261112T095229642Z-af582111/iphone-standalone/recipe-1794477518087-8a2415/tap-counts-before.json). A tap means a successful navigation, choice, toggle or commit control activation. Typing, field focus, scrolling and fixture setup are excluded. Each journey begins at its named current screen and ends after the stored result or displayed destination; counts are not universal task costs.
+A tap is a successful navigation, choice, toggle or commit control activation. Typing, focus, scrolling, fixture setup and screenshot-only actions are excluded. Each row names its starting surface. The prior column is the judge-checked Round 35 measurement; the footer path had no prior measurement. The revised counts come from the executed shared `e2e/ux-approval.ts` helper through the local verification skill. The [phone control receipt](../evidence/verify/20261112T130200912Z-14f6b34d/iphone-standalone/recipe-1794488670632-d41e52/tap-counts.json) and [desktop receipt](../evidence/verify/20261112T130627916Z-add7b2ee/desktop-webkit/recipe-1794488937695-58ee85/tap-counts.json) record each actual control. The [prior receipt](../evidence/verify/20261112T105401394Z-041661c4/iphone-standalone/recipe-1794480963336-0e1ea5/tap-counts-after.json) supplies Round 35 values.
 
-After counts come from the [standalone after recipe JSON](../evidence/verify/20261112T105401394Z-041661c4/iphone-standalone/recipe-1794480963336-0e1ea5/tap-counts-after.json). These counts were rerun on the final layout.
-
-| Measured journey | Before | After | Trade-off / retained safeguard |
+| Representative journey | Round 35 | Round 37 | Retained safeguard / trade-off |
 | --- | ---: | ---: | --- |
-| Create first session | 2 | 2 | Explicit creation keeps date/currency review. |
-| Create another session | 2 | 3 | One extra picker step removes a persistent navigation row. |
-| Return to another recent session | 1 | 2 | One extra picker step gives one searchable history control. |
-| Add a new player | 2 | 2 | Exact-name duplicate warning stays; fixture uses a unique name. |
-| Reuse an existing player | 2 | 2 | Reuses identity instead of creating a duplicate player. |
-| Buy-in from player row, choose Venmo | 4 | 3 | Amount, paid state, method and Save remain explicit. |
-| Repeat last buy-in with remembered method | 4 | 2 | Opens review; never writes immediately, and existing drafts win. |
-| Record outstanding payment with Zelle | 4 | 4 | Direction/method stay explicit; balance is only a suggestion. |
-| Enable and copy viewer link | 4 | 4 | Copy may offer manual fallback; rotate/disable require separate confirmation. |
-| Cash out actual chips and mark paid | 5 | 5 | Actual chips are entered; payment-out is never assumed. |
-| Correct a payment method | 3 | 3 | Original entry and replacement remain visible. |
-| Close a balanced session | 3 | 2 | Close still reviews blockers; nonzero discrepancy also requires consent. |
-| Open player report and apply a filter | 4 | 4 | Filter application stays explicit; metrics and currency buckets remain unchanged. |
+| Create first session | 2 | 2 | Creation keeps name/date/currency review. |
+| Add a new player | 2 | 2 | Duplicate-name safeguard remains. |
+| Buy-in from player row, choose Venmo | 3 | 3 | Fixed chosen player and explicit Save. |
+| Repeat last buy-in with player's remembered method | 2 | 2 | Prefill opens review; the player’s saved draft wins. |
+| Cash out actual chips and mark paid | 5 | 3 | Actual chips remain typed; payout is explicit. |
+| Record outstanding payment with Zelle | 4 | 3 | Direction is explicit; balance is a reviewable suggestion. |
+| Correct a payment method | 3 | 3 | Original and replacement stay visible. |
+| Close a balanced session | 2 | 2 | Still reviews blockers and exact discrepancy consent. |
+| Create another session | 3 | 2 | The + beside the title opens creation directly. |
+| Reuse an existing player | 2 | 2 | Reuses the stable player identity. |
+| Return to another recent session | 2 | 2 | Title plus choice replaces the duplicate switcher row. |
+| Open player report and apply a filter | 4 | 4 | Filter application remains explicit. |
+| Enable and copy viewer link | 4 | 4 | Rotation/disable need separate confirmation. |
+| Footer buy-in, explicitly choose player and Venmo | Not measured | 4 | The extra player choice prevents wrong-player money. |
+
+The original pre-Round-35 tab strip needed one tap for a visible recent session. The picker still needs two, but now the title itself is the trigger and the extra switcher row is gone. There was no historical footer measurement; no before value is invented. The new footer path is four taps when changing Cash to Venmo, or three when retaining the player's method. These are representative control counts, not full task costs including typing or reconnecting a device.
 
 ## Safeguards and evidence boundaries
 
@@ -106,14 +107,36 @@ Sheets use a stable header, scrollable fields and an action region. Keyboard foc
 
 Validation retains values and payment context. Queued/unconfirmed work remains separate from saved totals; a failed response cannot imply that a financial write did not occur. Existing draft ownership, cross-tab review, duplicate-submit protection, immutable submitted requests and sign-out safeguards remain part of acceptance. Lower tap counts do not justify bypassing these checks.
 
-The Pookie reference was limited to its public login page at 393×852: clear primary action, no observed horizontal overflow, and 48 px password/action heights. Authenticated footer/navigation/update behavior was unavailable; the supplied retained PDF was absent on this filesystem. No account access or reference-app changes were performed. This supports comparison of observed public dimensions only and no claim of universal superiority.
-
 Phone WebKit and standalone emulation can establish viewport, engine and application behavior. They do not prove an actual iOS Home Screen installation, software-keyboard behavior, process suspension, storage eviction or physical safe-area clearance. Record those limitations and obtain real-device evidence separately. Baseline/after screenshots, measured controls and complete-flow results must be assessed together; a passing test suite alone is insufficient UX evidence.
 
 ## Observed layout
 
-The final local captures are retained in [standalone phone](../evidence/verify/20261112T105401394Z-041661c4/) and [desktop WebKit](../evidence/verify/20261112T105721785Z-bc2d4ff9/). Both include the ledger and all nine feature recipes. Captures wait for the roster, report and authentication landmarks; light/dark viewport images complement full-page flow evidence. Secondary contexts retain the chosen viewport, touch and standalone profile while starting without shared cookies.
+The approval recipe captures eight players at 393×659 and 393×852 in light and dark. It requires four and six complete rows respectively above the single bar, checks focused fields and Save against a 380 px emulated visual viewport, and checks desktop width at 1440×1000. The executed [standalone run](../evidence/verify/20261112T130200912Z-14f6b34d) and [desktop WebKit run](../evidence/verify/20261112T130627916Z-add7b2ee) each passed the approval capture, ledger drive and all nine feature recipes. The eight-player fixture shows **4 complete rows at 393×659 and 6 at 393×852**, in both themes. Money values fit without ellipsis. All payment choices and Save fit above the 380 px visual viewport. Desktop has a table wider than 1000 px, top navigation and a separate activity column. Both cleanup receipts have no errors and retain 108 screenshots each. A separate [pagination run](../evidence/verify/20261112T132011045Z-1261a0b5/) then passed the stronger sessions recipe in both contexts: an open 2024 session is absent from the first history page but visible in the pinned section without Load more. Its cleanup also succeeded. These observations do not establish physical iOS safe-area or keyboard behavior.
 
-At 393×659, the normal two-player fixture starts its first card at 372 px. The long-title/two-player and eight-player fixtures start it at 400 px and finish it at 522 px, above actions beginning at 523 px. Only one complete row is visible before scrolling. The long fixture has less than one pixel of headroom, so this is a fixture-specific observation, not a guarantee for extra metadata, larger text or physical safe areas. The last activity row can scroll fully above both bars. Desktop 1440×1000 retains a complete first row in the same long fixture, with no horizontal page overflow.
+## Judge findings
 
-The first proposed layout failed this review: its first player began at 778 px on the same short phone viewport. Compact metadata/totals, two-line headings, a player action rail and removal of the phone brand bar replaced it. Independent code and visual reviews cover the revised result; physical iOS checks remain open as described above.
+| Finding | Implemented response |
+| --- | --- |
+| M1 | One 64 px phone bar plus safe area; compact header/totals and rows meet 4/6-row targets. |
+| M2 | Footer opens an explicit chooser; the money sheet fixes the chosen player as text. |
+| M3 | Unpaid/Cash/Venmo/Zelle, own-player method, one quick row and visual-viewport compact layout. |
+| M4 | Linked field errors focus the input; request errors stay above Save; values remain intact. |
+| M5 | Reset select appearance, 48 px height, explicit payment direction and disabled currency hint. |
+| M6 | Title switcher, independently loaded open sessions and direct two-tap creation. |
+| M7 | State-aware buy-in/rebuy/cash-out/settlement, readable position/owed values and results-only display modes. |
+| M8 | Wide desktop table/activity layout with top navigation. |
+| m1 | One inset focus ring for all fields. |
+| m2 | Four-second descriptive saved toast; latest-receipt atomic Undo for new money commands. |
+| m3 | Session names throughout, Table destination and one leading Cancel convention. |
+| m4 | Typical stake comes from effective saved buy-ins and is absent without history. |
+| m5 | Money spans do not break the sign from the value. |
+| m6 | Each close blocker opens that player's cash-out sheet. |
+| m7 | Currency has a disabled style and fixed-after-creation hint. |
+| m8 | State and money detail use 13–15 px; 12 px is tertiary. |
+| m9 | Exact comma-decimal and trailing-period parsing, with precision/range tests. |
+| m10 | Sessions search does not autofocus; actual device keyboard behavior remains unverified. |
+| m11 | Read-only viewer cards show position/owed values; revoked links have no live-update label. |
+| m12 | Rebuy/repeat use that player's effective method. |
+| m13 | Offline reference PDF read; all 14 representative journeys measured, including footer. |
+
+Undo is available only while its original receipt is the latest revision. It reverses a newly saved entry and its generated payment in one database transaction; newer work is never reversed by that button. Voids/corrections retain their explicit review flow. Cash-out stays blank with an explicit zero shortcut because buy-ins cannot determine the actual chips returned. No ledger safeguard was removed to reduce taps.

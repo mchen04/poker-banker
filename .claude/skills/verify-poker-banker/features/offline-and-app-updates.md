@@ -17,7 +17,7 @@ A saved session opens offline with confirmed totals. New entries wait visibly wi
 
 - Open a previously loaded session without connectivity, then enter a buy-in normally.
 - Reconnect to save, or use Retry/Discard on a rejected pending row.
-- Attempt Close game or Players → Account → Sign out while an entry is pending.
+- Attempt Close session or Players → Account → Sign out while an entry is pending.
 - A visible idle workspace applies a discovered release automatically. While editing or offline work holds it, Update ready stays available; save/close/reconnect naturally reaches the next safe point. Explicit Reload remains an optional persisted-draft choice.
 
 ## Driving it with Playwright
@@ -56,7 +56,7 @@ export default async function ({ page, context, baseURL, runId, step, checkState
     await expect(page.getByTestId(`player-${player.id}`)).toBeVisible();
     await expect(page.getByTestId('totals')).not.toContainText('$20.00');
     await menu(page, 'Close session');
-    await expect(page.getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
+    await expect(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
     await expect(page.getByText(/not saved yet\. Save or discard/)).toBeVisible();
     await step('offline-close-pending-blocker');
     await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
@@ -66,7 +66,7 @@ export default async function ({ page, context, baseURL, runId, step, checkState
     await expect(page.getByRole('button', { name: 'Confirm sign out', exact: true })).toBeDisabled();
     await step('offline-signout-unsent-guard');
     await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
-    await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+    await page.getByRole('button', { name: 'Table', exact: true }).click();
     const responsePromise = page.waitForResponse(response => response.url() === `${baseURL}/api/sessions/${session.session.id}/entries` && response.request().method() === 'POST');
     await context.setOffline(false);
     const response = await responsePromise;
@@ -194,7 +194,7 @@ Proofs in `automatic-updates-summary.json`:
 | Case | Actual path and required result |
 | --- | --- |
 | Previous-client compatibility | Boot tracked `dc2082b`, create a durable draft and offline financial write, close that page, then cold-load current A. IDB stays version 2, draft hashes match, old body/op_id replays once through the current API, and an HTTP replay writes nothing twice. An actual archived reader also reads A-written draft/outbox records without changing them. |
-| Idle Workspace | A is visible before B deploys. No tap, visibility signal or manual update follows deployment; the real periodic check discovers B and the app adopts it. |
+| Idle Table | A is visible before B deploys. No tap, visibility signal or manual update follows deployment; the real periodic check discovers B and the app adopts it. |
 | Open buy-in | Waiting B leaves A's typed amount/method in place for an observed safety window. Keep draft and close supplies the natural safe point; B opens with that draft intact. |
 | Offline | A reloads its cached shell and keeps a queued entry excluded from totals. Reconnection sends the same body/op_id once and the app adopts B. |
 | Stale lazy asset | A first imports one cached, server-deleted module before the idle timer: asset access discovers B without a tap. A second tab activates B while the first edits. A distinct module's first import still succeeds from retained A assets under B; closing the sheet permits B. |

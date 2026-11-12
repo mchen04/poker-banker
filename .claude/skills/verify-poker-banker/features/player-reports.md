@@ -17,7 +17,7 @@ The roster shows finalized results and outstanding payments by currency. Player 
 - Choose `Players`, search `Find a player`, then choose a roster row.
 - In detail choose `Rename player` or a Past sessions button.
 - Under Cash game report choose a grouping or `Filter: Off`; apply or clear filters.
-- In Workspace choose `Total`, `Per hour` or `BB` beside Players.
+- In Table choose `Total`, `Per hour` or `BB` beside Players.
 
 ## Driving it with Playwright
 

@@ -4,7 +4,7 @@ A banker creates a private account, explicitly saves recovery codes, signs in an
 
 ## Sub-features
 
-- `accounts-signup` requires acknowledging the recovery codes before Workspace.
+- `accounts-signup` requires acknowledging the recovery codes before Table.
 - `accounts-signin` accepts the new account and rejects a wrong password.
 - `accounts-signout` lives under Players → Account and protects unsent work.
 - `accounts-recover` accepts a saved code once and rejects its reuse.
@@ -14,7 +14,7 @@ A banker creates a private account, explicitly saves recovery codes, signs in an
 ## How to get to it (user POV)
 
 - At the access screen, choose `Sign up`, `Sign in` or `Recover account`.
-- In Workspace, choose `Players`, then `Sign out` in Account.
+- In Table, choose `Players`, then `Sign out` in Account.
 - Recovery uses `Username`, `Recovery code` and `New password`, followed by `Reset password`.
 
 ## Driving it with Playwright
@@ -43,7 +43,7 @@ export default async function ({ page, browser, baseURL, evidence, step }: Recip
   try {
     const accountPage = await accountContext.newPage();
     await accountPage.goto('/');
-    await expect(accountPage.getByRole('button', { name: 'Sign in to workspace', exact: true })).toBeVisible();
+    await expect(accountPage.getByRole('button', { name: 'Sign in to table', exact: true })).toBeVisible();
     for (const colorScheme of ['light', 'dark'] as const) {
       await accountPage.emulateMedia({ colorScheme });
       await accountPage.screenshot({ path: `${evidence}/accounts-signin-${colorScheme}.png` });
@@ -64,7 +64,7 @@ export default async function ({ page, browser, baseURL, evidence, step }: Recip
     await signOut(accountPage);
     await typeInput(accountPage.getByLabel('Username', { exact: true }), account.username);
     await typeInput(accountPage.getByLabel('Password', { exact: true }), 'deliberately-wrong-password');
-    await accountPage.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
+    await accountPage.getByRole('button', { name: 'Sign in to table', exact: true }).click();
     await expect(accountPage.getByRole('alert')).toBeVisible();
     await signIn(accountPage, account.username);
     const recover = await recoveryContext.newPage();

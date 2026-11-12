@@ -48,7 +48,7 @@ export default async function ({ page, browser, baseURL, runId, evidence, step }
     await expect(viewer.getByText(/View only, updated/)).toBeVisible();
     await expect(viewer.getByTestId('activity')).toContainText('Venmo');
     await expect(viewer.getByText('Verify private other game', { exact: false })).toHaveCount(0);
-    for (const name of ['Add player', 'Buy-in', 'Session menu', 'Players', 'Switch session', 'History']) await expect(viewer.getByRole('button', { name, exact: true })).toHaveCount(0);
+    for (const name of ['Add player', 'Buy-in', 'Session menu', 'Players', 'Switch session', 'Sessions']) await expect(viewer.getByRole('button', { name, exact: true })).toHaveCount(0);
     expect((await viewer.request.get(`${baseURL}/api/sessions`)).status()).toBe(401);
     expect((await viewer.request.get(`${baseURL}/api/players/${player.id}/report`)).status()).toBe(401);
     const blocked = await viewer.request.post(`${baseURL}/api/sessions/${shared.session.id}/entries`, { headers: { origin: baseURL }, data: {} });

@@ -13,10 +13,10 @@ The banker closes only after everyone with entries has cashed out. A mismatch ne
 
 ## How to get to it (user POV)
 
-- In an open session, choose `Session menu` → `Close game`, or use the footer’s `Close game` when everyone has cashed out.
+- In an open session, choose `Session menu` → `Close session`, or use the footer’s `Close session` when everyone has cashed out.
 - Cash out blockers through their player sheets. Save or discard Not saved yet entries before closing.
 - If chip totals differ, check `Accept discrepancy of …`, then choose `Close session`.
-- In a closed game, choose `Session menu` → `Reopen game`, enter `Reason`, then choose `Reopen session`.
+- In a closed game, choose `Session menu` → `Reopen session`, enter `Reason`, then choose `Reopen session`.
 - Choose `Players` and a player to inspect finalized and outstanding amounts and Past sessions.
 
 ## Driving it with Playwright
@@ -49,7 +49,7 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
   await money(page, loser.id, '100');
   await menu(page, 'Close session');
   await expect(page.getByText('Cash out everyone with entries before closing.', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
   await step('close-playing-blocker');
   await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
   await money(page, winner.id, '140', { kind: 'Cash out', paid: true });
@@ -72,7 +72,7 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
   await money(page, winner.id, '100');
   await money(page, winner.id, '90', { kind: 'Cash out', paid: true });
   await menu(page, 'Close session');
-  await expect(page.getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
   await expect(page.getByLabel('Accept discrepancy of −$10.00', { exact: true })).toBeVisible();
   await step('close-discrepancy-before-acceptance');
   await page.getByLabel('Accept discrepancy of −$10.00', { exact: true }).check();

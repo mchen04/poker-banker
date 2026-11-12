@@ -116,13 +116,14 @@ POST /api/auth/recover           {username, recovery_code, new_password} -> {ban
 POST /api/auth/recovery-codes    {password} -> {recovery_codes}
 POST /api/auth/password          {current_password, new_password}
 
-GET  /api/sessions               ?before=<played_on,id cursor>&q= -> {sessions[], next}
+GET  /api/sessions               ?before=<played_on,id cursor>&q=&status=<open|closed optional> -> {sessions[], next}
 POST /api/sessions               {op_id, name, played_on, currency} -> SessionState
 GET  /api/sessions/:id           ?since=<revision> -> SessionState | 304
 PATCH /api/sessions/:id          {op_id, name?, played_on?} -> SessionState
 POST /api/sessions/:id/players   {op_id, player_id} | {op_id, new_player_name} -> SessionState
 POST /api/sessions/:id/entries   {op_id, player_id, kind, amount_minor, note?, paid_now?} -> SessionState
 POST /api/sessions/:id/entries/:entry_id/void  {op_id, replacement_amount_minor?} -> SessionState
+POST /api/sessions/:id/entries/:entry_id/undo  {op_id, expected_revision} -> SessionState
 POST /api/sessions/:id/close     {op_id, expected_revision, accept_discrepancy_minor?} -> SessionState
 POST /api/sessions/:id/reopen    {op_id, reason} -> SessionState
 POST /api/sessions/:id/share     {op_id, action: 'enable'|'rotate'|'disable'} -> SessionState
@@ -171,15 +172,15 @@ A deployment cannot add a new timer to an already-running `dc2082b` document. Th
 
 ## UI
 
-One workspace, phone and installed-iOS first, readable vertical scrolling, no horizontal tables. The round-35 continuation replaces the former top navigation and session strip.
+One workspace, phone and installed-iOS first, readable vertical scrolling, no horizontal tables. The phone continuation uses a unified navigation/action bar and a title switcher.
 
-- A single safe-area-aware bottom navigation bar provides Workspace and Players. A separate transaction footer sits above it in the workspace. Its primary action follows the current session; other actions are secondary. Main content reserves the complete height of both fixed regions, and viewers receive neither banker navigation nor transaction controls.
-- One session picker opens the recent sessions and searchable, month-grouped History, with New session in that picker and the empty workspace. Existing session IDs remain the switch targets; changing sessions preserves each form's own draft.
+- A single safe-area-aware phone bar provides Table, one contextual transactional action and Players. Buy-in starts with an explicit player choice, never an arbitrary default. Main content reserves that bar’s complete height. Desktop uses top navigation and a wider table/activity layout. Viewers receive no banker controls.
+- The session title opens Sessions with current and open sessions pinned before searchable, month-grouped closed history. New session is directly beside the title, in the picker and in the empty table. The picker loads open sessions separately with the optional status filter and follows its cursors, so an old unfinished session is pinned even beyond the first history page. Existing session IDs remain the switch targets; changing sessions preserves each form's own draft.
 - The session header presents the game name, date, currency, timer and a plain open/closed state. Long names wrap or truncate without pushing controls outside the viewport.
 - Session priorities distinguish playing chips, payments still to collect and money still to pay. Buy-in and cash-out totals remain available at lower visual weight. A discrepancy is explained as the difference between chips bought and chips returned, without treating payments as profit.
-- Player rows use plain states such as Not bought in, Playing and Cashed out, and No payment due instead of Seated or Settled. A contextual buy-in or repeat action opens a reviewable money sheet; it never writes immediately. Player details retain cash-out, payment, tips/meals and complete correction history.
-- Money entry has an integrated currency label, exact saved-amount feedback, and visible validation. Paid now stays on by default for buy-ins, with the last effective session payment method or Cash. Last buy-in repeats are explicit prefills and never replace an existing draft. Cash-out is not guessed from money in; a banker supplies the actual chips returned. Payment balances may be suggested explicitly.
-- Sheets share one layout, with a scrollable body and separated action footer. Visual viewport changes keep the editor and save action above the software keyboard. Draft, submission, cancellation, correction, void, close and sign-out safeguards remain in force.
+- Player rows use plain states such as Not bought in, Playing and Cashed out, and No payment due instead of Seated or Settled. State-aware buy-in, rebuy, cash-out and settlement actions open reviewable money sheets; none writes immediately. Player details retain cash-out, payment, tips/meals and complete correction history.
+- Money entry has an integrated currency label, exact saved-amount feedback, and visible validation. Buy-ins default paid with the selected player’s last effective payment method or Cash. A single Unpaid/Cash/Venmo/Zelle control makes the choice visible; payment direction has its own segmented control. The chosen player is fixed text. Last buy-in repeats are explicit prefills and never replace an existing draft. Cash-out is not guessed from money in; a banker supplies the actual chips returned. Payment balances may be suggested explicitly.
+- Sheets share a leading Cancel, a scrollable body and a separated Save footer. Amount/field errors are linked beside the field and focused; request errors stay above Save. Saved money gets a transient descriptive toast with append-only Undo targeting its exact receipt. Undo requires that receipt to remain the latest session revision, appends the primary entry and any generated payment voids atomically under one lock/revision, and uses the normal idempotency transaction. A newer write disables the old Undo; a conflicting request writes nothing. Undo busy state is independent of sheet busy flags. Visual viewport changes keep the editor and save action above the software keyboard. Draft, submission, cancellation, correction, void, close and sign-out safeguards remain in force.
 - Close explains playing-player and pending-entry blockers in place. A discrepancy requires consent to its exact amount and revision. Reopen still requires a reason. Share rotation/disabling and financial corrections retain explicit confirmation.
 - Players and player detail retain per-currency closed-session results, outstanding balances, rename/history, all report metrics, groupings and filters. Viewer pages retain live, read-only session data and the last-updated label.
 - One type and spacing scale, warm neutral surfaces and a restrained accent apply to access, workspace, roster, reports and sheets, in light and dark. Controls have at least 44 px targets, visible focus and textual state. No gradients, glass, emoji, avatar blobs or pills on every value.
@@ -212,7 +213,7 @@ session_events + kinds 'timer_started', 'timing_corrected', 'details_changed' wi
 
 ### Payment method
 
-- Paid now on a buy-in or rebuy shows a compact Cash, Venmo, Zelle selector. The default is the method last used in that session, else Cash. The server writes `buy_in` plus `payment_in` with the method.
+- Paid now on a buy-in or rebuy shows a compact Cash, Venmo, Zelle selector. The default is the method last used by the selected player, else Cash. Round 37 replaces the former session-wide default so another player’s payment cannot silently select this method. The server writes `buy_in` plus `payment_in` with the method.
 - Recording a later payment (unpaid to paid) is a `payment_in` or `payment_out` with a required method. An unpaid buy-in has no payment row, so it is never shown as received.
 - Changing a method is a correction: void the payment and write a replacement with the new method. The void endpoint accepts `replacement_method` alongside `replacement_amount_minor`. Activity shows both rows.
 - The method is a label of how money arrived. Nothing initiates a transfer.
