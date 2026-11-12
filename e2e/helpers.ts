@@ -67,7 +67,7 @@ export async function createAccount(page: Page, testInfo?: TestInfo) {
   await workspaceReady(page);
   return { username, codes, ...(await call<{ banker: { id: string; username: string } }>(page, '/auth/me')) };
 }
-export async function signIn(page: Page, username: string, secret = password) {
+export async function signIn(page: Page, username: string, secret: string = password) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await typeInput(page.getByLabel('Username', { exact: true }), username);

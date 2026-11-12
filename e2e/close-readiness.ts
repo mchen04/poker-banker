@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, type Locator } from '@playwright/test';
 import { addPlayer, call, current, money, newSession, workspaceReady } from './helpers';
 import { typeInput } from './input';
-import { capture, type UxApprovalOptions } from './ux-approval';
+import { capture, type UxApprovalOptions } from './table-experience';
 
 export async function uxCloseReadiness({ page, evidence, runId }: UxApprovalOptions) {
   await mkdir(evidence, { recursive: true });

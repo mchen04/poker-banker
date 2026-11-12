@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, type Browser, type Locator, type Page } from '@playwright/test';
-import { addPlayer, call, current, keepMoneyDraft, menu, money, newContextLike, openMoney, switchSession, workspaceReady } from './helpers';
+import { addPlayer, call, current, keepMoneyDraft, menu, money, newContextLike, switchSession, workspaceReady } from './helpers';
 import { typeInput } from './input';
 
 type Tap = { label: string; taps: number; controls: string[] };

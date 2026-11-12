@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, type Locator } from '@playwright/test';
 import { addPlayer, current, fixtureSession, menu, money, newContextLike, newSession, openMoney, share, workspaceReady } from './helpers';
 import { typeInput } from './input';
-import { capture, type UxApprovalOptions } from './ux-approval';
+import { capture, type UxApprovalOptions } from './table-experience';
 
 function contrast(color: string, background: string) {
   const luminance = (text: string) => {
