@@ -70,7 +70,13 @@ it('logs only the error code or a fixed safe message without exposing error or c
     expect(log).toHaveBeenLastCalledWith('57P01');
     expect(() => pool.emit('error', new Error(message))).not.toThrow();
     expect(log).toHaveBeenLastCalledWith('Database connection error');
+    expect(() => pool.emit('error', Object.assign(new Error(message), { code: message }))).not.toThrow();
+    expect(log).toHaveBeenLastCalledWith('Database connection error');
+    expect(() => pool.emit('error', Object.assign(new Error(message), { code: 'ECONNRESET' }))).not.toThrow();
+    expect(log).toHaveBeenLastCalledWith('ECONNRESET');
     expect(log.mock.calls.flat().every(value => typeof value === 'string' && !value.includes('must-not-log') && !value.includes('postgresql://'))).toBe(true);
+    log.mockImplementationOnce(() => { throw new Error('Log sink unavailable'); });
+    expect(() => pool.emit('error', Object.assign(new Error(message), { code: '57P01' }))).not.toThrow();
   } finally { await pool.end(); log.mockRestore(); }
 });
 

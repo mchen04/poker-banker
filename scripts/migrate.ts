@@ -1,7 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import pg from 'pg';
-import { type Database } from '../src/server/db';
+import { createPool, type Database } from '../src/server/db';
 
 export async function migrate(pool: Database, directory = fileURLToPath(new URL('../migrations/', import.meta.url))): Promise<void> {
   const client = await pool.connect();
@@ -31,6 +30,6 @@ export async function migrate(pool: Database, directory = fileURLToPath(new URL(
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DATABASE_URL_UNPOOLED or DATABASE_URL is required');
-  const pool = new pg.Pool({ connectionString });
+  const pool = createPool(connectionString);
   try { await migrate(pool); } finally { await pool.end(); }
 }

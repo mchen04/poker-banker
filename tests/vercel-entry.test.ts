@@ -12,17 +12,30 @@ afterAll(async () => { await database?.stop(); });
 
 async function invoke(body: string) {
   const { stdout } = await execute(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
-    const entry = await import('./api/[...route].ts');
-    const response = await entry.POST(new Request('${origin}/api/auth/signup', {
-      method: 'POST', headers: { origin: '${origin}', 'content-type': 'application/json' }, body: process.argv[1],
-    }));
-    const cookie = response.headers.get('set-cookie');
-    const body = await response.json();
-    const me = response.status === 200 ? await entry.GET(new Request('${origin}/api/auth/me', {
-      headers: { cookie: cookie.split(';')[0] },
-    })) : undefined;
-    console.log(JSON.stringify({ methods: Object.keys(entry).sort(), status: response.status, body, cookie,
-      me: me ? { status: me.status, body: await me.json() } : null }));
+    import pg from 'pg';
+    const pools = [];
+    const Pool = pg.Pool;
+    pg.Pool = class extends Pool {
+      constructor(...args) { super(...args); pools.push(this); }
+    };
+    let result;
+    try {
+      const entry = await import('./api/[...route].ts');
+      const response = await entry.POST(new Request('${origin}/api/auth/signup', {
+        method: 'POST', headers: { origin: '${origin}', 'content-type': 'application/json' }, body: process.argv[1],
+      }));
+      const cookie = response.headers.get('set-cookie');
+      const body = await response.json();
+      const me = response.status === 200 ? await entry.GET(new Request('${origin}/api/auth/me', {
+        headers: { cookie: cookie.split(';')[0] },
+      })) : undefined;
+      result = { methods: Object.keys(entry).sort(), status: response.status, body, cookie,
+        me: me ? { status: me.status, body: await me.json() } : null };
+    } finally {
+      await Promise.all(pools.map(pool => pool.end()));
+      pg.Pool = Pool;
+    }
+    console.log(JSON.stringify({ ...result, poolsEnded: pools.length > 0 && pools.every(pool => pool.ended) }));
     process.exit(0);
   `, body], {
     env: { ...process.env, DATABASE_URL: database.pool.options.connectionString, APP_ORIGIN: origin, VERCEL: '1' },
@@ -30,6 +43,7 @@ async function invoke(body: string) {
   });
   return JSON.parse(stdout) as {
     methods: string[];
+    poolsEnded: boolean;
     status: number;
     body: { banker?: { id: string; username: string }; recovery_codes?: string[]; error?: { code: string } };
     cookie: string | null;
@@ -39,6 +53,7 @@ async function invoke(body: string) {
 
 it.each(['{"username":"x","password":"y"}', '{'])('returns validation errors promptly through the real Web Request entry for %s', async body => {
   const result = await invoke(body);
+  expect(result.poolsEnded).toBe(true);
   expect(result.status).toBe(400);
   expect(result.body).toEqual({ error: { code: 'invalid_request', message: 'Request validation failed' } });
   expect(result.cookie).toBeNull();
@@ -47,6 +62,7 @@ it.each(['{"username":"x","password":"y"}', '{'])('returns validation errors pro
 it('signs up through the real entry and authenticates the returned cookie against disposable PostgreSQL', async () => {
   const username = `vercel-${randomUUID().slice(0, 12)}`;
   const result = await invoke(JSON.stringify({ username, password: 'a-secure-vercel-password' }));
+  expect(result.poolsEnded).toBe(true);
   expect(result.methods).toEqual(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT']);
   expect(result.status).toBe(200);
   expect(result.body.banker).toMatchObject({ username });

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import pg from 'pg';
+import { createPool } from '../src/server/db';
 import { migrate } from '../scripts/migrate';
 import { stopOwnedProcess } from '../scripts/owned-process';
 
@@ -37,7 +38,7 @@ export async function testDatabase(options: { migrationDirectory?: string; postg
         if (message.type === 'pb-postgres-error') reject(new Error('message' in message ? String(message.message) : 'Owned Postgres startup failed'));
       });
     });
-    pool = new pg.Pool({ connectionString: `postgresql://poker:test-only@127.0.0.1:${port}/postgres`, max: 25 });
+    pool = createPool(`postgresql://poker:test-only@127.0.0.1:${port}/postgres`, 25);
     await migrate(pool, options.migrationDirectory);
     return { pool, directory, stop };
   } catch (error) {
