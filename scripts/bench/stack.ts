@@ -8,7 +8,7 @@ import { testDatabase } from '../../tests/database';
 import { seedBenchmark } from './seed';
 import { LocalClient } from './http';
 import { ShapedProxy } from './network';
-import { stopOwnedProcess } from '../owned-process';
+import { SHUTDOWN_GRACE_MS, stopOwnedProcess, withShutdownDeadline } from '../owned-process';
 async function availablePort() {
   const server = createServer(); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('No local benchmark port');
@@ -25,7 +25,7 @@ export async function benchmarkStack(output: string) {
   let stopping: Promise<void> | undefined;
   const owned = new Set<() => Promise<void>>();
   async function own(cleanup: () => Promise<void>) {
-    if (stopping) { await cleanup(); throw new Error('Owned benchmark stack is stopping'); }
+    if (stopping) { await withShutdownDeadline('Late benchmark cleanup', cleanup); throw new Error('Owned benchmark stack is stopping'); }
     owned.add(cleanup);
     return () => { owned.delete(cleanup); };
   }
@@ -33,15 +33,16 @@ export async function benchmarkStack(output: string) {
     stopping ??= (async () => {
       const errors: unknown[] = [];
       const attempt = async (action: () => unknown | Promise<unknown>) => { try { await action(); } catch (error) { errors.push(error); } };
-      for (const cleanup of owned) await attempt(cleanup);
+      const bounded = (label: string, action: () => unknown | Promise<unknown>) => attempt(() => withShutdownDeadline(label, action));
+      for (const cleanup of owned) await bounded('Owned benchmark action cleanup', cleanup);
       owned.clear();
-      await attempt(() => client?.close());
-      await attempt(() => proxy?.close());
-      await attempt(async () => { if (listener?.listening) { listener.closeAllConnections(); await new Promise<void>((resolve, reject) => listener!.close(error => error ? reject(error) : resolve())); } });
-      await attempt(async () => { if (child) await stopOwnedProcess(child, 'signal'); });
+      await bounded('Benchmark client close', () => client?.close());
+      await bounded('Benchmark proxy close', () => proxy?.close());
+      await bounded('Benchmark listener close', async () => { if (listener?.listening) { listener.closeAllConnections(); await new Promise<void>((resolve, reject) => listener!.close(error => error ? reject(error) : resolve())); } });
+      await attempt(async () => { if (child) await stopOwnedProcess(child, 'signal', true); });
       await attempt(async () => { await database?.stop(); });
-      await attempt(async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
-      await attempt(async () => { if (log && !log.destroyed) await new Promise<void>((resolve, reject) => { log!.once('error', reject); log!.end(resolve); }); });
+      await bounded('Benchmark TLS removal', async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
+      await bounded('Benchmark log close', async () => { if (log && !log.destroyed) await new Promise<void>((resolve, reject) => { log!.once('error', reject); log!.end(resolve); }); });
       if (errors.length) throw new AggregateError(errors, 'Owned benchmark cleanup failed');
     })();
     return stopping;
@@ -53,7 +54,7 @@ export async function benchmarkStack(output: string) {
     await new Promise<void>((resolve, reject) => { log!.once('open', () => resolve()); log!.once('error', reject); });
     const fixture = await seedBenchmark(database.pool);
     const key = join(directory, 'key.pem'), certificate = join(directory, 'cert.pem');
-    const generated = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', certificate], { stdio: 'ignore' });
+    const generated = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', certificate], { stdio: 'ignore', timeout: SHUTDOWN_GRACE_MS, killSignal: 'SIGKILL' });
     if (generated.status !== 0) throw new Error('Owned benchmark TLS certificate failed');
     const port = await availablePort(); const backend = `https://127.0.0.1:${port}`;
     proxy = new ShapedProxy(backend);

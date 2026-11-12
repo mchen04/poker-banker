@@ -42,3 +42,17 @@ it('releases database and TLS allocated before an invalid benchmark output path 
     expect(await scratch()).toEqual(before);
   } finally { await rm(output, { recursive: true, force: true }); }
 });
+
+it('bounds a stalled owned resource and still closes the server, database and TLS directory', async () => {
+  const output = await mkdtemp(resolve('.cache/benchmark-cleanup-'));
+  const before = await scratch();
+  let stack: Awaited<ReturnType<typeof benchmarkStack>> | undefined;
+  let calls = 0;
+  try {
+    stack = await benchmarkStack(output);
+    await stack.own(() => { calls++; return new Promise(() => {}); });
+    await expect(stack.stop()).rejects.toThrow('Owned benchmark cleanup failed');
+    expect(calls).toBe(1);
+    expect(await scratch()).toEqual(before);
+  } finally { await stack?.stop().catch(() => {}); await rm(output, { recursive: true, force: true }); }
+});
