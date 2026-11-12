@@ -1,6 +1,6 @@
 type Request = { result?: unknown; error?: Error; onsuccess?: () => void; onerror?: () => void; onupgradeneeded?: () => void };
 type Transaction = { error?: Error; oncomplete?: () => void; onerror?: () => void; onabort?: () => void; objectStore: (name: string) => { get: (key: string) => Request; put: (value: unknown, key: string) => void } };
-type PolicyState = { clients: Record<string, { release?: string; updateProtocol?: number; pins?: string[] }>; releases: Record<string, number>; generation: number; manifests?: Record<string, string[]>; inventories?: Record<string, string[]> };
+type PolicyState = { clients: Record<string, { release?: string; updateProtocol?: number; pins?: string[]; fallback?: string[] }>; releases: Record<string, number>; generation: number; manifests?: Record<string, string[]>; inventories?: Record<string, string[]> };
 
 export function updatePolicyDatabase(initial?: PolicyState) {
   const records = new Map<string, unknown>();

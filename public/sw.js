@@ -72,9 +72,13 @@ async function pruneCaches(installing = false) {
   const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   const replies = await Promise.all(clients.map(clientRelease));
   const keys = (await caches.keys()).filter(key => key.startsWith('poker-banker-'));
-  const known = await policy(state => ({ manifests: state.manifests || {}, inventories: state.inventories || {} }));
-  const observed = await Promise.all(keys.filter(key => !known.manifests[key.slice(13)] && !known.inventories[key]).map(async key => [key, (await (await caches.open(key)).keys()).map(request => request.url)]));
-  const live = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const observed = new Map(await Promise.all(keys.map(async key => [key, (await (await caches.open(key)).keys()).map(request => request.url)])));
+  let live = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const newcomers = live.filter(client => !clients.some(queried => queried.id === client.id));
+  const newcomerReplies = await Promise.all(newcomers.map(clientRelease));
+  clients.push(...newcomers);
+  replies.push(...newcomerReplies);
+  if (newcomers.length) live = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   const state = await policy(state => {
     state.manifests ||= {};
     state.inventories ||= {};
@@ -90,8 +94,9 @@ async function pruneCaches(installing = false) {
       if (reply?.updateProtocol === UPDATE_PROTOCOL) record.updateProtocol = UPDATE_PROTOCOL;
       if (!record.release || !keys.includes(`poker-banker-${record.release}`)) record.pins ||= pins;
       else delete record.pins;
+      if (record.release && (state.manifests[record.release] || state.inventories[`poker-banker-${record.release}`])) delete record.fallback;
+      else if (record.release || !clients.some(queried => queried.id === client.id)) record.fallback ||= [...new Set([...(record.pins || []), ...(record.release ? [`poker-banker-${record.release}`] : [])].flatMap(key => observed.get(key) || []))];
     }
-    for (const release of Object.keys(state.releases)) if (!keys.includes(`poker-banker-${release}`) && state.releases[release] <= generation) delete state.releases[release];
     return state;
   });
   if (workers.some((worker, index) => worker && !versions[index])) return state;
@@ -108,17 +113,16 @@ async function pruneCaches(installing = false) {
     for (const path of state.manifests[key.slice(13)] || []) allowed.add(new URL(path, self.location.origin).href);
     for (const url of state.inventories[key] || []) allowed.add(url);
   }
-  if (Object.values(state.clients).every(record => !record.release || state.manifests[record.release] || state.inventories[`poker-banker-${record.release}`])) {
-    for (const key of keys.filter(key => retained.has(key))) {
-      const cache = await caches.open(key);
-      await Promise.all((await cache.keys()).filter(request => !allowed.has(request.url)).map(request => cache.delete(request)));
-    }
+  for (const record of Object.values(state.clients)) for (const url of record.fallback || []) allowed.add(url);
+  for (const key of keys.filter(key => retained.has(key))) {
+    const cache = await caches.open(key);
+    await Promise.all((await cache.keys()).filter(request => !allowed.has(request.url)).map(request => cache.delete(request)));
   }
   const remaining = await caches.keys();
   await policy(current => {
-    for (const key of Object.keys(current.inventories || {})) if (!remaining.includes(key)) delete current.inventories[key];
-    for (const release of Object.keys(current.manifests || {})) if (!remaining.includes(`poker-banker-${release}`) && (current.releases[release] || 0) <= generation) delete current.manifests[release];
-    for (const [release, order] of Object.entries(current.releases)) if (!remaining.includes(`poker-banker-${release}`) && order <= generation) delete current.releases[release];
+    for (const key of Object.keys(current.inventories || {})) if (!remaining.includes(key) && !retained.has(key)) delete current.inventories[key];
+    for (const release of Object.keys(current.manifests || {})) if (!remaining.includes(`poker-banker-${release}`) && !retained.has(`poker-banker-${release}`) && (current.releases[release] || 0) <= generation) delete current.manifests[release];
+    for (const [release, order] of Object.entries(current.releases)) if (!remaining.includes(`poker-banker-${release}`) && !retained.has(`poker-banker-${release}`) && order <= generation) delete current.releases[release];
   });
   return state;
 }
@@ -169,14 +173,15 @@ self.addEventListener('install', event => {
       }
       await pruneCaches(true);
     } catch (error) {
-      if (!existed) {
-        await caches.delete(CACHE);
-        await policy(state => {
-          delete state.releases[RELEASE];
-          if (state.manifests) delete state.manifests[RELEASE];
-          if (state.inventories) delete state.inventories[CACHE];
-        });
-      }
+      try {
+        if (!existed) {
+          await caches.delete(CACHE);
+          await policy(state => {
+            if (state.inventories) delete state.inventories[CACHE];
+          });
+        }
+        await pruneCaches(true);
+      } catch {}
       throw error;
     }
   }));
