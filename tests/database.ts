@@ -19,9 +19,9 @@ export async function testDatabase(options: { migrationDirectory?: string; postg
   let pool: pg.Pool | undefined;
   let stopping: Promise<void> | undefined;
   const stop = () => stopping ??= (async () => {
-    try { await pool?.end(); }
+    try { if (pool) await stopOwnedProcess.withDeadline('Owned database pool shutdown', () => pool!.end()); }
     finally {
-      if (child?.pid) await stopOwnedProcess(child);
+      if (child?.pid) await stopOwnedProcess(child, 'ipc', true);
     }
   })();
   try {
@@ -30,13 +30,22 @@ export async function testDatabase(options: { migrationDirectory?: string; postg
     let output = '';
     child.stderr!.on('data', chunk => { output += String(chunk); });
     const directory = await new Promise<string>((resolve, reject) => {
-      child!.once('error', reject);
-      child!.once('exit', (code, signal) => reject(new Error(`Owned Postgres exited ${code ?? signal}${output ? `: ${output}` : ''}`)));
-      child!.on('message', message => {
+      const finish = (error?: Error, directory?: string) => {
+        child!.removeListener('error', onError);
+        child!.removeListener('exit', onExit);
+        child!.removeListener('message', onMessage);
+        if (error) reject(error); else resolve(directory!);
+      };
+      const onError = (error: Error) => finish(error);
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => finish(new Error(`Owned Postgres exited ${code ?? signal}${output ? `: ${output}` : ''}`));
+      const onMessage = (message: unknown) => {
         if (!message || typeof message !== 'object' || !('type' in message)) return;
-        if (message.type === 'pb-postgres-ready' && 'directory' in message && typeof message.directory === 'string') resolve(message.directory);
-        if (message.type === 'pb-postgres-error') reject(new Error('message' in message ? String(message.message) : 'Owned Postgres startup failed'));
-      });
+        if (message.type === 'pb-postgres-ready' && 'directory' in message && typeof message.directory === 'string') finish(undefined, message.directory);
+        if (message.type === 'pb-postgres-error') finish(new Error('message' in message ? String(message.message) : 'Owned Postgres startup failed'));
+      };
+      child!.once('error', onError);
+      child!.once('exit', onExit);
+      child!.on('message', onMessage);
     });
     pool = createPool(`postgresql://poker:test-only@127.0.0.1:${port}/postgres`, 25);
     await migrate(pool, options.migrationDirectory);
