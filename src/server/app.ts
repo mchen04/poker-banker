@@ -193,6 +193,28 @@ export function createApp(pool: Database, config: Config = {}) {
     }
     return loadSession(db, banker, id);
   }));
+  app.post('/api/sessions/:id/entries/:entry_id/undo', c => mutate(c, pool, v.undoEntry, async (db, banker, input) => {
+    const id = v.id.parse(c.req.param('id'));
+    const entryId = v.id.parse(c.req.param('entry_id'));
+    const row = await sessionRow(db, banker, id, true);
+    assertOpen(row);
+    if (row.revision !== input.expected_revision) conflict('revision_mismatch', 'Session changed. Review it before undoing');
+    const state = await loadSession(db, banker, id);
+    const original = state.entries.find(entry => entry.id === entryId) ?? notFound();
+    if (original.voids_entry_id || state.entries.some(entry => entry.voids_entry_id === original.id)) conflict('already_voided', 'This entry cannot be undone');
+    if (original.revision !== input.expected_revision) conflict('revision_mismatch', 'Only the latest saved entry can be undone');
+    const targets = state.entries.filter(entry => entry.revision === original.revision && entry.player_id === original.player_id);
+    const paymentKind = original.kind === 'buy_in' ? 'payment_in' : original.kind === 'cash_out' ? 'payment_out' : null;
+    const paired = targets.filter(entry => entry.id !== original.id);
+    if (targets.some(entry => entry.voids_entry_id !== null) || paired.length > 1 || (paired.length === 1 &&
+      (paymentKind === null || original.amount_minor === '0' || paired[0]!.kind !== paymentKind || paired[0]!.amount_minor !== original.amount_minor || paired[0]!.occurred_at !== original.occurred_at || paired[0]!.note !== null))) {
+      conflict('undo_unavailable', 'This command cannot be undone');
+    }
+    if (targets.some(target => state.entries.some(entry => entry.voids_entry_id === target.id))) conflict('already_voided', 'This command cannot be undone');
+    const revision = await bump(db, banker, id);
+    for (const target of targets) await insertEntry(db, banker, id, revision, { ...target, voids_entry_id: target.id });
+    return loadSession(db, banker, id);
+  }));
   app.post('/api/sessions/:id/entries/:entry_id/void', c => mutate(c, pool, v.voidEntry, async (db, banker, input) => {
     const id = v.id.parse(c.req.param('id'));
     const entryId = v.id.parse(c.req.param('entry_id'));

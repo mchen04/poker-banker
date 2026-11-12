@@ -54,7 +54,7 @@ test('session, correction, timing and filter errors retain and focus their inval
 
 test.describe('Undo with a held HTTP response', () => {
   test.use({ serviceWorkers: 'block' });
-  test('Undo keeps another form disabled until both paid-entry voids finish', async ({ page }) => {
+  test('Undo keeps another form disabled until its atomic paid-entry reversal is confirmed', async ({ page }) => {
   await createAccount(page);
   const session = await newSession(page, 'Undo while reviewing a player');
   const player = await addPlayer(page, 'Two identical paid entries');
@@ -64,7 +64,7 @@ test.describe('Undo with a held HTTP response', () => {
   const released = new Promise<void>(resolve => { release = resolve; });
   let held = false;
   let voidRequests = 0;
-  const pattern = '**/entries/*/void';
+  const pattern = '**/entries/*/undo';
   const holdFirst = async (route: Route) => {
     const response = await route.fetch();
     voidRequests++;
@@ -84,7 +84,7 @@ test.describe('Undo with a held HTTP response', () => {
     release();
     await expect(save).toBeEnabled();
     await expect.poll(async () => (await current(page, session.session.id)).entries.filter(entry => entry.voids_entry_id).length).toBe(2);
-    expect(voidRequests).toBe(2);
+    expect(voidRequests).toBe(1);
     const state = await current(page, session.session.id);
     expect(state.totals.total_in_minor).toBe('1000');
     expect(state.players[0]!.payment_in_minor).toBe('1000');

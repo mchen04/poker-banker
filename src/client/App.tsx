@@ -8,7 +8,7 @@ import { CloseSheet, HistorySheet, MenuSheet, ReopenSheet, SessionForm, ShareShe
 import { PlayersScreen } from './views/Players';
 import { ClientContext, DraftSaveStatus, entryLabels, ErrorText, money, Sheet, storageFailure, type SheetState } from './views/common';
 
-type UndoSave = { bankerId: string; sessionId: string; entries: { id: string; opId: string }[] };
+type UndoSave = { bankerId: string; sessionId: string; entryId: string; revision: string; opId: string };
 
 const viewerToken = location.pathname.startsWith('/v/') ? location.pathname.split('/')[2] : null;
 export function App() {
@@ -149,6 +149,7 @@ export function App() {
   const update = useCallback((next: SessionState) => {
     if (epoch.current !== renderEpoch || (!viewerToken && (!banker || activeBanker.current?.id !== banker.id || !client?.isCurrent()))) return;
     if (current.current?.session.id === next.session.id && (BigInt(current.current.revision) > BigInt(next.revision) || (current.current.revision === next.revision && Date.parse(current.current.server_now) > Date.parse(next.server_now)))) return;
+    setUndoSave(saved => saved?.sessionId === next.session.id && saved.revision !== next.revision ? null : saved);
     if (banker && !viewerToken) void storeSnapshot(banker.id, next).catch(storageFailure);
     if (chosen.current === next.session.id || viewerToken) { setState(next); current.current = next; setLastUpdated(new Date().toISOString()); setError(''); }
     setSessions(rows => {
@@ -197,7 +198,7 @@ export function App() {
       const saved = created.find(entry => entry.kind === item.body.kind && entry.amount_minor === item.body.amount_minor);
       const player = receipt.players.find(player => player.id === item.body.player_id);
       notify(saved ? `Saved ${entryLabels[saved.kind].toLowerCase()} · ${player?.display_name ?? 'Player'} · ${money(saved.amount_minor, receipt.session.currency)}` : `Saved ${item.label}`);
-      if (saved && created.every(entry => entry.id === saved.id || ((saved.kind === 'buy_in' && entry.kind === 'payment_in') || (saved.kind === 'cash_out' && entry.kind === 'payment_out')) && entry.amount_minor === saved.amount_minor)) setUndoSave({ bankerId: account.id, sessionId: receipt.session.id, entries: created.map(entry => ({ id: entry.id, opId: crypto.randomUUID() })) });
+      if (saved && next.revision === receipt.revision) setUndoSave({ bankerId: account.id, sessionId: receipt.session.id, entryId: saved.id, revision: receipt.revision, opId: crypto.randomUUID() });
       void refreshSessions(account);
     }, changed);
     stopSync.current = stop;
@@ -257,16 +258,17 @@ export function App() {
   async function undoConfirmedSave() {
     const saved = undoSave;
     if (!saved || undoBusy || formBusy || !sameAccount() || saved.bankerId !== activeBanker.current?.id || saved.sessionId !== chosen.current || current.current?.session.status !== 'open') return;
+    if (current.current.revision !== saved.revision) { notify('Session changed. Review activity before undoing.'); return; }
     const startingEpoch = epoch.current;
     setUndoBusy(true); setError('');
     try {
-      for (const entry of saved.entries) {
-        if (epoch.current !== startingEpoch || !sameAccount()) return;
-        await mutate(`/api/sessions/${saved.sessionId}/entries/${entry.id}/void`, { op_id: entry.opId });
-      }
+      await mutate(`/api/sessions/${saved.sessionId}/entries/${saved.entryId}/undo`, { op_id: saved.opId, expected_revision: saved.revision });
       if (epoch.current === startingEpoch) notify('Entry undone. The original remains in activity.');
     } catch (problem) {
-      if (epoch.current === startingEpoch) setError(problem instanceof Error ? problem.message : 'Could not confirm Undo. Check activity before trying again.');
+      if (epoch.current === startingEpoch) {
+        if ((problem as { status?: number }).status && (problem as { status: number }).status < 500) setUndoSave(null);
+        setError(problem instanceof Error ? problem.message : 'Could not confirm Undo. Check activity before trying again.');
+      }
     } finally {
       if (epoch.current === startingEpoch) { setUndoBusy(false); }
     }
