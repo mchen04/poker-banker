@@ -218,6 +218,8 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
     await tap(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }));
     await tap(page.getByRole('button', { name: 'Save entry', exact: true })); await saved();
   });
+  await page.getByRole('navigation', { name: 'Table navigation', exact: true }).getByRole('button', { name: 'Players', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Table navigation', exact: true }).getByRole('button', { name: 'Table', exact: true }).click();
   await expect(page.getByTestId('saved-confirmation')).toHaveCount(0);
   const rowCounts: Record<string, number> = {};
   const rowMoneyFits: Record<string, boolean> = {};
