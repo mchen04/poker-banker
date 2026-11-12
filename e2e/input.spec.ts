@@ -5,7 +5,7 @@ test('physical input retains text, prefixes, replacements, and native date segme
   if (testInfo.project.name === 'iphone-standalone') await context.addInitScript(() => {
     Object.defineProperty(navigator, 'standalone', { configurable: true, value: true });
   });
-  await page.setContent('<label>Text<input></label><label>Password<input type="password"></label><label>Search<input type="search"></label><label>Decimal<input inputmode="decimal"></label><label>Notes<textarea></textarea></label><label>Date<input type="date"></label><label>Time<input type="datetime-local" step="1"></label>');
+  await page.setContent('<label>Text<input></label><label>Password<input type="password"></label><label>Search<input type="search"></label><label>Decimal<input inputmode="decimal"></label><label>Notes<textarea></textarea></label><label>Month<input type="month"></label><label>Date<input type="date"></label><label>Time<input type="datetime-local" step="1"></label>');
   for (const label of ['Text', 'Password', 'Search', 'Decimal', 'Notes']) {
     const field = page.getByLabel(label, { exact: true });
     await typeInput(field, '1');
@@ -23,6 +23,13 @@ test('physical input retains text, prefixes, replacements, and native date segme
   }
   await typeInput(page.getByLabel('Notes', { exact: true }), 'First line\nSecond line');
   await expect(page.getByLabel('Notes', { exact: true })).toHaveValue('First line\nSecond line');
+  const month = page.getByLabel('Month', { exact: true });
+  await typeInput(month, '2028-02');
+  await expect(month).toHaveValue('2028-02');
+  await typeInput(month, '2026-11');
+  await expect(month).toHaveValue('2026-11');
+  await typeInput(month, '');
+  await expect(month).toHaveValue('');
   const date = page.getByLabel('Date', { exact: true });
   await typeInput(date, '2028-02-29');
   await expect(date).toHaveValue('2028-02-29');
