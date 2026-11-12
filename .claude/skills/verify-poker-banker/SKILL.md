@@ -62,7 +62,7 @@ Run the complete ledger recipe once per desired context:
 .claude/skills/verify-poker-banker/scripts/verify.sh drive ledger --run RUN_ID --context desktop-webkit
 ```
 
-For local automatic-update verification, follow the pinned previous-source setup in [offline and app updates](features/offline-and-app-updates.md), launch with its fixture metadata, then run `drive updates --run RUN_ID --context iphone-standalone`. It uses the same shared five-case helper as the focused browser test. Run it last because it changes the shared build; cleanup preserves its release table and compatibility evidence.
+For local automatic-update verification, follow the pinned previous-source setup in [offline and app updates](features/offline-and-app-updates.md), launch with its fixture metadata, then run `drive updates --run RUN_ID --context iphone-standalone`. It uses the same shared five-case journey plus six update-review cases as the focused browser test. Run it last because it changes the shared build; cleanup preserves its release table and compatibility evidence.
 
 The other feature files contain copyable Playwright recipes. Save each supplied block at its named `.cache/verify-*.ts` path, then invoke it through the same run:
 
