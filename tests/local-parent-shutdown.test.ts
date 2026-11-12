@@ -6,7 +6,7 @@ import { closeOwnedServer } from '../scripts/close-server';
 import { stopOwnedProcess } from '../scripts/owned-process';
 import { testDatabase } from './database';
 
-it('stops its detached local server when the IPC owner dies', async () => {
+for (const phase of ['ready', 'before-import'] as const) it(`stops its detached local server when the IPC owner dies at ${phase}`, async () => {
   const database = await testDatabase();
   const socket = createServer();
   await new Promise<void>(resolve => socket.listen(0, '127.0.0.1', resolve));
@@ -14,9 +14,11 @@ it('stops its detached local server when the IPC owner dies', async () => {
   await closeOwnedServer(socket);
   const script = `
     const { spawn } = require('node:child_process');
-    const child = spawn(process.execPath, ['--import', 'tsx', 'src/server/local.ts'], {
+    const args = ${JSON.stringify(phase === 'ready' ? ['--import', 'tsx', 'src/server/local.ts'] : ['--import', 'tsx', '--input-type=module', '-e', "setTimeout(() => { void import('./src/server/local.ts'); }, 200);"])};
+    const child = spawn(process.execPath, args, {
       detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: process.env,
     });
+    if (${JSON.stringify(phase)} === 'before-import') process.send({ pid: child.pid });
     let output = '';
     child.stdout.on('data', bytes => {
       output += bytes;

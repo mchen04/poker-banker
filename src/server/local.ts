@@ -70,3 +70,7 @@ function finish(code: number) {
   );
 }
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { finish(0); });
+if (typeof process.send === 'function') {
+  process.on('disconnect', () => { finish(1); });
+  if (!process.connected) finish(1);
+}

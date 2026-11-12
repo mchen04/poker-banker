@@ -58,5 +58,6 @@ function finish(code: number) {
 }
 process.on('message', message => { if (message && typeof message === 'object' && 'type' in message && message.type === 'pb-shutdown') finish(0); });
 process.on('disconnect', () => { finish(0); });
+if (typeof process.send === 'function' && !process.connected) finish(1);
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { finish(0); });
 void startup.catch(() => { fail('E2E server startup failed'); finish(1); });
