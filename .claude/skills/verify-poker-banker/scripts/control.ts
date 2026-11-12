@@ -46,7 +46,7 @@ async function request(command: Command): Promise<unknown> {
       catch (error) { reject(error); }
     });
   });
-  return command.action === 'cleanup' ? withShutdownDeadline('Verification cleanup request', () => pending).finally(() => client.destroy()) : pending;
+  return command.action === 'cleanup' ? pending.finally(() => client.destroy()) : pending;
 }
 async function files(directory: string): Promise<string[]> {
   const values = await readdir(directory, { withFileTypes: true });
@@ -103,9 +103,8 @@ async function daemon() {
       const settle = async (action: () => unknown | Promise<unknown>) => { try { await action(); } catch (error) { errors.add(String(error)); } };
       const bounded = (label: string, action: () => unknown | Promise<unknown>) => settle(() => withShutdownDeadline(label, action));
       const earlyBrowser = settle(closeBrowser);
-      const earlyChild = child ? settle(() => stopOwnedProcess(child!, 'ipc', true)) : Promise.resolve();
       await bounded('Verification startup shutdown barrier', () => startupTask?.catch(() => {}));
-      await Promise.all([earlyBrowser, earlyChild]);
+      await earlyBrowser;
       await settle(closeBrowser);
       if (child) await settle(() => stopOwnedProcess(child!, 'ipc', true));
       if (!errors.size) meta.state = 'stopped';

@@ -63,13 +63,20 @@ async function probe(phase: Phase): Promise<Result> {
         },
         kill() { throw new Error('Unexpected fixture signal'); },
       });
+      const browserOwner = Object.assign(new EventEmitter(), {
+        pid: 12346, exitCode: null, signalCode: null, connected: false,
+        kill(signal) {
+          queueMicrotask(() => { browserOwner.signalCode = signal; browserOwner.emit('exit', null, signal); });
+          return true;
+        },
+      });
       const fixtures = {
         browser: { close: async () => { events.push('browser-close'); if (phase === 'browser') await hang(); } },
-        ownedBrowserServer: phase === 'browser-server' ? { close: hang, process: () => child } : undefined,
+        ownedBrowserServer: phase === 'browser-server' ? { close: hang, process: () => browserOwner } : undefined,
         startupTask: phase === 'startup' ? hang() : Promise.resolve(),
         child, meta, runId, evidence, metadata, socket, join, process, withShutdownDeadline,
         stopOwnedProcess: (owned, mode, group) => {
-          if (owned !== child || group !== true) throw new Error('Unexpected fixture ownership');
+          if (owned !== child && owned !== browserOwner || group !== true) throw new Error('Unexpected fixture ownership');
           if (mode === 'signal') events.push('server-owner-finalized');
           return stopOwnedProcess(owned, mode, false);
         },
