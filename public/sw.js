@@ -2,18 +2,60 @@ const RELEASE = __PB_RELEASE__;
 const PRECACHE = __PB_PRECACHE__;
 if (typeof RELEASE !== 'string' || !RELEASE || !Array.isArray(PRECACHE) || !PRECACHE.includes('/index.html')) throw new Error('Worker release and precache stamps are required');
 const CACHE = `poker-banker-${RELEASE}`;
+const UPDATE_PROTOCOL = 1;
+const MAX_UNKNOWN_RELEASES = 2;
 const releaseRequests = new Map();
 let releaseRequest = 0;
 let cleaning = Promise.resolve();
 let checking;
+let policyDatabase;
+
+function policy(change) {
+  policyDatabase ||= new Promise((resolve, reject) => {
+    const request = indexedDB.open('poker-banker-updates', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('policy');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return policyDatabase.then(database => new Promise((resolve, reject) => {
+    const transaction = database.transaction('policy', 'readwrite');
+    const store = transaction.objectStore('policy');
+    const request = store.get('state');
+    let result;
+    request.onsuccess = () => {
+      const state = request.result || { clients: {}, releases: {}, generation: 0 };
+      result = change(state);
+      store.put(state, 'state');
+    };
+    transaction.oncomplete = () => resolve(result);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('Update policy transaction aborted'));
+  }));
+}
+
+function workerRelease(worker) {
+  if (!worker) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const channel = new MessageChannel();
+    const finish = release => {
+      clearTimeout(timeout);
+      channel.port1.close();
+      resolve(typeof release === 'string' && release ? release : null);
+    };
+    const timeout = setTimeout(() => finish(null), 1000);
+    channel.port1.onmessage = event => finish(event.data?.version);
+    try { worker.postMessage({ type: 'GET_VERSION' }, [channel.port2]); }
+    catch { finish(null); }
+  });
+}
 
 function clientRelease(client) {
   return new Promise(resolve => {
     const requestId = `${RELEASE}:${++releaseRequest}`;
-    const finish = release => {
+    const finish = reply => {
       clearTimeout(timeout);
       releaseRequests.delete(requestId);
-      resolve(release);
+      resolve(reply);
     };
     const timeout = setTimeout(() => finish(null), 1000);
     releaseRequests.set(requestId, { clientId: client.id, finish });
@@ -22,19 +64,51 @@ function clientRelease(client) {
   });
 }
 
-function cleanCaches() {
-  cleaning = cleaning.catch(() => {}).then(async () => {
-    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const releases = await Promise.all(clients.map(clientRelease));
-    const keys = await caches.keys();
-    if (releases.some(release => typeof release !== 'string' || !keys.includes(`poker-banker-${release}`))) return;
-    const live = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    if (live.some(client => !clients.some(known => known.id === client.id))) return;
-    if (self.registration.installing || self.registration.waiting) return;
-    const retained = new Set([CACHE, ...releases.map(release => `poker-banker-${release}`)]);
-    await Promise.all(keys.filter(key => key.startsWith('poker-banker-') && !retained.has(key)).map(key => caches.delete(key)));
+async function pruneCaches(installing = false) {
+  const generation = await policy(state => state.generation);
+  const workers = [self.registration.active, self.registration.waiting, self.registration.installing];
+  const versions = await Promise.all(workers.map((worker, index) => installing && index === 2 && worker ? RELEASE : workerRelease(worker)));
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const replies = await Promise.all(clients.map(clientRelease));
+  const keys = (await caches.keys()).filter(key => key.startsWith('poker-banker-'));
+  const live = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const state = await policy(state => {
+    const candidates = keys.filter(key => key !== CACHE).sort((a, b) => (state.releases[b.slice(13)] || 0) - (state.releases[a.slice(13)] || 0) || keys.indexOf(b) - keys.indexOf(a));
+    const active = versions[0] && `poker-banker-${versions[0]}`;
+    const pins = [...new Set([active, ...candidates, CACHE].filter(key => key && keys.includes(key)))].slice(0, MAX_UNKNOWN_RELEASES);
+    for (const id of Object.keys(state.clients)) if (!live.some(client => client.id === id)) delete state.clients[id];
+    for (const client of live) {
+      const reply = replies[clients.findIndex(queried => queried.id === client.id)];
+      const record = state.clients[client.id] ||= {};
+      if (typeof reply?.release === 'string' && reply.release) record.release = reply.release;
+      if (reply?.updateProtocol === UPDATE_PROTOCOL) record.updateProtocol = UPDATE_PROTOCOL;
+      if (!record.release || !keys.includes(`poker-banker-${record.release}`)) record.pins ||= pins;
+    }
+    for (const release of Object.keys(state.releases)) if (!keys.includes(`poker-banker-${release}`) && state.releases[release] <= generation) delete state.releases[release];
+    return state;
   });
+  if (workers.some((worker, index) => worker && !versions[index])) return state;
+  if (workers.some((worker, index) => worker !== [self.registration.active, self.registration.waiting, self.registration.installing][index])) return state;
+  const retained = new Set([CACHE, ...versions.filter(Boolean).map(release => `poker-banker-${release}`)]);
+  for (const record of Object.values(state.clients)) {
+    if (record.release) retained.add(`poker-banker-${record.release}`);
+    for (const key of record.pins || []) retained.add(key);
+  }
+  for (const [release, order] of Object.entries(state.releases)) if (order > generation) retained.add(`poker-banker-${release}`);
+  await Promise.all(keys.filter(key => !retained.has(key)).map(key => caches.delete(key)));
+  return state;
+}
+
+function cleanCaches() {
+  cleaning = cleaning.catch(() => {}).then(() => self.navigator.locks.request('poker-banker-updates', () => pruneCaches()));
   return cleaning;
+}
+
+async function activate(data) {
+  if (data.updateProtocol !== UPDATE_PROTOCOL) return;
+  const state = await cleanCaches();
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  if (clients.every(client => state.clients[client.id]?.updateProtocol === UPDATE_PROTOCOL)) await self.skipWaiting();
 }
 
 function checkUpdate(clientId) {
@@ -55,14 +129,22 @@ function cacheable(response) {
 }
 
 self.addEventListener('install', event => {
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE);
-    for (const path of PRECACHE) {
-      const response = await fetch(new Request(path, { cache: 'reload', credentials: 'omit' }));
-      if (!cacheable(response)) throw new Error(`Cannot precache ${path}`);
-      await cache.put(path, response);
+  event.waitUntil(self.navigator.locks.request('poker-banker-updates', async () => {
+    const existed = (await caches.keys()).includes(CACHE);
+    try {
+      await policy(state => { state.releases[RELEASE] ||= ++state.generation; });
+      const cache = await caches.open(CACHE);
+      for (const path of PRECACHE) {
+        const response = await fetch(new Request(path, { cache: 'reload', credentials: 'omit' }));
+        if (!cacheable(response)) throw new Error(`Cannot precache ${path}`);
+        await cache.put(path, response);
+      }
+      await pruneCaches(true);
+    } catch (error) {
+      if (!existed) await caches.delete(CACHE);
+      throw error;
     }
-  })());
+  }));
 });
 
 self.addEventListener('activate', event => {
@@ -79,11 +161,11 @@ self.addEventListener('message', event => {
     event.ports[0]?.postMessage({ version: RELEASE });
     return;
   }
-  if (data.type === 'ACTIVATE') event.waitUntil(self.skipWaiting());
+  if (data.type === 'ACTIVATE') event.waitUntil(activate(data));
   if (data.type === 'CLIENT_RELEASE' && event.source?.id) {
     if (data.requestId) {
       const pending = releaseRequests.get(data.requestId);
-      if (pending?.clientId === event.source.id) pending.finish(data.release);
+      if (pending?.clientId === event.source.id) pending.finish({ release: data.release, updateProtocol: data.updateProtocol });
     } else event.waitUntil(cleanCaches());
   }
 });
