@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { expect, it } from 'vitest';
-import { stopOwnedProcess } from '../scripts/owned-process';
+import { stopOwnedProcess, withShutdownDeadline } from '../scripts/owned-process';
 
 async function ownedChild(ignores: boolean) {
   const script = `
@@ -17,7 +17,7 @@ async function ownedChild(ignores: boolean) {
 
 async function forceCleanup(child: ChildProcess, exited: Promise<unknown>) {
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-  await exited;
+  await withShutdownDeadline('Regression child cleanup', () => exited);
 }
 
 for (const mode of ['signal', 'ipc'] as const) {
@@ -38,7 +38,7 @@ for (const mode of ['signal', 'ipc'] as const) {
     } finally {
       if (timer) clearTimeout(timer);
       await forceCleanup(child, exited);
-      await stopped;
+      await withShutdownDeadline('Regression shutdown settlement', () => stopped);
     }
   });
 
