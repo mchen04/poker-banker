@@ -17,6 +17,11 @@ test('session, correction, timing and filter errors retain and focus their inval
   await newSession(page, 'Review fields before saving');
   const player = await addPlayer(page, 'Reviewable fields');
   await money(page, player.id, '10');
+  await menu(page, 'Close session');
+  await page.getByRole('button', { name: `${player.display_name} is still playing. Cash out`, exact: true }).click();
+  await expect(page.getByTestId('money-player')).toHaveText(player.display_name);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await menu(page, 'Session settings');
   await typeInput(page.getByLabel('Big blind', { exact: true }), '1.005');
   await page.getByRole('button', { name: 'Save settings', exact: true }).click();

@@ -50,7 +50,7 @@ export function App() {
   const notify = useCallback((text: string) => { setNotice(text); setUndoSave(null); }, []);
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => { setNotice(''); setUndoSave(null); }, 7000);
+    const timer = window.setTimeout(() => { setNotice(''); setUndoSave(null); }, 4000);
     return () => window.clearTimeout(timer);
   }, [notice, undoSave]);
   useEffect(() => { setNotice(''); setUndoSave(null); }, [screen, sessionId]);
