@@ -18,7 +18,7 @@ export function workSummary(metric: string, samples: Sample[]) {
   const work = rows[0]?.work;
   if (!work) return 'no completed work';
   if (metric === 'api.write10') return `${rows.length} committed writes; ${new Set(rows.map(row => `${row.work.run}/${row.work.batch}`)).size} batches of 10`;
-  if (metric.startsWith('viewer.delay.')) return `${new Set(rows.map(row => `${row.work.run}/${row.work.batch}`)).size} committed writes; ${rows.length} viewer renders`;
+  if (metric.startsWith('viewer.delay.')) return `${new Set(rows.map(row => `${row.work.run}/${row.work.batch ?? row.work.sample}`)).size} committed writes; ${rows.length} viewer renders`;
   if (metric === 'entry.confirm') return `${rows.length} saves; ${rows.reduce((sum, row) => sum + Number(row.work.ledger_rows_written), 0)} ledger rows`;
   const keys = ['players', 'session_entries', 'ledger_entries', 'closed_sessions', 'sessions_used', 'groups', 'rows_returned', 'rows_selected', 'unchanged'];
   return `${rows.length} completed; ${keys.filter(key => key in work).map(key => `${key}=${[...new Set(rows.map(row => String(row.work[key])))].join('/')}`).join(', ')}`;

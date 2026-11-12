@@ -30,3 +30,8 @@ it('marks host load at half the machine capacity as noisy without rejecting it',
   expect(hostPolicy(10, 500)).toMatchObject({ threshold: 500, noisyHost: true });
   expect(hostPolicy(10, 800)).toMatchObject({ otherCpu: 800, noisyHost: true });
 });
+
+it('counts repeated standalone viewer journeys by sample without confusing correlated viewer batches', () => {
+  const rows: Sample[] = Array.from({ length: 10 }, (_, index) => ({ metric: 'viewer.delay.1', ms: 1, ok: true, work: { run: Math.floor(index / 2), sample: index % 2, concurrency: 1 } }));
+  expect(workSummary('viewer.delay.1', rows)).toBe('10 committed writes; 10 viewer renders');
+});
