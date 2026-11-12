@@ -1,3 +1,4 @@
+import { withShutdownDeadline } from './owned-process';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, appendFile } from 'node:fs/promises';
 import { cpus, loadavg } from 'node:os';
@@ -65,16 +66,20 @@ export async function runLiveComparison(options: { baselineURL: string; candidat
     for (const client of Object.values(clients)) error = client.redact(error);
   } finally {
     try {
-      try { await journal; } catch (failure) {
+      try { await withShutdownDeadline('Live benchmark evidence journal', () => journal); } catch (failure) {
         error = error ?? (failure instanceof Error ? failure.message : 'Live comparison evidence failed');
         for (const client of Object.values(clients)) error = client.redact(error);
       }
       const requests = Object.fromEntries(Object.entries(clients).map(([side, client]) => [side, client.counts]));
       const requestErrors = Object.values(clients).reduce((sum, client) => sum + client.counts.errors, 0);
       const comparison = { ...summarizeLiveComparison(rows, options.metric, requestErrors + (error ? 1 : 0)), requests, error };
-      await writeFile(join(directory, 'comparison.json'), JSON.stringify(comparison, null, 2));
+      await withShutdownDeadline('Live comparison cleanup summary', () => writeFile(join(directory, 'comparison.json'), JSON.stringify(comparison, null, 2)));
       return comparison;
-    } finally { await Promise.all(Object.values(clients).map(client => client.close())); }
+    } finally {
+      const closed = await Promise.allSettled(Object.values(clients).map(client => client.close()));
+      const failures = closed.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
+      if (failures.length) throw new AggregateError(failures, 'Live comparison client cleanup failed');
+    }
   }
 }
 async function main() {

@@ -1,3 +1,4 @@
+import { withShutdownDeadline } from './owned-process';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, appendFile, access } from 'node:fs/promises';
 import { webkit } from '@playwright/test';
@@ -79,9 +80,9 @@ async function main() {
   } catch (failure) { error = client.redact(failure); if (privateToken) error = error.replaceAll(privateToken, 'OWNED_TOKEN'); process.exitCode = 1; }
   finally {
     try {
-      try { await journal; } catch (failure) { error = error ?? client.redact(failure); process.exitCode = 1; }
+      try { await withShutdownDeadline('Live benchmark evidence journal', () => journal); } catch (failure) { error = error ?? client.redact(failure); process.exitCode = 1; }
       const summary = { metrics: summarize(collected), repetitions, errors: collected.filter(row => !row.ok).length, requests: client.counts, error, clientHost: host(), serverHostLoad: 'unavailable through the public API' };
-      await writeFile(join(directory, 'summary.json'), JSON.stringify(summary, null, 2));
+      await withShutdownDeadline('Live benchmark cleanup summary', () => writeFile(join(directory, 'summary.json'), JSON.stringify(summary, null, 2)));
       console.log('Metric | samples | errors | median ms | p95 ms | range ms | completed work');
       for (const row of summary.metrics) console.log(`${row.metric} | ${row.samples} | ${row.errors} | ${row.median?.toFixed(2)} | ${row.p95?.toFixed(2)} | ${row.min?.toFixed(2)}..${row.max?.toFixed(2)} | ${workSummary(row.metric, collected)}`);
       console.log(`Controller HTTP requests=${client.counts.requests}; mutations=${client.counts.mutations}; request errors=${client.counts.errors}; sample errors=${summary.errors}; campaign errors=${error ? 1 : 0}; evidence=${directory}`);

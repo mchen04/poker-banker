@@ -31,10 +31,15 @@ it('settles an interrupted comparison when its owned benchmark child ignores shu
   try {
     await withShutdownDeadline('Comparison fixture readiness', () => started);
     owner.emit('SIGTERM');
+    owner.emit('SIGINT');
     await new Promise(done => setTimeout(done, 3400));
     expect(settled).toBe(true);
     expect(failed || owner.exitCode !== 0).toBe(true);
     expect(child!.signalCode).toBe('SIGKILL');
+    expect(owner.exitCode).toBe(143);
+    expect(owner.listenerCount('SIGTERM')).toBe(0);
+    expect(owner.listenerCount('SIGINT')).toBe(0);
+    expect(owner.listenerCount('SIGHUP')).toBe(0);
   } finally {
     if (child) await stopOwnedProcess(child, 'signal', true).catch(() => {});
     await withShutdownDeadline('Comparison fixture settlement', () => main);
