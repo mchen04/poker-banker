@@ -50,6 +50,11 @@ test('an open tab retains its later player draft while another tab confirms the 
     await submitted;
     await typeInput(other.getByLabel('Search players', { exact: true }), 'Alex');
     await expect(other.getByText(/submitted.*another tab|submitted elsewhere/i).first()).toBeVisible();
+    await expect(other.getByRole('dialog').locator('[aria-live="polite"]').filter({ hasText: /submitted.*another tab|submitted elsewhere/i }).first()).toBeVisible();
+    const search = other.getByLabel('Search players', { exact: true });
+    await expect(search).toBeFocused();
+    expect(await search.evaluate(input => [(input as HTMLInputElement).selectionStart, (input as HTMLInputElement).selectionEnd])).toEqual([4, 4]);
+    await expect(search).toBeInViewport({ ratio: 1 });
     expect(bodies).toHaveLength(1);
     expect(bodies[0]!.new_player_name).toBe('Justin');
     release();

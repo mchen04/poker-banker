@@ -12,6 +12,7 @@ test.describe("Money precision and reachable fields", () => {
     await typeInput(amount, '12.005');
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     await expect(page.getByText('Enter no more than 2 decimal places for USD.', { exact: true })).toBeVisible();
+    await expect(amount).toBeFocused();
     await expect(amount).toHaveValue('12.005');
     const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
     await expect.poll(async () => (await storedDraft<{ amount: string }>(page, key))?.amount).toBe('12.005');
