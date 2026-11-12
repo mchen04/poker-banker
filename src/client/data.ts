@@ -1,5 +1,5 @@
 import { observeServerTime } from './clock';
-import { parseMoney } from '../domain/money';
+import { MAX_MINOR, parseMoney } from '../domain/money';
 import type { SessionState } from '../domain/session';
 
 export type Banker = { id: string; username: string };
@@ -325,6 +325,12 @@ function recoveryMinor(value: unknown, currency: string | undefined): string {
   if (!currency) throw new Error('The session currency is unavailable. Review the amount in minor units.');
   return String(parseMoney(String(value), currency));
 }
+function recoveryWholeMinor(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !/^\d+$/.test(value.trim())) throw new Error(`${label}: use digits only, without decimal points, commas or currency symbols.`);
+  const minor = BigInt(value.trim());
+  if (minor > MAX_MINOR) throw new Error(`${label}: enter ${MAX_MINOR} minor units or less.`);
+  return String(minor);
+}
 function recoveryRequest(value: DraftValue, request: DraftRequest, currency?: string): DraftRequest {
   const body: Record<string, unknown> = { ...request.body, op_id: value.op_id };
   const entry = /^\/api\/sessions\/[^/]+\/entries$/.test(request.path);
@@ -344,10 +350,7 @@ function recoveryRequest(value: DraftValue, request: DraftRequest, currency?: st
       body.amount_minor = recoveryMinor(value.amount, currency);
     }
     const chip = body.kind === 'buy_in' || body.kind === 'cash_out';
-    const payment = body.kind === 'payment_in' || body.kind === 'payment_out';
     if (chip && 'paid_now' in value) body.paid_now = value.paid_now;
-    if ((payment || (chip && body.paid_now)) && /^\d+$/.test(String(body.amount_minor)) && BigInt(String(body.amount_minor)) > 0n && 'method' in value) body.method = value.method;
-    else delete body.method;
     if (value.occurred_at) body.occurred_at = new Date(String(value.occurred_at)).toISOString();
     else if ('__recovered_occurred_at' in value) body.occurred_at = value.__recovered_occurred_at;
   }
@@ -361,6 +364,17 @@ function recoveryRequest(value: DraftValue, request: DraftRequest, currency?: st
     if (value.time) body.replacement_occurred_at = new Date(String(value.time)).toISOString();
   }
   if ('big_blind_minor' in body && 'blind' in value) body.big_blind_minor = value.blind ? recoveryMinor(value.blind, request.method === 'PATCH' ? currency : String(value.currency ?? currency ?? '')) : null;
+  for (const [field, label] of [['amount_minor', 'Amount'], ['replacement_amount_minor', 'Replacement amount'], ['big_blind_minor', 'Big blind']] as const) {
+    if (field in body && !(field === 'big_blind_minor' && body[field] === null)) body[field] = recoveryWholeMinor(body[field], label);
+  }
+  if (body.big_blind_minor === '0') throw new Error('Enter a big blind above zero.');
+  if (entry) {
+    if (body.amount_minor === '0' && ['buy_in', 'payment_in', 'payment_out', 'expense'].includes(String(body.kind))) throw new Error('Enter an amount above zero. Only a cash-out may be zero.');
+    const payment = body.kind === 'payment_in' || body.kind === 'payment_out';
+    const paidChip = (body.kind === 'buy_in' || body.kind === 'cash_out') && body.paid_now;
+    if ((payment || paidChip) && typeof body.amount_minor === 'string' && body.amount_minor !== '0' && 'method' in value) body.method = value.method;
+    else delete body.method;
+  }
   return { ...request, body };
 }
 async function operationRecord(store: IDBObjectStore, banker: string, request: DraftRequest): Promise<DraftRecord | undefined> {
