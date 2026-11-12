@@ -446,19 +446,21 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
     const previous = document.activeElement as HTMLElement | null;
     const panel = ref.current;
     let focused = false;
+    const available = (element: HTMLElement) => element.getClientRects().length > 0 && !element.matches(':disabled') && getComputedStyle(element).visibility !== 'hidden';
     function focusEditor() {
       if (focused || !panel) return;
-      const editor = panel.querySelector<HTMLInputElement>('[data-testid="money-amount"]') ?? panel.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input:not([type="checkbox"]),select,textarea');
-      if (editor && !editor.disabled) { editor.focus(); focused = true; }
+      const editors = [...panel.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input:not([type="checkbox"]),select,textarea')].filter(available);
+      const editor = editors.find(editor => editor.dataset.testid === 'money-amount') ?? editors[0];
+      if (editor) { editor.focus(); focused = document.activeElement === editor; }
     }
     focusEditor();
-    if (!focused) panel?.querySelector<HTMLElement>('button')?.focus();
+    if (!focused) [...panel?.querySelectorAll<HTMLElement>('button,summary') ?? []].find(available)?.focus();
     const observer = new MutationObserver(() => { focusEditor(); if (focused) observer.disconnect(); });
     if (panel && !focused) observer.observe(panel, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
     function keyboard(event: KeyboardEvent) {
       if (event.key === 'Escape') { event.preventDefault(); if (!busyRef.current) closeRef.current(); }
       if (event.key !== 'Tab' || !panel) return;
-      const fields = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]')];
+      const fields = [...panel.querySelectorAll<HTMLElement>('button,input,select,textarea,a[href],summary,[tabindex]')].filter(element => element.tabIndex >= 0 && available(element));
       const first = fields[0], last = fields.at(-1);
       if (!first) { event.preventDefault(); panel.focus(); return; }
       if (!panel.contains(document.activeElement)) { event.preventDefault(); first.focus(); return; }

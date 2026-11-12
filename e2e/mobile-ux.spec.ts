@@ -109,6 +109,12 @@ test('expanded recovery controls remain reachable beside a money form at keyboar
     db.close(); window.dispatchEvent(new Event('pb-data'));
   }, { banker: banker.id, session: session.session.id, player: player.id, path });
   await expect(page.getByRole('region', { name: 'Needs review', exact: true })).toBeVisible();
+  await menu(page, 'Session settings');
+  await expect(page.getByLabel('Session name', { exact: true })).toBeFocused();
+  await page.getByRole('button', { name: 'Close sheet', exact: true }).focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.getByRole('dialog').getByText('Review recovered edit', { exact: true })).toBeFocused();
+  await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
   await page.getByTestId(`buy-in-${player.id}`).click();
   await page.setViewportSize({ width: 375, height: 430 });
   const recovery = page.getByRole('dialog').getByRole('region', { name: 'Needs review', exact: true });
