@@ -195,9 +195,8 @@ export class ProcessOwner {
     this.registerGroup(group);
     child.once('close', () => {
       const retire = () => {
-        if (group.handedOff) return;
         try {
-          if (!exists(group)) this.publish(group, 'pb-owned-group-gone');
+          if (!exists(group)) { if (!group.handedOff) this.publish(group, 'pb-owned-group-gone'); }
           else setTimeout(retire, 10).unref();
         } catch (error) { group.error = error instanceof Error ? error : new Error(String(error)); }
       };

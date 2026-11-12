@@ -26,7 +26,6 @@ it('owns a complete detached command tree and leaves an unrelated sibling alive'
   } finally {
     await owner.stopProcesses().catch(() => {});
     await siblingOwner.stop();
-    if (descendantPid && alive(descendantPid)) process.kill(descendantPid, 'SIGKILL');
   }
 });
 
@@ -139,7 +138,6 @@ it('supervises detached groups forwarded by a forced nested owner', async () => 
     expect(alive(descendantPid)).toBe(false);
   } finally {
     await owner.stop().catch(() => {});
-    if (alive(descendantPid)) process.kill(descendantPid, 'SIGKILL');
   }
 });
 
@@ -185,6 +183,26 @@ it('never signals a retired group even if its old process identifier is reused',
   await once(child, 'close');
   const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw new Error('Retired process identifier was touched'); });
   try { await owner.stop(); expect(kill).not.toHaveBeenCalled(); }
+  finally { kill.mockRestore(); }
+});
+
+it('retires a naturally exited handed-off service before its process identifier can be reused', async () => {
+  const owner = createProcessOwner();
+  const script = `
+    import {createProcessOwner} from ${JSON.stringify(new URL('../scripts/owned-process.ts', import.meta.url).href)};
+    createProcessOwner();
+    process.on('message',()=>process.exit(0));
+    console.log('ready');
+  `;
+  const child = owner.spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'ignore', 'ipc'] });
+  await once(child.stdout!, 'data');
+  await owner.handoff(child);
+  const closed = once(child, 'close');
+  child.send('finish');
+  await closed;
+  expect(child.exitCode).toBe(0);
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw new Error('Retired handed-off process identifier was touched'); });
+  try { await expect(stopOwnedProcess(child)).resolves.toBeUndefined(); expect(kill).not.toHaveBeenCalled(); }
   finally { kill.mockRestore(); }
 });
 
