@@ -308,7 +308,7 @@ it('keeps each physical edit beside a frozen request until replay releases the c
   } finally { harness.close(); }
 });
 
-it('keeps retained-edit readback options when another tab freezes during operation normalization', async () => {
+it('reads the draft and operation claim from one snapshot while another tab freezes the form', async () => {
   const fixture = storage() as unknown as { state: () => Map<string, Map<string, { next_value?: unknown }>> };
   const data = await import('../src/client/data');
   const key = data.draftKey(owner, session, 'add-player');
@@ -355,11 +355,16 @@ it('keeps retained-edit readback options when another tab freezes during operati
   const cursor: import('../src/client/data').DraftCursor = {};
   const returned = await data.readDraft<typeof value & { __submitted?: DraftRequest }>(key, cursor, { includeNext: true });
   expect(armed).toBe(false);
-  expect(returned).toMatchObject({ amount: 'Alex' });
-  expect(returned).not.toHaveProperty('__submitted');
-  expect(cursor.submitted).toEqual(request);
-  expect(fixture.state().get('drafts')!.get(key)!.next_value).toMatchObject({ amount: 'Alex' });
+  expect(returned).toEqual(value);
+  expect(cursor.submitted).toBeUndefined();
+  expect(await data.readDraft(key, cursor, { includeNext: true })).toEqual({ ...value, __submitted: request });
+  expect(fixture.state().get('drafts')!.get(key)!.next_value).toBeUndefined();
+  expect(data.draftConflictNotice(key)).toBeUndefined();
   expect(fetch).not.toHaveBeenCalled();
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/auth/me' ? { banker: { id: owner, username: owner } } : { ok: true }, { headers: { 'X-PB-Banker-ID': owner } })));
+  await expect(data.replaySubmittedDraft(key, () => true, cursor)).resolves.toEqual({ ok: true });
+  expect(await data.readDraft(key)).toBeUndefined();
+  expect(data.hasPendingLocalWrites()).toBe(false);
 });
 
 it('permits submission after multiple earlier keystroke writes finish in the same tab', async () => {
