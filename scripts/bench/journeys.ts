@@ -16,7 +16,6 @@ type Render = { selector: string; text?: string; includes?: string; absent?: str
 type Timing = { start: number; confirmed: number; nextPaint: number | null; validation?: Record<string, unknown> };
 type JourneyWindow = Window & { __pbJourney?: Promise<Timing> };
 const total = (state: SessionState) => formatMoney(BigInt(state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0'), state.session.currency);
-const frames = (page: Page) => evaluateInPage(page, () => new Promise<number>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.timeOrigin + performance.now())))));
 
 async function ready(page: Page, state: SessionState) {
   const rendered = await evaluateInPage(page, expected => {

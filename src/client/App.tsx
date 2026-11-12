@@ -16,7 +16,6 @@ export function App() {
   const [banker, setBanker] = useState<Banker | null>(null);
   const [checking, setChecking] = useState(!viewerToken);
   const [online, setOnline] = useState(navigator.onLine);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(new URLSearchParams(location.search).get('session'));
   const [state, setState] = useState<SessionState | null>(null);
   const [pending, setPending] = useState<OutboxItem[]>([]);
@@ -87,7 +86,7 @@ export function App() {
     if (previousBanker) invalidateBankerWork(previousBanker);
     stopSync.current?.(); stopSync.current = null;
     activeBanker.current = null; current.current = null; chosen.current = null; initialSession.current = null;
-    setBanker(null); setState(null); setSessionId(null); setSessions([]); setPending([]); setSubmittedForms([]); setCheckingForm(false);
+    setBanker(null); setState(null); setSessionId(null); setPending([]); setSubmittedForms([]); setCheckingForm(false);
     setSheet(null); setChildDialog(false); setFormBusy(false); setNotice(''); setUndoSave(null); setNoticeTiming(false); setUndoBusy(false); setError(''); setScreen('workspace'); setLastUpdated(null);
     setAccountChanged(false);
     setRecovery(null); setAuthCodesVisible(false);
@@ -171,24 +170,18 @@ export function App() {
     setUndoSave(saved => saved?.sessionId === next.session.id && saved.revision !== next.revision ? null : saved);
     if (banker && !viewerToken) void storeSnapshot(banker.id, next).catch(storageFailure);
     if (chosen.current === next.session.id || viewerToken) { setState(next); current.current = next; setLastUpdated(new Date().toISOString()); setError(''); }
-    setSessions(rows => {
-      const summary: SessionSummary = { id: next.session.id, name: next.session.name, played_on: next.session.played_on, currency: next.session.currency, status: next.session.status, revision: next.revision };
-      return [...rows.filter(row => row.id !== summary.id), summary].sort((a, b) => b.played_on.localeCompare(a.played_on) || b.id.localeCompare(a.id));
-    });
   }, [banker, client, renderEpoch]);
   const refreshSessions = useCallback(async (account: Banker) => {
     const generation = epoch.current;
     try {
       if (!client || client.bankerId !== account.id) return [];
       const result = await client.api<{ sessions: SessionSummary[] }>('/api/sessions');
-      if (epoch.current === generation && activeBanker.current?.id === account.id) setSessions(result.sessions);
       return result.sessions;
     } catch (problem) {
       if (epoch.current !== generation || activeBanker.current?.id !== account.id) return [];
       if ((problem as { status?: number }).status === 401) { resetAuth(); return []; }
       const snapshots = await listSnapshots(account.id);
       const rows = snapshots.map(item => ({ ...item.session, revision: item.revision }));
-      if (epoch.current === generation && activeBanker.current?.id === account.id) setSessions(rows);
       return rows;
     }
   }, [client, resetAuth]);

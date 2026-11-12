@@ -14,7 +14,7 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   const tag = `${runId.slice(-8)}-${randomUUID().slice(0, 6)}`;
   const session = await newSession(page, `Verify ledger ${tag}`);
   const player = await addPlayer(page, `Ledger Justin ${tag}`);
-  const other = await addPlayer(page, `Ledger Pat ${tag}`);
+  await addPlayer(page, `Ledger Pat ${tag}`);
   async function record(amount: string, name: string, kind: 'Buy-in' | 'Cash out' | 'Record payment' | 'Tips and meals' = 'Buy-in', paid?: boolean, method?: 'Cash' | 'Venmo' | 'Zelle') {
     await openMoney(page, player.id, kind);
     await typeInput(page.getByTestId('money-amount'), amount);
