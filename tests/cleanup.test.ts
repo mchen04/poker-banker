@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -18,6 +19,16 @@ async function availablePort() {
   await new Promise<void>(resolve => server.close(() => resolve())); return port;
 }
 function exited(child: ChildProcess) { return new Promise<number | null>(resolve => child.once('exit', code => resolve(code))); }
+async function ready(child: ChildProcess, output: () => string, signal: AbortSignal) {
+  const stopped = new AbortController();
+  const onExit = () => stopped.abort(new Error('Owned server exited before readiness'));
+  child.once('exit', onExit);
+  try {
+    if (child.exitCode !== null || child.signalCode !== null) onExit();
+    const current = AbortSignal.any([signal, stopped.signal]);
+    while (!output().includes('Poker banker ready at')) await once(child.stdout!, 'data', { signal: current });
+  } finally { child.removeListener('exit', onExit); }
+}
 it('removes exactly its database directory after concurrent stops while keeping another run intact', async () => {
   const before = await scratch();
   const database = await testDatabase();
@@ -44,7 +55,7 @@ it('removes its database on migration failure without touching the caller-owned 
     expect(await readFile(`${directory}/0001_bad.sql`, 'utf8')).toBe('SELECT * FROM absent_cleanup_table');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
-for (const method of ['ipc', 'signal', 'startup'] as const) it(`cleans database and TLS scratch on ${method} server shutdown`, async () => {
+for (const method of ['ipc', 'signal', 'startup'] as const) it(`cleans database and TLS scratch on ${method} server shutdown`, async ({ signal }) => {
   const before = await scratch();
   const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { env: { ...process.env, PORT: String(await availablePort()) }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let output = '';
@@ -55,7 +66,7 @@ for (const method of ['ipc', 'signal', 'startup'] as const) it(`cleans database 
       await expect.poll(async () => (await scratch()).filter(name => !before.includes(name)).length).toBeGreaterThan(0);
       await stopOwnedProcess(child);
     } else {
-      await expect.poll(() => output).toContain('Poker banker ready at');
+      await ready(child, () => output, signal);
       if (method === 'signal') {
         const done = exited(child); child.kill('SIGTERM'); expect(await done).toBe(0);
       } else await stopOwnedProcess(child);
