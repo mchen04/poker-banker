@@ -236,199 +236,111 @@ Live A/B of the Round 12 players aggregation: side A was the deployed production
 
 Overall median 447.38 → 139.76 ms (−307.6 ms, −68.8%); MAD 41.78 ms before, 4.18 ms after. Every pair improves and the improvement exceeds both MADs, so the change is kept. Evidence: `evidence/bench/live/players-ab/` on the test machine.
 
-## Turn 3 baseline
+## Turn 3 baseline and final measurements
 
-Round 43 measures the approved phone UI/update code, without a layout change. Frozen measurement source `ccec480`; retained formatter change `7c6c895`. Raw evidence: `evidence/bench/turn3/baseline-final-{small,large,long}/`, `baseline-diagnostics.json`, `compare-formatter/`, memory runs and `final-scoped.log`. Failed setup/smoke campaigns are separate and excluded. Procedures and exact commands are in [performance verification](../.claude/skills/verify-poker-banker/features/performance.md).
+These are isolated mini measurements, not production or physical-iPhone timings. The original UI baseline is source `ccec480`; retained formatter source `7c6c895`. Five fresh embedded databases per workload supplied one ordinary observation per metric per run, **555 valid observations and zero unexplained errors** overall. Values are milliseconds, median [minimum–maximum]; no p95 is claimed from five observations. Source, seed, queries, bytes, host observations and cleanup remain in `evidence/bench/turn3/baseline-final-{small,large,long}/`; exact rerun commands are in [performance verification](../.claude/skills/verify-poker-banker/features/performance.md).
 
-Two database datasets, three selected banker workloads:
-
-| Workload | Primary closed sessions | Open players / ledger rows | Reusable players | Global database |
+| Workload | Primary closed sessions | Open players / ledger rows | Reusable players | Overall database |
 | --- | ---: | ---: | ---: | --- |
 | Small | 10 | 6 / 20 | 6 | One banker, 11 sessions |
-| Standard large | 300 | 9 / 60 | 40 | 22 bankers, 320 players, 1,602 sessions, 63,402 ledger rows |
-| Long-history, in large dataset | 1,000 | 25 / 400 | 40 | Same scale; includes standard banker and 20 smaller accounts |
+| Standard | 300 | 9 / 60 | 40 | 22 bankers, 320 players, 1,602 sessions, 63,402 ledger rows |
+| Long | 1,000 | 25 / 400 | 40 | Same database scale as standard; different selected banker |
 
-Five fresh databases per workload, one ordinary observation per metric per repetition: **median/range only; no UI p95**. Ten concurrent writes per repetition give 50 correlated request observations in five batches. In total: **555 timed observations, zero unexplained errors**. Sign-in precedes disposable session creation; other journey/API order alternates. Switching pins seeded history; closing uses a different player from the report fixture. Exact amounts, players, revisions, once-only writes, offline exclusion/replay and read-only viewers are checked. Historical idempotency response bodies are not fabricated.
+Mini Apple M4/10 cores, Node 22, production build, standalone iPhone 15 WebKit emulation. Network adds 60 ms latency with aggregate 2 Mbps down / 512 Kbps up; CPU requests 25 ms runnable / 75 ms stopped on verified owned engine processes. The original observed runnable fraction was 21.3–22.5%. Installed cold opens a new document retaining worker/HTTP/IndexedDB state; warm return uses the existing DOM. First viewer starts empty. Readiness requires exact expected financial content and two animation frames. Sign-in runs before disposable sessions; other journey order alternates. The original small workload had two noisy runs; standard/long had none; no generator saturation was reported. Other CPU medians/ranges were 0.73 [0.19–9.50], 0.27 [0.18–3.46] and 0.35 [0.17–2.84] cores.
 
-Mini: Apple M4, 10 cores, arm64 Node 22.23.4; React 19.3.1, Vite 7.3.8, Playwright 1.65.0, embedded PostgreSQL 18.1 (reported x86_64 binary). iPhone 15 WebKit standalone emulation; 60 ms added latency, 2 Mbps aggregate down / 512 Kbps up. Requested CPU duty is 25%; observed per-run duty was **21.3–22.5%**. Only individually verified processes under the exclusive byte-identical engine copy are paused, including networking/GPU XPC processes. This is not a physical iPhone or Vercel/Neon measurement.
+### Historical baseline, before transport correction
 
-Installed cold retains HTTP/IndexedDB/worker caches but opens a new document; warm return times the existing DOM becoming visible, not completed HTTP revalidation. First viewer starts empty. Readiness checks expected financial content and two animation frames. Update timing is foreground discovery/adoption after A’s initial worker check drains; B is adopted automatically. It does not measure the separate 60-second idle discovery cadence. Short diagnostic notes avoid timing a generated UUID typing backlog. The raw request-start observations retain late response metadata, bytes, duplicate/refetched requests and per-request `Server-Timing` query count/elapsed time. WebKit heap, Event Timing and Long Tasks are explicitly unavailable; supplementary Chromium provides the supported resource diagnostic below.
+The original proxy compressed static assets through the local server but did not emulate Vercel's function compression. These measurements establish the original workload, not the current deployed transport, and must not be subtracted from the representative-transport results below.
 
-Host noise stayed in the results; no generator saturation was flagged. The threshold is five other cores, based on lifetime-decayed `ps` observations. Expected WebKit unload diagnostics are retained with matching GET status/navigation timestamps and confirmed new-release proof; unmatched errors and write failures fail the run.
-
-| Workload | Noisy runs / 5 | Other CPU cores, median [range] | Unexplained errors / observations |
+| Journey | Small ms | Standard ms | Long ms |
 | --- | ---: | ---: | ---: |
-| Small | 2 | 0.73 [0.19–9.50] | 0 / 185 |
-| Standard large | 0 | 0.27 [0.18–3.46] | 0 / 185 |
-| Long-history | 0 | 0.35 [0.17–2.84] | 0 / 185 |
+| Sign-in | 705 [595–723] | 722 [710–818] | 1597 [1585–1606] |
+| Cash-out confirmed | 335 [249–352] | 591 [385–594] | 1723 [1697–1966] |
+| Buy-in confirmed | 354 [263–455] | 588 [471–717] | 1598 [1454–1703] |
+| Offline replay | 380 [373–397] | 521 [493–626] | 1835 [1611–1890] |
+| Report open | 247 [139–343] | 488 [382–495] | 1229 [1114–1338] |
+| Installed cold open | 393 [280–398] | 391 [382–396] | 649 [629–744] |
+| Undo confirmed | 242 [134–251] | 244 [239–342] | 1365 [867–1475] |
+| Viewer first open | 1124 [985–1217] | 1133 [1102–1231] | 2032 [1967–2096] |
+| Viewer live delay | 1600 [1549–1731] | 1699 [1617–1807] | 2683 [2604–2797] |
+| Automatic update adoption | 1979 [1958–2093] | 2090 [1977–3985] | 3554 [3535–4942] |
 
-All values below are milliseconds: median [minimum–maximum]. API rows are app processing durations; browser rows are confirmed useful-content/render times under the profile. Each row has five samples per workload except `api.write10`, which has 50.
+The initial long cash-out had about 726 ms before POST dispatch and 989 ms from dispatch to confirmation; component medians need not sum. Its response contained approximately 131–134 KB while app/database time was only 7.3/5.8 ms. The original unreported Chromium cycle profile attributed 262.6 ms self time to `formatMoney` and 112.0 ms to `currencyExponent` in a 1008.4 ms cycle. These are diagnostic CPU samples, not WebKit latency estimates.
 
-| Metric | Small ms: median [range] | Standard large ms | Long-history ms |
-| --- | ---: | ---: | ---: |
-| auth.signin | 705.0 [595.0–723.0] | 722.0 [710.0–818.0] | 1597.0 [1585.0–1606.0] |
-| cash_out.confirm | 335.0 [249.0–352.0] | 591.0 [385.0–594.0] | 1723.0 [1697.0–1966.0] |
-| entry.confirm | 354.0 [263.0–455.0] | 588.0 [471.0–717.0] | 1598.0 [1454.0–1703.0] |
-| nav.players | 215.0 [135.0–253.0] | 248.0 [244.0–263.0] | 250.0 [245.0–364.0] |
-| offline.replay | 380.0 [373.0–397.0] | 521.0 [493.0–626.0] | 1835.0 [1611.0–1890.0] |
-| payment.confirm | 354.0 [279.0–364.0] | 478.0 [388.0–487.0] | 1687.0 [1471.0–1738.0] |
-| report.filter | 228.0 [150.0–240.0] | 382.0 [378.0–482.0] | 1115.0 [1098.0–1343.0] |
-| report.open | 247.0 [139.0–343.0] | 488.0 [382.0–495.0] | 1229.0 [1114.0–1338.0] |
-| session.close | 231.0 [138.0–258.0] | 240.0 [144.0–248.0] | 141.0 [137.0–243.0] |
-| session.switch | 242.0 [235.0–340.0] | 358.0 [265.0–370.0] | 475.0 [474.0–486.0] |
-| share.enable | 140.0 [127.0–234.0] | 136.0 [130.0–138.0] | 138.0 [137.0–233.0] |
-| ui.open.cold | 393.0 [280.0–398.0] | 391.0 [382.0–396.0] | 649.0 [629.0–744.0] |
-| ui.return.warm | 17.0 [13.0–28.0] | 19.0 [12.0–25.0] | 19.0 [11.0–27.0] |
-| undo.confirm | 242.0 [134.0–251.0] | 244.0 [239.0–342.0] | 1365.0 [867.0–1475.0] |
-| update.adoption | 1979.0 [1958.0–2093.0] | 2090.0 [1977.0–3985.0] | 3554.0 [3535.0–4942.0] |
-| viewer.delay.1 | 1600.0 [1549.0–1731.0] | 1699.0 [1617.0–1807.0] | 2683.0 [2604.0–2797.0] |
-| viewer.first | 1124.0 [985.0–1217.0] | 1133.0 [1102.0–1231.0] | 2032.0 [1967.0–2096.0] |
-| viewer.open | 491.0 [392.0–518.0] | 523.0 [407.0–623.0] | 1141.0 [954.0–1148.0] |
-| api.history | 0.4 [0.4–0.8] | 0.7 [0.6–0.9] | 1.1 [0.9–1.2] |
-| api.players | 1.8 [1.6–1.9] | 17.7 [16.9–19.6] | 67.6 [66.9–88.7] |
-| api.report.game | 1.7 [1.4–1.9] | 4.0 [3.9–4.4] | 12.4 [12.0–15.8] |
-| api.report.location | 1.7 [1.5–1.9] | 4.5 [3.7–5.4] | 11.6 [11.3–15.3] |
-| api.report.month | 1.6 [1.5–2.2] | 4.6 [3.7–5.0] | 13.4 [11.8–15.4] |
-| api.report.overall | 1.9 [1.6–2.2] | 4.3 [3.7–4.8] | 12.7 [12.3–16.9] |
-| api.report.weekday | 2.0 [1.5–2.1] | 4.4 [3.8–4.5] | 12.9 [12.8–16.9] |
-| api.session | 1.7 [1.3–2.0] | 1.7 [1.4–2.2] | 2.8 [2.3–3.6] |
-| api.since | 0.9 [0.7–1.0] | 0.8 [0.7–1.0] | 0.8 [0.8–1.0] |
-| api.write10 | 38.0 [9.0–54.2] | 38.7 [8.5–61.0] | 54.6 [12.9–111.4] |
+### Comparison rule and retained formatter gain
 
-### Limiter and plans
+Every application comparison uses five fresh paired A,B / B,A legs, matching harness, lockfile, release stamp, datasets and shaping. A target must improve in every pair and its median gap must exceed both sides' MADs; a guard's median rise must not exceed the larger MAD. Errors or incorrect financial work veto the attempt. The comparison table reports medians and ranges of **five leg medians**, not pooled observations. Two samples per leg give ten ordinary observations per side, insufficient for a p95 claim. Conditions and measurements from different campaigns cannot be multiplied into one gain.
 
-The long cash-out median was 1,723 ms: approximately 726 ms before POST dispatch and 989 ms from dispatch through confirmation (medians of components need not sum to the overall median). The POST itself used 7.3 ms app / 5.8 ms driver time and returned about 131–134 KB, imposing roughly 0.53 seconds of transfer at 2 Mbps before latency/rendering. Save-tap to next animation frame was 130 ms median (not INP). An unreported owned-Chromium first-cycle V8 profile attributed 262.6 ms self time to `formatMoney` and 112.0 ms to `currencyExponent` in a 1,008.4 ms cycle. These include formatting as well as construction; they are diagnostic self time, not a WebKit speedup estimate. See `memory-long-02/run-01/{first-cycle-cpu,cpu-summary}.json` and its recorded bundle.
+The formatter cache reuses validated exponents and at most 64 currency/locale `Intl.NumberFormat` instances while retaining the exact BigInt algorithm. Its historical comparison used the original, uncorrected function transport, with 80 valid observations, zero errors and a noisy-host label. No current deployed latency estimate is inferred from it. Source patch and provenance: `turn3/attempt-formatter/`; paired raw proof: `turn3/compare-formatter/`.
 
-Current `EXPLAIN (ANALYZE, BUFFERS)` captures actual roster/history SQL plus session, ledger, events, history-list and lock queries in every repetition. Long-workload median execution times:
+| Formatter factor, long workload | Before ms [leg range] | After ms [leg range] | Median change | Wins / max MAD |
+| --- | ---: | ---: | ---: | --- |
+| Cash-out | 1862.5 [1576–1965] | 1233 [1137.5–1370.5] | -33.8% | 5/5 / 102.5 ms |
+| Buy-in | 1695.5 [1607.5–1752] | 1203 [1080–1282] | -29.0% | 5/5 / 75 ms |
+| Installed cold open | 643 [634–668] | 504.5 [465–530.5] | -21.5% | 5/5 / 26 ms |
+| Report guard | 1219 [1155–1238.5] | 1229.5 [1149.5–1259] | +0.9%, within noise | 3/5 / 29.5 ms |
 
-| Query | Plan execution ms | Finding |
-| --- | ---: | --- |
-| state-ledger | 0.276 | Existing banker/session bitmap index; roughly 430 post-workload rows, in-memory sort. |
-| roster-summary | 75.623 | Recursive effective-entry/window aggregation; CTE materialization spills at the local default work_mem. |
-| player-sessions | 7.740 | Selected player history aggregation; 200 closed sessions. |
-| history | 0.460 | 31 selected rows for the 30-row page. |
-| write-session-lock | 0.021 | Indexed session row lock; no new index justified for the selected UI bottleneck. |
+Supplementary unshaped Chromium, 50 buy-in/Undo cycles with explicit GC, preserved totals while appending 200 audit rows and 100 revisions. Long heap was 3.85→8.36 MiB before and 3.86→8.46 MiB after; interval blocking above 50 ms fell 3761→618 ms. This is a resource diagnostic with profiler overhead, not navigation TBT or a leak verdict. Proof: `turn3/memory-{long-02,after-formatter}/`; small/standard checks remain in `memory-final-{small,large}/`.
 
-Standalone API query counts remain fixed: session 10, unchanged 5, roster 6, report 7 and history 2, including authentication/transaction commands. Long roster app time was 67.6 ms, mostly driver time (67.3 ms); it is a separate database aggregation/spill candidate, not the dominant financial UI wait. No migration or database tuning was applied.
+### Representative transport and final window comparison
 
-### First hill-climb attempt
+The Round45 shaping proxy requests identity upstream, then compresses eligible nonempty text/JSON/JavaScript/XML/SVG/WASM responses before its byte budget. It follows Accept-Encoding quality preferences, prefers Brotli on ties and falls back to gzip/identity. Existing Content-Encoding, no-transform, ranges and HEAD/204/304 bodies are untouched; owner, cookie, timing and cache headers are preserved, with Vary: Accept-Encoding. Both function and static delivery cross this boundary. Local codecs are Node Brotli quality 4 / gzip level 6, buffered without a CDN cache. This emulates negotiated payload sizes, not Vercel codec/threshold fidelity, codec CPU, streaming, HTTP/2, geography or edge/database latency. Counters distinguish upstream from encoded payload bytes (excluding TLS/IP overhead); browser metadata records encoding and both sizes. 18 real HTTPS regressions passed. A measured financial response was about 15 KB br / 131 KB decoded, with about 5–6 ms driver time. No deployed request was made in Round45.
 
-**Kept: reuse validated currency exponents and up to 64 currency/locale `Intl.NumberFormat` instances.** The BigInt parts/fraction algorithm and parser are unchanged. This removes repeated formatter construction without caching financial values. Mixed-locale/currency, cache-churn and exact signed/maximum-value regressions supplement existing money/report checks.
+The window recheck used A=`8f66264` with only R44-05 removed, B=`8f66264`, and the same new proxy overlay, release and dependencies. Source diff: `turn5/window.patch` and `window-source.json`. Five AB/BA pairs, two observations per leg per selected metric, across long/small/standard yielded **140 valid observations, zero errors, no noisy-host flags**. The long gain survives representative transport, but the standard financial guard vetoes it. R44-05 is therefore **reverted**; complete newest-first Activity remains visible, with oldest correction, voids, player filtering and viewer access retained.
 
-Five pairs alternate A,B / B,A with identical release `bench-turn3-formatter`, dependencies, seed and harness hash; each leg has two samples per metric. **80 valid observations, zero unexplained errors; noisy host marked.** The target must win every pair and its median improvement exceed both sides’ MADs; no guard median may rise beyond the larger MAD. Compare five leg medians, not baseline observations from a different host window. No p95 is claimed from ten observations per side.
+| Activity window, workload / metric | Before ms [leg range] | After ms [leg range] | Change | Wins / max MAD / verdict |
+| --- | ---: | ---: | ---: | --- |
+| long / cash_out.confirm | 778 [556.5–788] | 415.5 [324–430.5] | -46.6% | 5/5 / 10 ms / target pass |
+| long / entry.confirm | 736 [625–911] | 412 [363.5–480] | -44.0% | 5/5 / 65.5 ms / target pass |
+| long / ui.open.cold | 512.5 [505.5–519] | 391 [389.5–441.5] | -23.7% | 5/5 / 3 ms / target pass |
+| small / cash_out.confirm | 245.5 [239.5–350] | 293 [239.5–359] | +19.3% | 3/5 / 52.5 ms / guard pass |
+| small / entry.confirm | 301 [243.5–347.5] | 301.5 [185.5–340.5] | +0.2% | 3/5 / 39 ms / guard pass |
+| standard / cash_out.confirm | 254.5 [241–301] | 350 [240–354.5] | +37.5% | 1/5 / 13.5 ms / **guard veto** |
+| standard / entry.confirm | 309.5 [298–354.5] | 298 [291–357.5] | -3.7% | 4/5 / 7 ms / guard pass |
 
-| Metric | A median ms [leg range] | B median ms [leg range] | Delta | Paired wins | Max MAD ms |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| cash_out.confirm | 1862.5 [1576.0–1965.0] | 1233.0 [1137.5–1370.5] | -33.8% | 5/5 | 102.5 |
-| entry.confirm | 1695.5 [1607.5–1752.0] | 1203.0 [1080.0–1282.0] | -29.0% | 5/5 | 75.0 |
-| ui.open.cold | 643.0 [634.0–668.0] | 504.5 [465.0–530.5] | -21.5% | 5/5 | 26.0 |
-| report.open | 1219.0 [1155.0–1238.5] | 1229.5 [1149.5–1259.0] | +0.9% | 3/5 | 29.5 |
+### Two application attempts under representative transport
 
-Cash-out improves **33.8%**; its 629.5 ms gap exceeds the 102.5 ms noise floor. Report open is **no measurable difference**, not an improvement or meaningful regression (+10.5 ms versus 29.5 ms MAD). All legs preserve exact financial work. Source patch/provenance and decision are in `attempt-formatter/`; every attempt is appended to `evidence/bench/hillclimb.tsv`. One application attempt was made and kept; none was rejected. Fixture/input/diagnostic corrections before freezing are not optimization gains.
+An unreported single unshaped Chromium save/Undo profile on the restored full-Activity build measured 355.5 ms application self time in a 650.8 ms interval: Activity mapper 162.3 ms, money defaults 73.0 ms, money formatting 40.4 ms. Reusing one freshly resolved time formatter per Activity render retains locale/timezone behavior and the complete ledger. The next diagnostic after this factor measured 180.1 ms application self time in 518.8 ms: money defaults 73.7 ms, Activity mapper 8.9 ms, money formatting 26.2 ms. Profiles cover form preparation outside the timed Save interval too, have overhead, and use a different engine; they locate work, not WebKit speedups. Proof: `turn5/profile-{restored,time}/{cpu-summary,attribution}.json` and their raw first-cycle profiles/bundles.
 
-### Fifty-cycle resource check
+R45-01 is **kept**. A=`6cc29de`; B adds only per-render Activity time formatter reuse, with its label regression. Both sides keep all entries and use the same edge-emulating transport/release. Five alternating pairs × two observations per leg across long/small/standard produced **160 valid observations, zero errors, no noisy-host flags or generator saturation**. Actual runnable fraction across its 30 legs was median 22.08%, range 21.48–22.48%. Source/patch: `turn5/time-source.json`, `time.patch`; raw proof: `turn5/time-{long,small,standard}/`.
 
-Each unshaped owned-Chromium run explicitly collects garbage before and after 50 paid buy-in/Undo cycles: **100 revisions, 200 additional append-only ledger rows, unchanged totals, no reload**. Chromium trusts only the generated loopback certificate SPKI. DOM includes text/internal nodes; these snapshots and the profiler/observer overhead are not a leak diagnosis or an A/B latency statistic. Every workload grows by 2,757 DOM nodes as audit history grows.
+| Retained time formatter / long metric | Before ms [leg range] | After ms [leg range] | Change | Wins / max MAD |
+| --- | ---: | ---: | ---: | --- |
+| cash_out.confirm | 682 [616–838.5] | 482 [458.5–535.5] | -29.3% | 5/5 / 36.5 ms |
+| entry.confirm | 715 [625.5–734] | 469.5 [430–483.5] | -34.3% | 5/5 / 19 ms |
+| ui.open.cold | 513 [511–529] | 409.5 [400–415] | -20.2% | 5/5 / 4.5 ms |
+| auth.signin; no gain claimed | 800.5 [795–849] | 795.5 [785.5–796] | -0.6% | 4/5 / 5.5 ms |
 
-| Workload / code | JS heap MiB before → after | DOM nodes before → after | Long tasks / interval blocking ms |
-| --- | ---: | ---: | ---: |
-| Small / before | 2.63 → 6.65 | 538 → 3,295 | 0 / 0 |
-| Standard large / before | 2.85 → 6.94 | 1,161 → 3,918 | 0 / 0 |
-| Long / before | 3.85 → 8.36 | 6,257 → 9,014 | 150 / 3761 |
-| Long / after | 3.86 → 8.46 | 6,257 → 9,014 | 48 / 618 |
+| Financial guards | Before ms [leg range] | After ms [leg range] | Maximum MAD / verdict |
+| --- | ---: | ---: | --- |
+| small / cash_out.confirm | 289.5 [241–291.5] | 290 [239–339.5] | 48 ms / pass |
+| small / entry.confirm | 245 [188–301] | 247 [182.5–303.5] | 55.5 ms / pass |
+| standard / cash_out.confirm | 253.5 [239.5–361.5] | 245.5 [190.5–354.5] | 48 ms / pass |
+| standard / entry.confirm | 305 [254.5–355.5] | 287.5 [189–306] | 48 ms / pass |
 
-This blocking sum is time above 50 ms within observed long tasks, not Lighthouse navigation TBT. The after profile’s largest application self-time group is now the Activity row mapper (162.1 ms), followed by entry filtering/sorting; money formatting is 38.4 ms in that single diagnostic. Full-state transfer, Activity row/time rendering and roster CTE spill remain measured targets for the next phase. No live gain is claimed, and no second factor was stacked into this phase’s experiment.
+R45-02 was the second and final candidate: one shared money-default preparation per session render rather than repeated filtering/sorting for each player. Its **160 valid observations** had zero errors; three of ten standard guard legs were marked noisy (A2, B3, B4), with load retained and no generator saturation; both long targets won all five pairs, but both small financial guards failed. It is fully reverted, including the helper and its helper-specific tests. The unchanged original money-default path remains. Proof: `turn5/money-source.json`, `money.patch`, and `money-{long,small,standard}/`; standard guards passed. No combined percentage is inferred across these separate host windows.
 
-External entry bundle on the long baseline: 368,521 raw / 111,495 gzip / 96,132 Brotli bytes; CSS 24,349 / 5,545 / 4,842. Each sample retains exact asset hashes/sizes and actual request/cache observations. Compression figures are file estimates, distinct from observed wire bytes and cached zero-byte transfers.
+### Rejected attempts
 
-Final scoped gate: **typecheck; 178/178 Vitest; 10/10 Playwright** (iPhone standalone and desktop WebKit: cents/precision, zero loss cash-out, isolation, offline replay and timer/display). No Unhandled Errors. Post-change replay and automatic adoption also pass; the resource checks preserve exact work. Cleanup audit found zero owned PG/TLS/engine scratch directories or surviving cloned WebKit processes. Full suite, production, physical iOS keyboard/suspension and live benchmarks were deliberately not run.
+| Attempt | Change | Evidence and rejection reason |
+| --- | --- | --- |
+| R44-01 | Memoize full Activity | Long cash-out 1166.5→962.5 ms, but small 269→340 exceeded its 26 ms MAD. Reverted. `turn4/memo-{long,small-bounded,standard-bounded}/comparison.json`. |
+| R44-02 | Compress every API response in app | Long cash-out 1239→716 ms, but small 292→344.5 exceeded 18.5 ms MAD. Reverted. `turn4/compression-{long,small,standard}/comparison.json`. |
+| R44-03 | Outer compression middleware at ≥32 KiB | Long cash-out 1105→731 ms, but small 303.5→314 exceeded 7.5 ms MAD. Reverted. `turn4/threshold-{long,small,standard}/comparison.json`. |
+| R44-04 | Inline large-JSON compression | Local cash-out 1231→628 ms passed the numerical rule, but the baseline omitted edge function compression. Fully reverted: Vercel already negotiates JSON Brotli/gzip; no deployed benefit demonstrated. `turn4/inline-{long,small,standard}/comparison.json`, `turn4/continued/vercel-negotiation.json`. |
+| R45-02 | Batch money defaults | Long cash-out 531→363 ms and buy-in 479→415 passed 5/5, but small cash-out 304→337 exceeded 16.5 ms MAD and buy-in 239→286.5 exceeded 7.5 ms. Fully reverted. `turn5/money-{long,small,standard}/comparison.json`. |
+| R45-window | Recheck newest 50 Activity under edge compression | Long cash-out 778→415.5 ms, but standard 254.5→350 exceeded 13.5 ms MAD. Fully reverted. `turn5/window-{long,small,standard}/comparison.json`. |
 
+The edge conclusion used three authorized public read-only GETs of the unknown-viewer endpoint, with identical decoded 404 JSON and explicit `br`/`gzip` response headers. It establishes negotiation, not authenticated performance. [Vercel documents automatic compression](https://vercel.com/docs/how-vercel-cdn-works/compression). Application-level compression remains absent. Historical R44 window timing under app gzip is superseded by the representative-transport comparison above, not counted as an additional gain.
 
-## Turn 3 continued hill climb (Round 44)
+### Remaining costs and correctness
 
-The starting application is `363841e`, including Round 43’s retained formatter cache. These comparisons do not claim that earlier gain again. They use the existing five-pair A,B / B,A comparator, isolated fresh embedded databases, matching release stamps/harness/dependencies and the same shaped standalone WebKit profile. The local comparison campaigns contacted no deployed URL or remote database; the follow-up below used three authorized public read-only GETs. The numerical keep rule requires all five target pairs to improve, the median gap to exceed max(before MAD, after MAD), and each guard median rise to stay at or below that guard’s maximum MAD. Small and standard workloads are guards. A candidate must also address a cost relevant to the deployed target; passing a local transport comparison alone does not meet that requirement. No p95 is inferred from five or ten observations.
+Historical long `EXPLAIN (ANALYZE, BUFFERS)` measured session-ledger 0.276 ms, roster summary 75.623 ms (CTE spill at default work_mem), selected-player history 7.740 ms, history page 0.460 ms and write lock 0.021 ms. Request query counts include auth/transactions: session 10, unchanged 5, roster 6, report 7, history 2. No index, migration or database setting was changed. Current profile and plans, rather than historical cost alone, decide the next bottleneck.
 
-A fresh owned-Chromium diagnostic (`evidence/bench/turn4/profile-current/run-01/first-cycle-cpu.json`) measured a 681.3 ms first cycle: Activity mapping 162.9 ms self time, money-option comparison/sorting about 73.9 ms, and cached money formatting 26.9 ms. This is unshaped diagnostic CPU, not a WebKit latency claim.
+The final application is byte-identical to `a741fa7`; no API, schema, update-worker or updater logic changed. Long sign-in remains about 795.5 ms in this synthetic profile, without a demonstrated gain. Repeated money defaults remain the largest named application self-time group in the final-build diagnostic (73.7 ms of 180.1 ms). Complete state/history transfer is compressed already; it still incurs bandwidth/latency and client rendering work. The batch attempt did not meet the small-workload gate, so a plausible CPU saving is not retained. Another client-preparation/sign-in attempt could help, but would need fresh profiling and a passing matched comparison; this round stops at the requested two attempts, without claiming the search exhausted. No index, API-delta protocol or migration was introduced.
 
-| Attempt | Hypothesis / one factor | Long before → after ms | Guards / verdict | Evidence |
-| --- | --- | --- | --- | --- |
-| R44-01 | Skip unchanged full Activity mapping; current-context correction buttons | Cash-out 1166.5 → 962.5; buy-in 1206 → 973; installed open 488.5 → 414.5 | **Rejected**: small cash-out 269 → 340, a 71 ms rise above its 26 ms MAD floor. Small buy-in 353 → 353; standard cash-out 368 → 363. | `turn4/memo-{long,small-bounded,standard-bounded}/comparison.json` |
-| R44-02 | Compress every API response with existing Hono middleware | Cash-out 1239 → 716; buy-in 1202 → 730; sign-in 1349 → 841; first viewer 2152 → 1255; offline replay 1497 → 514 | **Rejected**: small cash-out 292 → 344.5, a 52.5 ms rise above 18.5 ms MAD. | `turn4/compression-{long,small,standard}/comparison.json` |
-| R44-03 | Compress full session states only at ≥32 KiB, via outer middleware | Cash-out 1105 → 731; buy-in 1111 → 743; sign-in 1346 → 748; first viewer 2140 → 1260; offline replay 1502 → 615 | **Rejected**: small cash-out 303.5 → 314, a 10.5 ms rise above 7.5 ms MAD. Standard cash-out 359 → 362.5 stayed within 51 ms MAD. | `turn4/threshold-{long,small,standard}/comparison.json` |
-| R44-04 | Inline compression only for ≥32 KiB full JSON; include player history | Historical local experiment only: cash-out 1231 → 628; report open 1210 → 358; report filter 1120 → 248 | **Rejected for production; fully reverted**: all seven local targets won 5/5 pairs with gaps above maximum MAD and both guards passed, but Vercel already compresses JSON. No deployed benefit demonstrated. | `turn4/inline-{long,small,standard}/comparison.json`; `turn4/continued/vercel-{br,gzip,identity}.{headers,body}` |
-| R44-05 | Render newest 50 Activity rows; reveal 50 earlier per click | Conditional synthetic comparison with R44-04 on both sides: cash-out 781 → 429.5; buy-in 727.5 → 415; installed open 514.5 → 388.5 | **Kept**: all three targets won 5/5 pairs, gaps exceeded maximum MAD; small cash-out 304 → 302, standard 362 → 366 (4 ms rise ≤46.5 ms MAD). DOM 2853 → 706 addresses client rendering independently of CDN compression; final transport-reverted latency remains unmeasured. | `turn4/window-{long,small,standard}/comparison.json` |
+Final mini gate: **typecheck; 128/128 scoped Vitest; 12/12 Playwright**, with no Unhandled Errors or Uncaught Exception markers. Browser scope on iPhone standalone and desktop WebKit covers full 106-row Activity/corrections/voids/times/viewer, cents/precision/zero cash-out/results/reports, chosen-player/default-method money flows and safe Undo, banking/re-entry/cumulative closure, payment corrections/reload and offline once-only replay. Eighteen HTTPS proxy checks are included in the unit total. Read-only scoped review found no material issue. Proof: `turn5/final-scoped.log`, `final-gate.json`; raw earlier gates remain in `proxy-tests.log`, `time-tests.log`, `money-tests.log` and `restored-profile.log`.
 
-R44-01’s long target won all five pairs (204 ms gap, 68 ms maximum MAD), but its small-workload guard vetoes it. The candidate never entered application source. There are 120 valid observations across those three complete campaigns; the long campaign was marked noisy, both guard campaigns were not. Time before POST dispatch fell 253.5 → 126 ms for cash-out and 281 → 119.5 ms for buy-in, supporting the mechanism without overriding the veto.
+All three comparisons supplied 460 valid observations, zero sample errors and 90 completed owned-stack cleanup receipts. Window/time campaigns had no noisy flags; the rejected batching standard guard had three noisy legs. None reported generator saturation. No live URL, remote database or real account was contacted; all databases were isolated embedded fixtures. No full suite ran.
 
-Two earlier guard campaigns failed after UI measurement during owned WebKit teardown and are excluded in full (`memo-guards.log`, `memo-guards-clean.log`). SIGTERM succeeded, then SIGCONT returned EPERM at `owned-process.ts:91:73`, bypassing the grace wait and immediately attempting SIGKILL. Both groups were absent at the subsequent registered-group inspection. Shared tooling fix `d25c764` retains the existing bounded disappearance wait specifically for that CONT error; success still requires ESRCH, while persistent groups still require forced-shutdown failure. Both sides of the fresh guards used that identical fix. Two deterministic regressions failed before it; 35 scoped ownership/cleanup tests and typecheck passed afterward (`continuation-{red,green-02}.log`). No timing or application behavior was changed by that cleanup repair.
-
-R44-02 also remains rejected. All five long targets won every pair, and real HTTP tests proved identical decoded replay bytes, owner/cookie/error/304/HEAD behavior and one stored write. Median write wire bytes were 130,497 → 15,394.5; HTTP resource duration 720.5 → 225 ms. Complete decoded state remained, including all entries. Offline reconnect fetched one current state and replayed one write, so both large transfers shrank. Sign-in’s small login and history requests precede that same large selected-state load; it does not load the full roster. Standard cash-out improved 364.5 → 299 ms, but the small guard vetoes the unconditional version. Its 170 valid observations had zero sample errors.
-
-R44-01 used two observations per long leg and one per guard leg. Before any subsequent guard result, the protocol increased guard legs to two observations to reduce synthetic 100 ms CPU-duty phase granularity; five fresh paired databases and the keep rule remain unchanged. This does not rescue or resample R44-01. R44-02 used one observation per long leg and two per guard leg. No p95 is claimed.
-
-R44-03 retained the full JSON contract and left smaller responses uncompressed; all five long targets won every pair. Nevertheless it missed the declared small cash-out guard, so it also never entered application source. Five real-HTTP tests passed and 170 comparison observations completed without sample errors. These guard vetoes are decisions under this conservative synthetic-profile rule, not proof of a universal device slowdown. The same API byte contract is tested with UTF-8 names, zero-body responses, native legacy-style fetch, private owner headers and idempotent replay.
-
-### Rejected application compression: historical local experiment
-
-R44-04 is fully reverted from the final candidate. In the historical experiment it removed the outer middleware hop: smaller payloads returned synchronously from the existing JSON serialization path; only responses of at least 32,768 UTF-8 bytes invoked installed Hono 4.13.17 compression. The same writer served complete session mutation/poll/viewer responses and player history. No state fields, ledger entries or API versions were omitted, and no client merged partial state. The report summary itself was only about 1.5 KB; its concurrently fetched player history was about 216 KB and was refetched on filter changes. The local experiment compressed that unchanged history too. The following numbers preserve the local finding and do not describe a retained or deployed gain.
-
-Five alternating pairs per workload. Long legs have one observation per metric; small/standard guard legs have two, declared before this attempt: cash-out represents financial responses and report open represents history loading. There are **150 valid observations, zero errors**. All long targets win five of five pairs and exceed both sides’ MADs. Guards: small cash-out 351 → 347.5 ms and report 234 → 189; standard cash-out 368.5 → 360 and report 499.5 → 189. No guard worsens.
-
-| Long metric | A median ms | B median ms | Change | Max MAD ms | Paired wins |
-| --- | ---: | ---: | ---: | ---: | --- |
-| cash_out.confirm | 1231 | 628 | -49.0% | 15 | 5/5 |
-| entry.confirm | 1101 | 624 | -43.3% | 32 | 5/5 |
-| auth.signin | 1351 | 843 | -37.6% | 6 | 5/5 |
-| viewer.first | 2133 | 1233 | -42.2% | 34 | 5/5 |
-| offline.replay | 1512 | 519 | -65.7% | 11 | 5/5 |
-| report.open | 1210 | 358 | -70.4% | 9 | 5/5 |
-| report.filter | 1120 | 248 | -77.9% | 6 | 5/5 |
-
-Historical validation of R44-04 passed six real-HTTP regressions: exact decoded identity/gzip/deflate replay bytes and one stored write, native legacy-style requests, private owner/cookie/error/304/HEAD behavior, viewer redaction, and byte-identical history for 200 closed sessions with another banker rejected. Typecheck passed. An installed-source review found no blocking header, context-finalization or transaction issue. These results validate that experimental source, not the final transport-reverted candidate. `public/sw.js` and `src/client/pwa.ts` are unchanged.
-
-The follow-up used exactly three authorized public read-only GETs to `https://poker-banker.vercel.app/api/view/unknown`, requesting `br`, `gzip` and `identity`. All returned the same 404 JSON: identity was 59 bytes, Brotli 60 encoded bytes and gzip 83 encoded bytes. The compressed responses explicitly set `Content-Encoding: br` or `gzip`; all three had `Cache-Control: no-store`, `x-vercel-cache: MISS` and an `x-vercel-id` beginning `sfo1::cle1`. Raw headers and bodies are in `evidence/bench/turn4/continued/vercel-{br,gzip,identity}.{headers,body}`. This checks negotiation on a public error response, not authenticated full-state performance. [Vercel’s compression documentation](https://vercel.com/docs/how-vercel-cdn-works/compression) confirms that `Accept-Encoding` enables automatic compression, JSON is eligible, and Brotli takes precedence when supported. Together these establish that the local uncompressed baseline does not represent the deployed transport; the evidence demonstrates no incremental deployed benefit from adding application compression. R44-04 therefore fails deployed relevance despite passing its local numerical rule.
-
-In the historical experiment, app `Server-Timing` measured handler construction and excluded the later streaming-compression drain; end-to-end HTTP and confirmed-render timings included it. Raw responses, resource sizes, query counts, exact financial checks, host observations, matching build/harness hashes, source patches and cleanup receipts remain under `evidence/bench/turn4/`.
-
-### Retained recent Activity window
-
-R44-05 was measured with experimental transport `7beb0e3` on both sides, without rejected memoization. The Activity window is kept after the transport revert because it removes client rendering and DOM work that remains relevant on Vercel. It renders the newest 50 Activity rows and reveals 50 earlier rows per click. Full state, ledger order, void detection, player filtering, correction access and viewer data remain intact. Expansion resets by session/player; no API, IndexedDB or outbox schema changes.
-
-Five alternating pairs, two observations per long metric and two per financial guard leg: **100 valid observations, zero errors**. Long cash-out 781 → 429.5 ms (5/5 wins, 351.5 ms gap >52.5 ms MAD); buy-in 727.5 → 415 (5/5, MAD48); installed open 514.5 → 388.5 (5/5, MAD3.5). Small cash-out 304 → 302; standard 362 → 366, within46.5 ms MAD. These are conditional synthetic render measurements with application compression on both sides. They do not establish latency for the final candidate after its transport revert or for production. The comparisons use different host windows; do not multiply gains or compare them as one matched end-to-end baseline.
-
-The 106-entry real-UI regression passed on iPhone standalone and desktop WebKit, covering expansion to every entry, oldest correction, void, player filtering, expansion reset and read-only viewing. Its first candidate run caught an incorrect end-of-array assumption; the domain returns newest-first, so the candidate was corrected before any timed run. The two failing setup checks remain in `window-long.log`; corrected proof and comparisons are in `window-long-02.log` and `window-{long,small,standard}/`.
-
-The existing roster parity test’s fixture counts also now match the Round43 seed expansion:22 bankers/320 players rather than21/280. Its six-query budget and financial comparison are unchanged. No roster SQL, index, migration or database setting was changed. The prepared NOT MATERIALIZED hint and money-default batching have not been timed or retained. Remaining named costs are full-ledger Activity preparation and repeated formatting of visible rows, full-ledger money-option sorting/preparation, the roster CTE spill (~75 ms in the captured long plan), repeated player-history fetching and the fixed polling cadence. Another batching or query attempt is plausibly material but remains unmeasured. No universal speed target or live improvement is claimed.
-
-### Historical verification and checkpoint
-
-The pre-revert checkpoint passed mini typecheck and 199/199 scoped tests across 12 files, with no Unhandled Errors section. These are historical results from the earlier source; fresh verification of the transport-reverted candidate is recorded below. The earlier ownership repair passed35/35 scoped tests. Eight complete financial/payment-viewer/report/offline journeys passed on iPhone standalone and desktop WebKit; the106-entry Activity test passed2/2 in those contexts. Receipt: `evidence/bench/turn4/final-scoped.log`, `window-long-02.log` and `continuation-green-02.log`. The full suite was intentionally not run.
-
-All 250 observations across the historical inline-compression and Activity-window comparisons passed their exact-work checks; only the Activity window is retained. Recorded other CPU: inline long median0.25 cores/range0.17–3.23, small0.27/0.20–1.65, standard0.37/0.19–2.72; Activity long0.29/0.18–2.04, small0.30/0.20–2.17, standard0.42/0.20–2.16. These campaigns were not marked noisy. Median long cash-out DOM nodes fell 2853 →706 with the Activity window under the shared experimental transport. No physical-iOS or deployed latency gain was checked. The previous owned run’s cleanup receipt stopped at `2026-11-12T20:38:26.561Z`; `continued/cleanup-confirmation.json`, recorded at `20:40:24.882Z`, confirms all recorded PIDs absent and no listener on port 58060, without further signals.
-
-This historical checkpoint does not exhaust the optimization search: full Activity preparation, money-option batching/sorting and roster-query candidates remain unmeasured on the final build. Further hill climbing should profile that build and test those costs; the evidence does not justify a universal stopping claim. Four application attempts are rejected and the Activity window is kept, with the transport condition above. No migrations, settings, push or deployment occurred.
-
-
-### Final continued verification
-
-The final application delegates JSON encoding to Vercel (`0626f04`): `src/server/app.ts` is byte-identical to the Round 44 starting source `363841e`. The existing local static-asset compression remains; it predates this experiment and emulates CDN asset delivery. The unfinished gzip-specific update-helper and feature-file edits were reverted. No worker, updater, API shape or draft/outbox schema change is retained from the compression experiment.
-
-Fresh mini verification, serial after capacity checks:
-
-- `pnpm typecheck` and the eight-file scoped Vitest command passed **145/145**, including API, Vercel entry, roster parity/query budget, money/domain and response identity. `tests/response-encoding.test.ts` uses real HTTP and embedded Postgres, sends a >32 KiB financial response under identity/gzip/Brotli negotiation, and checks unchanged owner/cache/cookie headers, exact decoded replay bytes and one stored write. It failed against the isolated old inline-gzip candidate (1/1 expected failure), then passed against the reverted source. Logs: `continued/{scoped,encoding-red,encoding-control}.log`.
-- `pnpm e2e e2e/activity-window.spec.ts --project iphone-standalone --project desktop-webkit` passed **2/2**, retaining expansion, oldest-entry correction, voids, filtering and viewer access. No Unhandled Errors or Uncaught Exception markers appeared in the final logs. This is scoped verification, not a full-suite run.
-- The existing local update recipe passed in owned iPhone standalone WebKit: archived previous source `dc2082b09d7bf8ad124f0e21f8826ef75c0b4e1f` uses IndexedDB v2 before and after; draft and old outbox body hashes match, exactly one server entry is stored, replay does not increment revision, and the actual previous reader accepts current records. Its five main adoption cases and seven accumulated review cases also passed with zero review errors. Evidence: `evidence/verify/20261112T205126594Z-636679a2/iphone-standalone/drive-1794516693693-131a8e/automatic-updates-summary.json` and `review/review-cases-summary.json`; concise extraction: `continued/compatibility-proof.json`.
-
-The new verification run's normal registered cleanup completed at `20:57:20.506Z` with no errors. Independent inspection at `21:00:13.937Z` found all 18 captured process identities and all 17 captured owned groups absent, no listeners on 58060/59068/59069, and the run's `pg-CapM5g` directory removed. Evidence survived cleanup. No inspector signals were necessary for either the old timeout run or this fresh run. Proof: `continued/{cleanup-confirmation,new-run-ownership,new-run-cleanup-confirmation}.json`; fresh cleanup: `evidence/verify/20261112T205126594Z-636679a2/cleanup.json`.
-
-The remaining known deployed cost is complete session/history transport and client preparation, rather than a missing gzip layer. Full-state responses still contain all ledger rows; windowing only limits rendered Activity rows. Repeated history fetching, money-option preparation and the measured roster spill are plausible next attempts, but the final transport-reverted build needs a fresh profile and paired measurements before choosing one. A material gain remains plausible; this continuation did not establish it and did not exhaust those ideas. No additional latency campaign, full suite, private deployed request, push or deployment was run.
-
-
-### Round 45 representative-transport recheck
-
-The shaping proxy now requests identity upstream and negotiates Brotli/gzip for eligible JSON and static responses before applying bandwidth shaping. It preserves existing encodings, no-transform/range/bodiless responses and owner/cookie/cache headers. Codec settings are local Node Brotli quality 4 and gzip level 6; responses are buffered, with no CDN cache or claim of exact Vercel codec, streaming, geography or CPU cost. Eighteen real HTTPS regressions and mini typecheck passed.
-
-R44-05 is **reverted** after five alternating pairs per workload, two observations per leg. Long cash-out 778→415.5 ms, buy-in 736→412 and installed cold open 512.5→391 won all five pairs beyond MAD. Small guards stayed within maximum MAD, but standard cash-out 254.5→350 ms rose 95.5 ms above its 13.5 ms MAD allowance. The declared guard vetoes the factor. Source copies differ only by the window; `turn5/window-{long,small,standard}/` retains 140 valid observations, zero errors and no noisy-host flags. The prior compression-conditioned window claim is superseded. Full newest-first Activity, oldest correction, filtered voids and anonymous viewing passed 2/2 scoped browser tests after restoration.
-
-
-Round45 attempt R45-01 **kept**: reuse one fresh `Intl.DateTimeFormat` per Activity render rather than constructing one for every entry. Five alternating pairs with two observations per leg produced 160 valid observations and zero errors/noisy-host flags across all three workloads. Long cash-out 682→482 ms (5/5 wins, MAD36.5), buy-in 715→469.5 (5/5, MAD19); installed open 513→409.5, sign-in 800.5→795.5 (no measurable signin gain). Small cash-out 289.5→290 and buy-in245→247 stayed within MAD48/55.5; standard253.5→245.5 and305→287.5 did not regress. All ledger rows remain visible; timezone/locale resolve afresh per render. Two scoped browser tests verify complete history, correction/void/filter/viewer behavior, known clock labels and unknown times. `turn5/time-{long,small,standard}/` retains the matched proof.
+All decision rows remain in ignored `evidence/bench/hillclimb.tsv`. Baseline and final Round45 proof are preserved. Superseded setup/smoke, prior conditional window/profile evidence and rejected per-leg duplicates were pruned; rejected comparisons retain complete samples in runs.json, comparison.json and provenance/cleanup in turn4/rejected-archive.json. Exact deletion manifest: turn5/pruned-evidence.json. Full suite, live load, production latency and physical iOS were not run this round. The old-client compatibility, account boundaries, exact money, draft/outbox and automatic-update guarantees remain correctness requirements rather than optimization trade-offs.

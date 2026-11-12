@@ -6,6 +6,8 @@ Use this after the affected functional flows pass. This procedure extends the ex
 
 Run heavy commands through `./scripts/mini.sh`, serially. It checks mini capacity, synchronizes the checkout, uses Node 22 and installs the frozen lockfile. Keep other verification, builds and benchmark processes stopped while a campaign owns `dist/`. Do not start a verification daemon alongside the benchmark: each benchmark owns its database, server, browser and cleanup.
 
+The shaping proxy requests identity upstream, then negotiates Brotli or gzip for eligible function and static responses before applying its byte budget. Brotli wins equal quality preferences. It honors existing content encoding, no-transform, ranges and bodiless responses, preserving owner, cookie, cache and timing headers. Inspect `profile.json` for the codec policy, per-response `contentEncoding`/encoded and decoded bytes, and proxy upstream/wire counters. Local Brotli quality 4 and gzip level 6 are an approximation: no CDN cache, Vercel codec/threshold fidelity, streaming or geographic network emulation. Do not add compression to the application to improve this benchmark.
+
 Record the source revision and any uncommitted application diff, frozen harness/seed revision or hashes, dependency lockfile, host, build release, engine hashes, workload, network/CPU profile and cache state with each result. The harness records machine/build/bundle information in `method.json` and sample evidence; retain source/patch provenance alongside it. This is a synthetic macOS WebKit profile: a requested 25 ms runnable/75 ms stopped budget, 60 ms network latency, 2 Mbps aggregate download and 512 Kbps upload. Check the actual shaping observations in each run's `profile.json`; these conditions do not represent a physical iPhone or a deployed edge/database configuration.
 
 | Workload | Primary reusable players | Primary closed sessions | Primary open players / ledger rows | Other owned accounts |
@@ -69,7 +71,9 @@ test ! -e .cache/round43/formatter-replay-B
 mkdir .cache/round43/formatter-replay-A .cache/round43/formatter-replay-B
 git archive ccec480 | tar -x -C .cache/round43/formatter-replay-A
 git archive 7c6c895 | tar -x -C .cache/round43/formatter-replay-B
-git archive 7c6c895 scripts/bench scripts/bench.ts scripts/bench-compare.ts tests/benchmark-stats.test.ts package.json pnpm-lock.yaml | tar -x -C .cache/round43/formatter-replay-A
+for PB_COMPARE_TREE in .cache/round43/formatter-replay-A .cache/round43/formatter-replay-B; do
+  git archive HEAD scripts/bench scripts/bench.ts scripts/bench-compare.ts scripts/owned-process.ts tests/benchmark-stats.test.ts package.json pnpm-lock.yaml | tar -x -C "$PB_COMPARE_TREE"
+done
 ```
 
 For a new hypothesis, instead start both copies from the same frozen current revision and apply only the predeclared candidate patch in B. Do not compare different harnesses or combine multiple application factors.
