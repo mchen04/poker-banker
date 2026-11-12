@@ -11,7 +11,7 @@ import { webkit, devices, expect, type Browser, type BrowserContext, type Page }
 import type { SessionState } from '../../../../src/domain/session';
 import { createAccount, signIn, current } from '../../../../e2e/helpers';
 import { ledger } from './ledger';
-import { stopOwnedProcess } from '../../../../scripts/owned-process';
+import { stopOwnedProcess, withShutdownDeadline } from '../../../../scripts/owned-process';
 
 export type RecipeContext = {
   page: Page; context: BrowserContext; browser: Browser; baseURL: string;
@@ -34,8 +34,8 @@ const evidence = resolve('evidence/verify', runId);
 const socket = resolve('.cache', `pbv-${runId.slice(-8)}.sock`);
 async function json(path: string, value: unknown) { await writeFile(path, JSON.stringify(value, null, 2)); }
 async function request(command: Command): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const client = createConnection(socket);
+  const client = createConnection(socket);
+  const pending = new Promise((resolve, reject) => {
     let output = '';
     client.setTimeout(180000, () => client.destroy(new Error('Verification command exceeded 180 seconds')));
     client.on('connect', () => client.write(`${JSON.stringify(command)}\n`));
@@ -46,6 +46,7 @@ async function request(command: Command): Promise<unknown> {
       catch (error) { reject(error); }
     });
   });
+  return command.action === 'cleanup' ? withShutdownDeadline('Verification cleanup request', () => pending).finally(() => client.destroy()) : pending;
 }
 async function files(directory: string): Promise<string[]> {
   const values = await readdir(directory, { withFileTypes: true });
@@ -79,28 +80,29 @@ async function daemon() {
   let startupTask: Promise<void> | undefined;
   let stopping = false;
   let browserClosing: Promise<void> | undefined;
-  const closeBrowser = () => browser ? browserClosing ??= browser.close() : Promise.resolve();
+  const closeBrowser = () => browser ? browserClosing ??= withShutdownDeadline('Verification browser close', () => browser!.close()) : Promise.resolve();
   const starting = () => { if (stopping) throw new Error('Verification launch was stopped'); };
   const saveMeta = () => json(metadata, meta);
   function cleanup(): Promise<void> {
     stopping = true;
     cleanupTask ??= (async () => {
       const errors = new Set<string>();
-      const settle = async (task: Promise<unknown>) => { try { await task; } catch (error) { errors.add(String(error)); } };
-      const earlyBrowser = settle(closeBrowser());
-      const earlyChild = child ? settle(stopOwnedProcess(child)) : Promise.resolve();
-      await startupTask?.catch(() => {});
+      const settle = async (action: () => unknown | Promise<unknown>) => { try { await action(); } catch (error) { errors.add(String(error)); } };
+      const bounded = (label: string, action: () => unknown | Promise<unknown>) => settle(() => withShutdownDeadline(label, action));
+      const earlyBrowser = settle(closeBrowser);
+      const earlyChild = child ? settle(() => stopOwnedProcess(child!, 'ipc', true)) : Promise.resolve();
+      await bounded('Verification startup shutdown barrier', () => startupTask?.catch(() => {}));
       await Promise.all([earlyBrowser, earlyChild]);
-      await settle(closeBrowser());
-      if (child) await settle(stopOwnedProcess(child));
-      try {
-        meta.state = 'stopped';
-        const proofFiles = (await files(evidence)).filter(path => path.endsWith('.png') || path.endsWith('-result.json'));
-        await json(join(evidence, 'cleanup.json'), { runId, stopped: new Date().toISOString(), ownedDaemonPid: process.pid, ownedServerPid: child?.pid ?? null, evidenceFilesPreserved: proofFiles.length, errors: [...errors] });
-        await manifest();
-      } finally {
-        server.close(); await rm(socket, { force: true }); await rm(metadata, { force: true });
-      }
+      await settle(closeBrowser);
+      if (child) await settle(() => stopOwnedProcess(child!, 'ipc', true));
+      if (!errors.size) meta.state = 'stopped';
+      let proofFiles: number | null = null;
+      await bounded('Verification evidence enumeration', async () => { proofFiles = (await files(evidence)).filter(path => path.endsWith('.png') || path.endsWith('-result.json')).length; });
+      await bounded('Verification cleanup evidence', () => json(join(evidence, 'cleanup.json'), { runId, stopped: new Date().toISOString(), ownedDaemonPid: process.pid, ownedServerPid: child?.pid ?? null, evidenceFilesPreserved: proofFiles, errors: [...errors] }));
+      await bounded('Verification evidence manifest', manifest);
+      await bounded('Verification listener close', () => { server.close(); });
+      await bounded('Verification socket removal', () => rm(socket, { force: true }));
+      if (!errors.size) await bounded('Verification metadata removal', () => rm(metadata, { force: true }));
       if (errors.size) throw new Error(`Owned cleanup errors: ${[...errors].join('; ')}`);
     })();
     return cleanupTask;
@@ -141,7 +143,10 @@ async function daemon() {
     await json(join(evidence, 'doctor.json'), result); return result;
   }
   async function handle(command: Command) {
-    if (command.action === 'cleanup') { await cleanup(); setTimeout(() => process.exit(0), 100); return { evidence, cleaned: true }; }
+    if (command.action === 'cleanup') {
+      try { await cleanup(); setTimeout(() => process.exit(0), 100); return { evidence, cleaned: true }; }
+      catch (error) { setTimeout(() => process.exit(1), 100); throw error; }
+    }
     if (command.action === 'doctor') return doctor();
     if (command.action === 'evidence') return manifest();
     if (meta.state !== 'ready' || !browser || !user) throw new Error('Launch has not reached a signed-up usable workspace');
@@ -195,7 +200,7 @@ async function daemon() {
       meta.port = address.port; await new Promise<void>(resolve => portServer.close(() => resolve()));
       meta.baseURL = `https://127.0.0.1:${meta.port}`;
       starting();
-      child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { ...process.env, PORT: String(meta.port) } });
+      child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { ...process.env, PORT: String(meta.port) } });
       await new Promise<void>((resolve, reject) => {
         let output = ''; const timeout = setTimeout(() => reject(new Error('Owned local stack startup exceeded 30 seconds')), 30000);
         child!.stdout!.on('data', chunk => { process.stdout.write(chunk); output += String(chunk); if (output.includes('Poker banker ready at')) { clearTimeout(timeout); resolve(); } });
@@ -208,6 +213,7 @@ async function daemon() {
     }
     starting();
     browser = await webkit.launch({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+    if (stopping) await closeBrowser();
     starting();
     const page = await contextPage('iphone-webkit');
     starting();
@@ -224,7 +230,9 @@ async function daemon() {
   })();
   try { await startupTask; } catch (error) {
     if (!stopping) {
-      console.error(error); await json(join(evidence, 'launch-failure-result.json'), { error: error instanceof Error ? error.message : String(error) });
+      console.error(error);
+      try { await withShutdownDeadline('Verification launch failure evidence', () => json(join(evidence, 'launch-failure-result.json'), { error: error instanceof Error ? error.message : String(error) })); }
+      catch (evidenceError) { console.error(evidenceError); }
       await cleanup(); process.exit(1);
     }
   }
@@ -252,14 +260,21 @@ else if (action === 'launch') {
   let launchCleanup: Promise<void> | undefined;
   const stopLaunch = () => launchCleanup ??= (async () => {
     child.ref();
-    const exited = new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once('exit', () => resolve()); });
-    try { await request({ action: 'cleanup' }); }
-    catch {
-      if (child.exitCode === null && child.signalCode === null) { owned({ runId, pid: child.pid! }); child.kill('SIGTERM'); }
+    const errors: unknown[] = [];
+    const settle = async (action: () => unknown | Promise<unknown>) => { try { await action(); } catch (error) { errors.push(error); } };
+    if (child.exitCode === null && child.signalCode === null) {
+      await settle(() => request({ action: 'cleanup' }));
+      await settle(async () => {
+        if (child.exitCode === null && child.signalCode === null) owned({ runId, pid: child.pid! });
+        await stopOwnedProcess(child, 'signal', true);
+      });
     }
-    await exited;
-    await rm(socket, { force: true }); await rm(metadata, { force: true });
-    if (child.exitCode !== 0 && child.signalCode !== 'SIGTERM') throw new Error(`Owned verification daemon exited ${child.exitCode ?? child.signalCode}`);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      if (child.exitCode !== 0 && child.signalCode !== 'SIGTERM') errors.push(new Error(`Owned verification daemon exited ${child.exitCode ?? child.signalCode}`));
+      await settle(() => withShutdownDeadline('Verification launch socket removal', () => rm(socket, { force: true })));
+      if (!errors.length) await settle(() => withShutdownDeadline('Verification launch metadata removal', () => rm(metadata, { force: true })));
+    }
+    if (errors.length) throw new AggregateError(errors, 'Owned verification launch cleanup failed');
   })();
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
   const handlers = signals.map(signal => { const handler = () => { if (interrupted) return; interrupted = signal; process.exitCode = signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 129; void stopLaunch().catch(() => {}); }; process.on(signal, handler); return { signal, handler }; });

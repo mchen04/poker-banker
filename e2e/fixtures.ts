@@ -15,22 +15,30 @@ async function availablePort() {
 export const test = base.extend({
   baseURL: async ({}, use) => {
     const port = await availablePort();
-    const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { detached: true, env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     let output = '';
     try {
       await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error(`Browser server did not start\n${output}`)), 30000);
+        const finish = (error?: Error) => {
+          clearTimeout(timeout);
+          child.removeListener('exit', onExit);
+          child.removeListener('error', onError);
+          if (error) reject(error); else resolve();
+        };
+        const onExit = (code: number | null) => finish(new Error(`Browser server exited ${code}\n${output}`));
+        const onError = (error: Error) => finish(error);
+        const timeout = setTimeout(() => finish(new Error(`Browser server did not start\n${output}`)), 30000);
         child.stdout!.on('data', chunk => {
           output += String(chunk);
-          if (output.includes('Poker banker ready at')) { clearTimeout(timeout); resolve(); }
+          if (output.includes('Poker banker ready at')) finish();
         });
         child.stderr!.on('data', chunk => { output += String(chunk); });
-        child.once('exit', code => { clearTimeout(timeout); reject(new Error(`Browser server exited ${code}\n${output}`)); });
-        child.once('error', error => { clearTimeout(timeout); reject(error); });
+        child.once('exit', onExit);
+        child.once('error', onError);
       });
       await use(`https://127.0.0.1:${port}`);
     } finally {
-      await stopOwnedProcess(child);
+      await stopOwnedProcess(child, 'ipc', true);
     }
   },
   context: async ({ context }, use, testInfo) => {
