@@ -181,10 +181,10 @@ test('concurrent preparations preserve the first submitted payload and retain la
   const source = await readFile('src/client/data.ts', 'utf8');
   const compile = (value: string) => ts.transpileModule(value, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
   const compiled = compile(source);
-  for (const match of source.matchAll(/from ['"](\.\/[^'"]+)['"]/g)) {
-    const modulePath = match[1]!.slice(2);
-    const dependency = await readFile(`src/client/${modulePath}.ts`, 'utf8');
-    await page.route(`**/${modulePath}`, route => route.fulfill({ contentType: 'text/javascript', body: compile(dependency) }));
+  for (const match of compiled.matchAll(/from ['"](\.\.?\/[^'"]+)['"]/g)) {
+    const modulePath = match[1]!;
+    const dependency = await readFile(new URL(`../src/client/${modulePath}.ts`, import.meta.url), 'utf8');
+    await page.route(`**${new URL(modulePath, 'https://probe.invalid/draft-probe.js').pathname}`, route => route.fulfill({ contentType: 'text/javascript', body: compile(dependency) }));
   }
   await page.route('**/draft-probe.js', route => route.fulfill({ contentType: 'text/javascript', body: compiled }));
   const result = await page.evaluate(async banker => {

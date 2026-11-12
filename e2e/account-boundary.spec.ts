@@ -52,10 +52,10 @@ async function accounts(page: Page) {
 async function probe(page: Page) {
   const source = await readFile('src/client/data.ts', 'utf8');
   const compile = (value: string) => ts.transpileModule(value, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
-  for (const match of source.matchAll(/from ['"](\.\/[^'"]+)['"]/g)) {
-    const name = match[1]!.slice(2);
-    const dependency = await readFile(`src/client/${name}.ts`, 'utf8');
-    await page.route(`**/${name}`, route => route.fulfill({ contentType: 'text/javascript', body: compile(dependency) }));
+  for (const match of compile(source).matchAll(/from ['"](\.\.?\/[^'"]+)['"]/g)) {
+    const name = match[1]!;
+    const dependency = await readFile(new URL(`../src/client/${name}.ts`, import.meta.url), 'utf8');
+    await page.route(`**${new URL(name, 'https://probe.invalid/account-probe.js').pathname}`, route => route.fulfill({ contentType: 'text/javascript', body: compile(dependency) }));
   }
   await page.route('**/account-probe.js', route => route.fulfill({ contentType: 'text/javascript', body: compile(source) }));
   await page.route('**/account-probe-second.js', route => route.fulfill({ contentType: 'text/javascript', body: compile(source) }));
