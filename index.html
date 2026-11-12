@@ -18,7 +18,6 @@
         let started = false;
         let recovering = false;
         let navigationStarted = false;
-        let watchdog;
         const timers = new Set();
         const budget = new URL(location.href);
         const marker = budget.searchParams.get(parameter) || '';
@@ -41,7 +40,6 @@
         const controllerChanged = () => announce(navigator.serviceWorker.controller);
         const stop = () => {
           started = true;
-          clearTimeout(watchdog);
           for (const timer of timers) clearTimeout(timer);
           window.removeEventListener('error', failed, true);
           window.removeEventListener('unhandledrejection', rejected);
@@ -56,7 +54,6 @@
         const recover = async () => {
           if (started || recovering || navigationStarted) return;
           recovering = true;
-          clearTimeout(watchdog);
           if (attempts >= 2) {
             const show = () => {
               const root = document.getElementById('root');
@@ -82,8 +79,16 @@
           navigationStarted = true;
           location.replace(next.href);
         };
+        const isAppScript = (filename, allowDevEntry = false) => {
+          if (!filename) return false;
+          try {
+            const source = new URL(filename, location.href);
+            return source.origin === new URL(location.href).origin && (/^\/assets\/[^/]+\.js$/.test(source.pathname) || allowDevEntry && source.pathname === '/src/client/main.tsx');
+          } catch { return false; }
+        };
         const failed = event => {
-          if (event.target?.tagName === 'SCRIPT' && event.target.type === 'module') void recover();
+          const entry = document.querySelector('script[type="module"][src]');
+          if (entry && event.target === entry && isAppScript(entry.src, true) || isAppScript(event.filename)) void recover();
         };
         const rejected = event => {
           const reason = event.reason instanceof Error ? event.reason.message : String(event.reason);
@@ -97,7 +102,6 @@
           navigator.serviceWorker.addEventListener('controllerchange', controllerChanged);
           controllerChanged();
         }
-        watchdog = setTimeout(() => { void recover(); }, 15000);
       })();
     </script>
     <title>Justin's poker banker</title>
