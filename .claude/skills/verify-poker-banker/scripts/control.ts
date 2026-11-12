@@ -1,5 +1,5 @@
 #!/usr/bin/env -S pnpm exec tsx
-import { spawn, spawnSync, execFileSync, type ChildProcess } from 'node:child_process';
+import { type ChildProcess } from 'node:child_process';
 import { createServer, createConnection } from 'node:net';
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile, readdir, rm, chmod } from 'node:fs/promises';
@@ -7,11 +7,12 @@ import { openSync, closeSync } from 'node:fs';
 import { resolve, relative, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
-import { webkit, devices, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { webkit, devices, expect, type Browser, type BrowserServer, type BrowserContext, type Page } from '@playwright/test';
 import type { SessionState } from '../../../../src/domain/session';
 import { createAccount, signIn, current } from '../../../../e2e/helpers';
 import { ledger } from './ledger';
-import { stopOwnedProcess } from '../../../../scripts/owned-process';
+import { createProcessOwner, spawnOwned, stopOwned, withShutdownDeadline, type ProcessOwner } from '../../../../scripts/owned-process';
+import { ownedMain, runOwned } from '../../../../scripts/owned-command';
 
 export type RecipeContext = {
   page: Page; context: BrowserContext; browser: Browser; baseURL: string;
@@ -34,8 +35,8 @@ const evidence = resolve('evidence/verify', runId);
 const socket = resolve('.cache', `pbv-${runId.slice(-8)}.sock`);
 async function json(path: string, value: unknown) { await writeFile(path, JSON.stringify(value, null, 2)); }
 async function request(command: Command): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const client = createConnection(socket);
+  const client = createConnection(socket);
+  const pending = new Promise((resolve, reject) => {
     let output = '';
     client.setTimeout(180000, () => client.destroy(new Error('Verification command exceeded 180 seconds')));
     client.on('connect', () => client.write(`${JSON.stringify(command)}\n`));
@@ -46,13 +47,17 @@ async function request(command: Command): Promise<unknown> {
       catch (error) { reject(error); }
     });
   });
+  return command.action === 'cleanup' ? pending.finally(() => client.destroy()) : pending;
 }
 async function files(directory: string): Promise<string[]> {
   const values = await readdir(directory, { withFileTypes: true });
   return (await Promise.all(values.map(value => value.isDirectory() ? files(join(directory, value.name)) : [join(directory, value.name)]))).flat();
 }
-function owned(meta: Pick<Meta, 'pid' | 'runId'>) {
-  const command = execFileSync('ps', ['-p', String(meta.pid), '-o', 'command='], { encoding: 'utf8' }).trim();
+async function owned(meta: Pick<Meta, 'pid' | 'runId'>, parent?: ProcessOwner) {
+  const owner = createProcessOwner({ parent });
+  let command: string;
+  try { command = (await runOwned(owner, 'sh', ['-c', 'ps -p "$1" -o command= || [ "$?" -eq 1 ]', 'pb-owned-lookup', String(meta.pid)])).trim(); }
+  finally { await owner.stop(); }
   if (!command.includes('control.ts') || !command.includes(`_daemon ${meta.runId}`)) throw new Error('PID no longer belongs to this verification run; refusing to signal it');
   return command;
 }
@@ -70,37 +75,37 @@ async function daemon() {
   const target = local ? '' : process.env.PB_BASE_URL;
   if (!local && (!target || new URL(target).protocol !== 'https:')) throw new Error('Live mode requires explicit PB_BASE_URL=https://...');
   const meta: Meta = { runId, pid: process.pid, socket, evidence, baseURL: target ? new URL(target).origin : '', local, state: 'starting' };
+  const owner = createProcessOwner();
+  let server: ReturnType<typeof createServer> | undefined;
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { void cleanup().then(() => process.exit(0)).catch(error => { console.error(error); process.exit(1); }); });
+  owner.addCleanup('Verification socket removal', 'cleanup', () => rm(socket, { force: true }));
+  owner.addCleanup('Verification listener close', 'pool', () => { server?.close(); });
   let child: ChildProcess | undefined;
   let browser: Browser | undefined;
+  let browserServer: BrowserServer | undefined;
   let user: Awaited<ReturnType<typeof createAccount>> | undefined;
   const pages = new Map<Mode, Page>();
   let busy = false;
   let cleanupTask: Promise<void> | undefined;
   let startupTask: Promise<void> | undefined;
   let stopping = false;
-  let browserClosing: Promise<void> | undefined;
-  const closeBrowser = () => browser ? browserClosing ??= browser.close() : Promise.resolve();
-  const starting = () => { if (stopping) throw new Error('Verification launch was stopped'); };
+  owner.addCleanup('Verification browser server close', 'cleanup', () => browserServer?.close());
+  owner.addCleanup('Verification browser close', 'cleanup', () => browser?.close());
+  const starting = () => owner.checkpoint();
   const saveMeta = () => json(metadata, meta);
   function cleanup(): Promise<void> {
     stopping = true;
     cleanupTask ??= (async () => {
       const errors = new Set<string>();
-      const settle = async (task: Promise<unknown>) => { try { await task; } catch (error) { errors.add(String(error)); } };
-      const earlyBrowser = settle(closeBrowser());
-      const earlyChild = child ? settle(stopOwnedProcess(child)) : Promise.resolve();
-      await startupTask?.catch(() => {});
-      await Promise.all([earlyBrowser, earlyChild]);
-      await settle(closeBrowser());
-      if (child) await settle(stopOwnedProcess(child));
-      try {
-        meta.state = 'stopped';
-        const proofFiles = (await files(evidence)).filter(path => path.endsWith('.png') || path.endsWith('-result.json'));
-        await json(join(evidence, 'cleanup.json'), { runId, stopped: new Date().toISOString(), ownedDaemonPid: process.pid, ownedServerPid: child?.pid ?? null, evidenceFilesPreserved: proofFiles.length, errors: [...errors] });
-        await manifest();
-      } finally {
-        server.close(); await rm(socket, { force: true }); await rm(metadata, { force: true });
-      }
+      const settle = async (action: () => unknown | Promise<unknown>) => { try { await action(); } catch (error) { errors.add(String(error)); } };
+      const bounded = (label: string, action: () => unknown | Promise<unknown>) => settle(() => withShutdownDeadline(label, action));
+      await settle(() => owner.stop());
+      if (!errors.size) meta.state = 'stopped';
+      let proofFiles: number | null = null;
+      await bounded('Verification evidence enumeration', async () => { proofFiles = (await files(evidence)).filter(path => path.endsWith('.png') || path.endsWith('-result.json')).length; });
+      await bounded('Verification cleanup evidence', () => json(join(evidence, 'cleanup.json'), { runId, stopped: new Date().toISOString(), ownedDaemonPid: process.pid, ownedServerPid: child?.pid ?? null, evidenceFilesPreserved: proofFiles, errors: [...errors] }));
+      await bounded('Verification evidence manifest', manifest);
+      if (!errors.size) await bounded('Verification metadata removal', () => rm(metadata, { force: true }));
       if (errors.size) throw new Error(`Owned cleanup errors: ${[...errors].join('; ')}`);
     })();
     return cleanupTask;
@@ -120,7 +125,7 @@ async function daemon() {
   }
   async function doctor() {
     if (meta.state !== 'ready') return { state: meta.state };
-    owned(meta);
+    await owned(meta);
     const page = pages.get('iphone-webkit')!;
     const me = await page.request.get(`${meta.baseURL}/api/auth/me`);
     expect(me.status()).toBe(200);
@@ -131,17 +136,20 @@ async function daemon() {
     const history = await page.request.get(`${meta.baseURL}/api/sessions`); expect(history.status()).toBe(200);
     await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toBeVisible();
     if (local) {
-      const listener = Number(execFileSync('lsof', ['-nP', `-iTCP:${meta.port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).trim());
+      const listener = Number((await runOwned(owner, 'lsof', ['-nP', `-iTCP:${meta.port}`, '-sTCP:LISTEN', '-t'])).trim());
       expect(listener).toBe(meta.listenerPid);
       let parent = listener;
-      for (let depth = 0; parent !== child!.pid && depth < 10; depth++) parent = Number(execFileSync('ps', ['-p', String(parent), '-o', 'ppid='], { encoding: 'utf8' }).trim());
+      for (let depth = 0; parent !== child!.pid && depth < 10; depth++) parent = Number((await runOwned(owner, 'ps', ['-p', String(parent), '-o', 'ppid='])).trim());
       expect(parent).toBe(child!.pid);
     }
     const result = { state: 'ready', runId, baseURL: meta.baseURL, release, owner: meta.pid, local, account: user!.username, ownedListener: meta.listenerPid ?? null, authenticated: true, workspaceUsable: true };
     await json(join(evidence, 'doctor.json'), result); return result;
   }
   async function handle(command: Command) {
-    if (command.action === 'cleanup') { await cleanup(); setTimeout(() => process.exit(0), 100); return { evidence, cleaned: true }; }
+    if (command.action === 'cleanup') {
+      try { await cleanup(); setTimeout(() => process.exit(0), 100); return { evidence, cleaned: true }; }
+      catch (error) { setTimeout(() => process.exit(1), 100); throw error; }
+    }
     if (command.action === 'doctor') return doctor();
     if (command.action === 'evidence') return manifest();
     if (meta.state !== 'ready' || !browser || !user) throw new Error('Launch has not reached a signed-up usable workspace');
@@ -174,7 +182,7 @@ async function daemon() {
       await json(join(directory, 'failure-result.json'), { passed: false, error: error instanceof Error ? error.message : String(error) }); throw error;
     }
   }
-  const server = createServer(connection => {
+  server = createServer(connection => {
     let input = '';
     connection.on('data', chunk => {
       input += String(chunk); if (!input.endsWith('\n')) return;
@@ -185,8 +193,17 @@ async function daemon() {
       void handle(command).then(result => connection.end(JSON.stringify({ result }))).catch(error => connection.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))).finally(() => { busy = false; });
     });
   });
-  await new Promise<void>(resolve => server.listen(socket, resolve)); await chmod(socket, 0o600); await saveMeta();
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { void cleanup().then(() => process.exit(0)).catch(error => { console.error(error); process.exit(1); }); });
+  try {
+    await owner.launch(() => new Promise<void>((resolve, reject) => { server!.once('error', reject); server!.listen(socket, resolve); }));
+    await owner.launch(() => chmod(socket, 0o600));
+    await owner.launch(saveMeta);
+  } catch (error) {
+    if (stopping) { await cleanupTask; return; }
+    console.error(error);
+    await cleanup();
+    process.exitCode = 1;
+    return;
+  }
   startupTask = (async () => {
     starting();
     if (local) {
@@ -195,7 +212,7 @@ async function daemon() {
       meta.port = address.port; await new Promise<void>(resolve => portServer.close(() => resolve()));
       meta.baseURL = `https://127.0.0.1:${meta.port}`;
       starting();
-      child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { ...process.env, PORT: String(meta.port) } });
+      child = spawnOwned(owner, process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { ...process.env, PORT: String(meta.port) } });
       await new Promise<void>((resolve, reject) => {
         let output = ''; const timeout = setTimeout(() => reject(new Error('Owned local stack startup exceeded 30 seconds')), 30000);
         child!.stdout!.on('data', chunk => { process.stdout.write(chunk); output += String(chunk); if (output.includes('Poker banker ready at')) { clearTimeout(timeout); resolve(); } });
@@ -204,10 +221,12 @@ async function daemon() {
         child!.once('error', error => { clearTimeout(timeout); reject(error); });
       });
       starting();
-      meta.listenerPid = Number(execFileSync('lsof', ['-nP', `-iTCP:${meta.port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).trim());
+      meta.listenerPid = Number((await runOwned(owner, 'lsof', ['-nP', `-iTCP:${meta.port}`, '-sTCP:LISTEN', '-t'])).trim());
     }
     starting();
-    browser = await webkit.launch({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+    browserServer = await owner.launch(async () => browserServer = await webkit.launchServer({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }));
+    starting();
+    browser = await owner.launch(async () => browser = await webkit.connect(browserServer!.wsEndpoint()));
     starting();
     const page = await contextPage('iphone-webkit');
     starting();
@@ -224,7 +243,9 @@ async function daemon() {
   })();
   try { await startupTask; } catch (error) {
     if (!stopping) {
-      console.error(error); await json(join(evidence, 'launch-failure-result.json'), { error: error instanceof Error ? error.message : String(error) });
+      console.error(error);
+      try { await withShutdownDeadline('Verification launch failure evidence', () => json(join(evidence, 'launch-failure-result.json'), { error: error instanceof Error ? error.message : String(error) })); }
+      catch (evidenceError) { console.error(evidenceError); }
       await cleanup(); process.exit(1);
     }
   }
@@ -232,6 +253,27 @@ async function daemon() {
 await mkdir(cache, { recursive: true }); await mkdir(evidence, { recursive: true });
 if (action === '_daemon') await daemon();
 else if (action === 'launch') {
+  const owner = createProcessOwner();
+  let child: ChildProcess | undefined;
+  let interrupted: string | undefined;
+  let launchCleanup: Promise<void> | undefined;
+  let handoffTask: Promise<void> | undefined;
+  let handedOff = false;
+  const stopLaunch = () => launchCleanup ??= (async () => {
+    child?.ref();
+    if (handoffTask) await handoffTask.catch(() => {});
+    const errors: unknown[] = [];
+    if (handedOff && child) {
+      try { await request({ action: 'cleanup' }); } catch (error) { errors.push(error); }
+      try { await stopOwned(child); } catch (error) { errors.push(error); }
+    }
+    try { await owner.stop(); } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, 'Verification launch cleanup failed');
+    await withShutdownDeadline('Verification launch socket removal', () => rm(socket, { force: true }));
+    await withShutdownDeadline('Verification launch metadata removal', () => rm(metadata, { force: true }));
+  })();
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  const handlers = signals.map(signal => { const handler = () => { if (interrupted) return; interrupted = signal; process.exitCode = signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 129; void stopLaunch().catch(() => {}); }; process.on(signal, handler); return { signal, handler }; });
   const local = args.includes('--local');
   if (local === args.includes('--live')) throw new Error('Choose exactly one of --local and --live');
   if (local) {
@@ -239,30 +281,15 @@ else if (action === 'launch') {
       if (!/^[a-zA-Z0-9_-]+\.json$/.test(name)) continue;
       const previous = JSON.parse(await readFile(join(cache, name), 'utf8')) as Meta;
       if (!previous.local || previous.state === 'stopped') continue;
-      try { owned(previous); } catch { continue; }
+      try { await owned(previous, owner); } catch { owner.checkpoint(); continue; }
       throw new Error(`Local verification run ${previous.runId} owns dist; clean it up before another local launch or build`);
     }
-    const build = spawnSync('pnpm', ['build'], { stdio: 'inherit', env: { ...process.env, RELEASE_VERSION: `verify-${runId}` } });
-    if (build.status !== 0) throw new Error('Verification production build failed');
+    try { await runOwned(owner, 'pnpm', ['build'], { stdio: 'inherit', env: { ...process.env, RELEASE_VERSION: `verify-${runId}` } }); }
+    catch (error) { await owner.stop(); throw error; }
   } else if (!process.env.PB_BASE_URL || new URL(process.env.PB_BASE_URL).protocol !== 'https:') throw new Error('Live launch requires PB_BASE_URL=https://...');
   const log = openSync(join(evidence, 'server.log'), 'a');
-  const child = spawn(process.execPath, ['--import', 'tsx', '.claude/skills/verify-poker-banker/scripts/control.ts', '_daemon', runId, local ? '--local' : '--live'], { detached: true, stdio: ['ignore', log, log] });
+  child = spawnOwned(owner, process.execPath, ['--import', 'tsx', '.claude/skills/verify-poker-banker/scripts/control.ts', '_daemon', runId, local ? '--local' : '--live'], { detached: true, stdio: ['ignore', log, log] });
   closeSync(log); child.unref();
-  let interrupted: string | undefined;
-  let launchCleanup: Promise<void> | undefined;
-  const stopLaunch = () => launchCleanup ??= (async () => {
-    child.ref();
-    const exited = new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once('exit', () => resolve()); });
-    try { await request({ action: 'cleanup' }); }
-    catch {
-      if (child.exitCode === null && child.signalCode === null) { owned({ runId, pid: child.pid! }); child.kill('SIGTERM'); }
-    }
-    await exited;
-    await rm(socket, { force: true }); await rm(metadata, { force: true });
-    if (child.exitCode !== 0 && child.signalCode !== 'SIGTERM') throw new Error(`Owned verification daemon exited ${child.exitCode ?? child.signalCode}`);
-  })();
-  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
-  const handlers = signals.map(signal => { const handler = () => { if (interrupted) return; interrupted = signal; process.exitCode = signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 129; void stopLaunch().catch(() => {}); }; process.on(signal, handler); return { signal, handler }; });
   let ready: unknown;
   try {
     for (let attempt = 0; attempt < 180 && !interrupted; attempt++) {
@@ -274,14 +301,20 @@ else if (action === 'launch') {
     if (interrupted) { await stopLaunch(); console.error(`Verification launch interrupted by ${interrupted}; evidence preserved at ${evidence}`); }
     else {
       if (!ready) { await stopLaunch(); throw new Error(`Launch never reached workspace; evidence preserved at ${evidence}`); }
+      handoffTask = owner.handoff(child).then(() => { handedOff = true; });
+      await handoffTask;
+      if (interrupted) { await stopLaunch(); throw new Error('Verification launch was interrupted during handoff'); }
+      if (child.connected) child.disconnect();
+      await owner.stop();
       console.log(JSON.stringify({ runId, evidence, ready }, null, 2));
     }
   } finally {
     try { if (!ready || interrupted) await stopLaunch(); } finally { for (const { signal, handler } of handlers) process.removeListener(signal, handler); }
   }
-} else {
+} else await ownedMain(async owner => {
   const meta = JSON.parse(await readFile(metadata, 'utf8')) as Meta;
-  owned(meta);
+  await owned(meta, owner);
+  owner.checkpoint();
   const mode = (args.includes('--context') ? option('--context') : 'iphone-webkit') as Mode;
   console.log(JSON.stringify(await request({ action, mode, recipe: args[1] }), null, 2));
-}
+});

@@ -1,3 +1,4 @@
+import { withShutdownDeadline } from '../owned-process';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { hash, Algorithm } from '@node-rs/argon2';
@@ -148,6 +149,7 @@ export async function seedBenchmark(pool: pg.Pool): Promise<SeedFixture> {
   }
   assert(openSession);
   const db = await pool.connect();
+  let discard = false;
   try {
     await db.query('BEGIN');
     await insert(db, 'bankers', 'id uuid,username text,password_hash text,created_at timestamptz,password_changed_at timestamptz', bankers);
@@ -158,7 +160,11 @@ export async function seedBenchmark(pool: pg.Pool): Promise<SeedFixture> {
     await insert(db, 'ledger_entries', 'id uuid,banker_id uuid,session_id uuid,player_id uuid,kind text,amount_minor bigint,method text,note text,occurred_at timestamptz,voids_entry_id uuid,created_at timestamptz,revision bigint', entries);
     await insert(db, 'session_events', 'id uuid,banker_id uuid,session_id uuid,kind text,detail jsonb,created_at timestamptz,revision bigint', events);
     await db.query('COMMIT');
-  } catch (error) { await db.query('ROLLBACK'); throw error; } finally { db.release(); }
+  } catch (error) {
+    try { await withShutdownDeadline('Benchmark seed rollback', () => db.query('ROLLBACK')); }
+    catch (cleanup) { discard = true; throw new AggregateError([error, cleanup], 'Benchmark seed and rollback failed'); }
+    throw error;
+  } finally { db.release(discard); }
   await pool.query('ANALYZE');
   const state = await loadSession(pool, mainId, openSession.id);
   assert.equal(state.entries.length, 60); assert.equal(state.players.length, 9);

@@ -29,6 +29,7 @@ Preconditions:
 - **Close, reopen and count once.** Save as `.cache/verify-close.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-close.ts --run RUN_ID --context iphone-webkit`. The balanced game's two player results are +$40 and −$40. The second game's −$10 result makes the first player's finalized total +$30.
 
 ```ts
+import { typeInput } from '../e2e/input';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { expect } from '@playwright/test';
@@ -56,7 +57,7 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
   await closeSession(page);
   await step('close-balanced-result');
   await menu(page, 'Reopen session');
-  await page.getByLabel('Reason', { exact: true }).fill('Verify one cumulative result');
+  await typeInput(page.getByLabel('Reason', { exact: true }), 'Verify one cumulative result');
   await page.getByRole('dialog').getByRole('button', { name: 'Reopen session', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect((await call<History>(page, `/players/${winner.id}`)).cumulative).toEqual([]);
@@ -66,7 +67,7 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
   expect(history.sessions.filter(row => row.session.id === first.session.id)).toHaveLength(1);
   await newSession(page, `Verify accepted discrepancy ${tag}`);
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
-  await page.getByLabel('Search players', { exact: true }).fill(winner.display_name);
+  await typeInput(page.getByLabel('Search players', { exact: true }), winner.display_name);
   await page.getByRole('dialog').getByRole('button', { name: winner.display_name, exact: true }).click();
   await money(page, winner.id, '100');
   await money(page, winner.id, '90', { kind: 'Cash out', paid: true });

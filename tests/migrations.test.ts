@@ -1,3 +1,4 @@
+import { withShutdownDeadline } from '../scripts/owned-process';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { migrate } from '../scripts/migrate';
 import { testDatabase } from './database';
@@ -33,5 +34,5 @@ it('rolls back a failed file without rolling back an earlier migration', async (
     expect(tables.rows[0]).toEqual({ good: 'migration_good', bad: null });
     const receipts = await database.pool.query("SELECT version FROM schema_migrations WHERE version IN ('0002_good.sql','0003_bad.sql')");
     expect(receipts.rows).toEqual([{ version: '0002_good.sql' }]);
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  } finally { await withShutdownDeadline('Test directory cleanup', () => rm(directory, { recursive: true, force: true })); }
 });

@@ -1,16 +1,23 @@
+import { typeInput } from './input';
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newSession, openMoney, share, signIn, signOut, workerReady } from './helpers';
+import { addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newSession, openMoney, share, signIn, signOut, storedDraft, workerReady } from './helpers';
 
 test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
   const user = await createAccount(page, testInfo);
+  const signupCookie = (await page.context().cookies()).find(cookie => cookie.name === 'pb_session')!;
+  const recoveredPassword = randomUUID();
   await signOut(page);
+  expect((await page.context().cookies()).find(cookie => cookie.name === 'pb_session')).toEqual(signupCookie);
+  expect((await page.request.get('/api/auth/me')).status()).toBe(401);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Sign in to workspace', exact: true })).toBeVisible();
   await screen(page, testInfo, 'signin');
   await signIn(page, user.username);
   const state = await newSession(page, 'Recovery preserves draft');
   const player = await addPlayer(page, 'Justin');
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('42.');
+  await typeInput(page.getByTestId('money-amount'), '42.');
   const validCookies = await page.context().cookies();
   const old = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
   const recovery = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
@@ -20,25 +27,25 @@ test('account signup acknowledgement, sign-in and one-use recovery revoke old co
     const recover = await recovery.newPage();
     await recover.goto('/');
     await recover.getByRole('button', { name: 'Recover account', exact: true }).click();
-    await recover.getByLabel('Username', { exact: true }).fill(user.username);
-    await recover.getByLabel('Recovery code', { exact: true }).fill(user.codes[0]!);
-    await recover.getByLabel('New password', { exact: true }).fill('a-new-browser-game-password');
+    await typeInput(recover.getByLabel('Username', { exact: true }), user.username);
+    await typeInput(recover.getByLabel('Recovery code', { exact: true }), user.codes[0]!);
+    await typeInput(recover.getByLabel('New password', { exact: true }), recoveredPassword);
     await screen(recover, testInfo, 'recover');
     await recover.getByRole('button', { name: 'Reset password', exact: true }).click();
     await expect(recover.getByText('Password reset. Sign in with your new password.', { exact: true })).toBeVisible();
-    const reused = await recover.request.post('/api/auth/recover', { headers: { origin: new URL(recover.url()).origin }, data: { username: user.username, recovery_code: user.codes[0], new_password: 'another-browser-game-password' } });
+    const reused = await recover.request.post('/api/auth/recover', { headers: { origin: new URL(recover.url()).origin }, data: { username: user.username, recovery_code: user.codes[0], new_password: randomUUID() } });
     expect(reused.status()).toBe(401);
     expect((await old.request.get(`${baseURL}/api/auth/me`)).status()).toBe(401);
     await page.bringToFront();
     await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
-    await page.getByLabel('Username', { exact: true }).fill(user.username);
-    await page.getByLabel('Password', { exact: true }).fill('a-new-browser-game-password');
+    await typeInput(page.getByLabel('Username', { exact: true }), user.username);
+    await typeInput(page.getByLabel('Password', { exact: true }), recoveredPassword);
     await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
     await expect(page.getByTestId(`session-tab-${state.session.id}`)).toBeVisible();
     await page.getByTestId(`session-tab-${state.session.id}`).click();
     await expect(page.getByRole('heading', { name: 'Recovery preserves draft', exact: true })).toBeVisible();
     await openMoney(page, player.id);
-    await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('42.');
+    await expect(page.getByTestId('money-amount')).toHaveValue('42.');
   } finally { await old.close(); await recovery.close(); }
 });
 
@@ -63,35 +70,36 @@ test('two bankers cannot open each other session or private history', async ({ p
 });
 
 test('same-day session tabs and month history restore separate drafts after reload', async ({ page }, testInfo) => {
-  await createAccount(page);
+  const account = await createAccount(page);
   const first = await newSession(page, 'Early game', testInfo);
   const justin = await addPlayer(page, 'Justin', testInfo);
   await openMoney(page, justin.id);
-  await page.getByLabel('Amount', { exact: true }).fill('12.');
+  await typeInput(page.getByTestId('money-amount'), '12.');
   await keepMoneyDraft(page);
   const second = await newSession(page, 'Late game');
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
-  await page.getByLabel('Search players', { exact: true }).fill('Justin');
+  await typeInput(page.getByLabel('Search players', { exact: true }), 'Justin');
   await expect(page.getByLabel('Search players', { exact: true })).toHaveValue('Justin');
   await expect(page.getByText('An exact name match already exists.', { exact: false })).toBeVisible();
   await page.getByRole('dialog').getByRole('button', { name: 'Justin', exact: true }).click();
   await openMoney(page, justin.id);
-  await page.getByLabel('Amount', { exact: true }).fill('34.');
+  await typeInput(page.getByTestId('money-amount'), '34.');
+  await expect.poll(async () => (await storedDraft<{ amount: string }>(page, `${account.banker.id}/${second.session.id}/buy_in/${justin.id}`))?.amount).toBe('34.');
   await page.reload();
   await openMoney(page, justin.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('34.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('34.');
   await keepMoneyDraft(page);
   await page.getByTestId(`session-tab-${first.session.id}`).click();
   await openMoney(page, justin.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('12.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('12.');
   await keepMoneyDraft(page);
   await page.getByRole('button', { name: 'History', exact: true }).click();
-  await page.getByLabel('Search sessions', { exact: true }).fill('Late');
+  await typeInput(page.getByLabel('Search sessions', { exact: true }), 'Late');
   await screen(page, testInfo, 'history');
   await page.getByRole('dialog').getByRole('button', { name: /Late game/ }).click();
   expect(new URL(page.url()).searchParams.get('session')).toBe(second.session.id);
   await openMoney(page, justin.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('34.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('34.');
 });
 
 test('banking, early cash-out, re-entry, corrections and cumulative reclosure preserve history', async ({ page }, testInfo) => {
@@ -113,7 +121,7 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   let state = await money(page, player.id, '10', { kind: 'Cash out' });
   const original = state.entries.find(entry => entry.kind === 'cash_out' && entry.amount_minor === '1000')!;
   await page.getByTestId(`entry-${original.id}`).getByRole('button').click();
-  await page.getByLabel('Replacement amount', { exact: true }).fill('5');
+  await typeInput(page.getByLabel('Replacement amount', { exact: true }), '5');
   await screen(page, testInfo, 'correction');
   await page.getByRole('button', { name: 'Save correction', exact: true }).click();
   await expect(page.getByTestId(`entry-${original.id}`)).toContainText('Voided');
@@ -121,7 +129,7 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   await money(page, player.id, '2', { kind: 'Tips and meals', testInfo });
   await closeSession(page, true);
   await menu(page, 'Reopen session');
-  await page.getByLabel('Reason', { exact: true }).fill('Review recap');
+  await typeInput(page.getByLabel('Reason', { exact: true }), 'Review recap');
   await page.getByRole('dialog').getByRole('button', { name: 'Reopen session', exact: true }).click();
   await closeSession(page, true);
   await page.getByRole('button', { name: 'Players', exact: true }).click();
@@ -130,14 +138,14 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   await page.getByTestId(`roster-player-${player.id}`).click();
   await screen(page, testInfo, 'player-detail');
   await page.getByRole('button', { name: 'Rename player', exact: true }).click();
-  await page.getByLabel('Player name', { exact: true }).fill('Justin Tan');
+  await typeInput(page.getByLabel('Player name', { exact: true }), 'Justin Tan');
   await page.getByRole('button', { name: 'Save name', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Justin Tan', exact: true })).toBeVisible();
   await expect(page.getByText('Saturday table', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: 'Workspace', exact: true }).click();
   const balanced = await newSession(page, 'Balanced table');
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
-  await page.getByLabel('Search players', { exact: true }).fill('Justin Tan');
+  await typeInput(page.getByLabel('Search players', { exact: true }), 'Justin Tan');
   await page.getByRole('dialog').getByRole('button', { name: 'Justin Tan', exact: true }).click();
   await money(page, player.id, '25');
   await money(page, player.id, '25', { kind: 'Cash out', paid: true });
@@ -219,14 +227,14 @@ test('server timer survives reload and another device, freezes at close, display
     await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$10.00 up');
     expect((await current(page)).entries).toEqual(before.entries);
     await menu(page, 'Session settings');
-    await page.getByLabel('Big blind', { exact: true }).fill('2');
+    await typeInput(page.getByLabel('Big blind', { exact: true }), '2');
     await page.waitForTimeout(650);
     await expect(page.getByLabel('Big blind', { exact: true })).toBeFocused();
     await page.getByRole('button', { name: 'Save settings', exact: true }).click();
     await page.getByRole('button', { name: 'BB', exact: true }).click();
     await expect(page.getByTestId(`result-${player.id}`)).toContainText('5.00 big blinds');
     await menu(page, 'Correct times');
-    await page.getByLabel('Started at', { exact: true }).fill(new Date(Date.parse(started!) - 3600000).toISOString().slice(0, 19));
+    await typeInput(page.getByLabel('Started at', { exact: true }), new Date(Date.parse(started!) - 3600000).toISOString().slice(0, 19));
     await page.getByRole('button', { name: 'Save timing', exact: true }).click();
     await menu(page, 'Correct times');
     await expect(page.getByText('Timing corrected', { exact: true })).toBeVisible();
@@ -267,7 +275,7 @@ test('two-session player reports show hand-computed results in every grouping an
   }
   await screen(page, testInfo, 'player-report');
   await page.getByRole('button', { name: 'Filter: Off', exact: true }).click();
-  await page.getByLabel('From date', { exact: true }).fill('2026-11-17');
+  await typeInput(page.getByLabel('From date', { exact: true }), '2026-11-17');
   await screen(page, testInfo, 'report-filter');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
   await expect(page.getByTestId('report-profit_loss_minor')).toContainText('−$20.00');
@@ -287,7 +295,7 @@ test('offline queue excludes unconfirmed totals, survives reload, saves once and
     await viewer.goto(viewerLink);
     await page.context().setOffline(true);
     await openMoney(page, player.id);
-    await page.getByLabel('Amount', { exact: true }).fill('20');
+    await typeInput(page.getByTestId('money-amount'), '20');
     await page.getByRole('button', { name: 'Save entry', exact: true }).dblclick();
     await expect(page.getByText('Not saved yet', { exact: true }).first()).toBeVisible();
     await expect(page.getByTestId('totals')).not.toContainText('$20.00');

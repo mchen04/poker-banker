@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm exec tsx
+import { typeInput } from '../../../../e2e/input';
 import { expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
@@ -16,7 +17,7 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   const other = await addPlayer(page, `Ledger Pat ${tag}`);
   async function record(amount: string, name: string, kind: 'Buy-in' | 'Cash out' | 'Record payment' | 'Tips and meals' = 'Buy-in', paid?: boolean, method?: 'Cash' | 'Venmo' | 'Zelle') {
     await openMoney(page, player.id, kind);
-    await page.getByLabel('Amount', { exact: true }).fill(amount);
+    await typeInput(page.getByTestId('money-amount'), amount);
     if (paid !== undefined) await page.getByLabel(kind === 'Buy-in' ? 'Paid now' : 'Paid out now', { exact: true }).setChecked(paid);
     if (method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: method, exact: true }).click();
     await step(`${name}-action`);
@@ -31,8 +32,8 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   await page.getByLabel('Player', { exact: true }).selectOption(other.id);
   await expect(page.getByLabel('Player', { exact: true })).toHaveValue(other.id);
   await page.getByLabel('Player', { exact: true }).selectOption(player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toBeEnabled();
-  await page.getByLabel('Amount', { exact: true }).fill('40');
+  await expect(page.getByTestId('money-amount')).toBeEnabled();
+  await typeInput(page.getByTestId('money-amount'), '40');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }).click();
   await step('bottom-buy-in-40-venmo-action');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
@@ -54,7 +55,7 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   let state = await record('5', 'final-cash-out', 'Cash out');
   const original = state.entries.find(row => row.kind === 'cash_out' && row.amount_minor === '500')!;
   await page.getByTestId(`entry-${original.id}`).getByRole('button').click();
-  await page.getByLabel('Replacement amount', { exact: true }).fill('6');
+  await typeInput(page.getByLabel('Replacement amount', { exact: true }), '6');
   await step('workspace-correction-action');
   await page.getByRole('button', { name: 'Save correction', exact: true }).click();
   await expect(page.getByTestId(`entry-${original.id}`)).toContainText('Voided');

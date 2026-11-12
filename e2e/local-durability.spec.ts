@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Page } from '@playwright/test';
 import type { OutboxItem } from '../src/client/data';
 import { test, expect } from './fixtures';
@@ -26,7 +27,7 @@ async function localWork(page: Page): Promise<Work> {
 
 async function addOtherTabWork(page: Page, banker: string, session: string, player: string) {
   await openMoney(page, player);
-  await page.getByLabel('Amount', { exact: true }).fill('123');
+  await typeInput(page.getByTestId('money-amount'), '123');
   const key = `${banker}/${session}/buy_in/${player}`;
   await expect.poll(async () => (await localWork(page)).drafts.find(draft => draft.key === key)?.value.amount).toBe('123');
   const op = await page.evaluate(async ({ banker, session, player }) => {
@@ -67,15 +68,15 @@ async function openCleanSignout(page: Page) {
 test('a quota failure blocks a waiting update until the typed draft is saved and restored', async ({ page }, testInfo) => {
   const releaseA = `durability-A-${testInfo.project.name}`;
   const releaseB = `durability-B-${testInfo.project.name}`;
-  buildRelease(releaseA);
+  await buildRelease(releaseA);
   const account = await createAccount(page);
   const session = await newSession(page, 'Durable update');
   const player = await addPlayer(page, 'Justin');
   await workerReady(page);
   await openMoney(page, player.id);
-  const amount = page.getByLabel('Amount', { exact: true });
+  const amount = page.getByTestId('money-amount');
   const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
-  await amount.fill('10');
+  await typeInput(amount, '10');
   await expect.poll(async () => (await localWork(page)).drafts.find(draft => draft.key === key)?.value.amount).toBe('10');
   await page.evaluate(() => {
     const original = IDBObjectStore.prototype.put;
@@ -85,10 +86,10 @@ test('a quota failure blocks a waiting update until the typed draft is saved and
     };
     window.addEventListener('durability-storage-recovered', () => { IDBObjectStore.prototype.put = original; }, { once: true });
   });
-  await amount.fill('123');
+  await typeInput(amount, '123');
   await expect(amount).toHaveValue('123');
   expect((await localWork(page)).drafts.find(draft => draft.key === key)?.value.amount).toBe('10');
-  buildRelease(releaseB);
+  await buildRelease(releaseB);
   await page.evaluate(async () => {
     const registration = await navigator.serviceWorker.getRegistration('/');
     if (!registration) throw new Error('The local service worker is missing');
@@ -107,7 +108,7 @@ test('a quota failure blocks a waiting update until the typed draft is saved and
   await Promise.all([page.waitForEvent('domcontentloaded'), page.getByTestId('update-reload').click()]);
   await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('123');
+  await expect(page.getByTestId('money-amount')).toHaveValue('123');
   expect((await page.request.get('/api/auth/me')).status()).toBe(200);
 });
 

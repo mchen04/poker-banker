@@ -173,7 +173,7 @@ it.each([false, true])('retains the latest edit behind a frozen cross-tab reques
   await held.started;
   const latest = { ...original, amount: '456' };
   const second = data.writeDraft(key, latest);
-  const secondFailure = expect(second).rejects.toThrow('Not saved on this device');
+  const secondSave = expect(second).resolves.toBeUndefined();
   const otherTab = await freshData();
   const submitted = request(original.op_id, '1000');
   const freezing = otherTab.prepareDraftSubmission(key, original, submitted);
@@ -181,12 +181,22 @@ it.each([false, true])('retains the latest edit behind a frozen cross-tab reques
   held.abort();
   await firstFailure;
   await freezing;
-  await secondFailure;
+  await secondSave;
 
   expect(await data.readDraft(key)).toEqual({ ...original, __submitted: submitted });
-  expect(await data.listSubmittedDrafts(owner)).toEqual([{ key, form: 'buy_in', request: submitted }]);
-  expect(data.draftSaveFailed(key)).toBe(true);
-  await expect(data.flushDraftWrites()).rejects.toThrow('Not saved on this device');
+  expect((await data.listSubmittedDrafts(owner)).map(({ key, form, request }) => ({ key, form, request }))).toEqual([{ key, form: 'buy_in', request: submitted }]);
+  const stored = await new Promise<Row | undefined>(resolve => {
+    const opening = indexedDB.open('poker-banker');
+    opening.onsuccess = () => {
+      const reading = opening.result.transaction('drafts').objectStore('drafts').get(key);
+      reading.onsuccess = () => resolve(reading.result as Row | undefined);
+    };
+  });
+  expect(stored?.value).toEqual({ ...original, __submitted: submitted });
+  expect(stored?.next_value).toEqual(latest);
+  expect(data.draftSaveFailed(key)).toBe(false);
+  expect(data.hasPendingLocalWrites()).toBe(false);
+  await expect(data.flushDraftWrites()).resolves.toBeUndefined();
   const bodies = serverReply(rejected);
   if (rejected) await expect(data.replaySubmittedDraft(key)).rejects.toMatchObject({ code: 'session_closed' });
   else await data.replaySubmittedDraft(key);
@@ -196,7 +206,7 @@ it.each([false, true])('retains the latest edit behind a frozen cross-tab reques
   expect(retained?.__submitted).toBeUndefined();
   expect(retained?.op_id).not.toBe(original.op_id);
   expect(await data.listSubmittedDrafts(owner)).toEqual([]);
-  expect(data.hasPendingLocalWrites()).toBe(true);
+  expect(data.hasPendingLocalWrites()).toBe(false);
   await data.flushDraftWrites();
   expect(data.draftSaveFailed(key)).toBe(false);
   expect(data.hasPendingLocalWrites()).toBe(false);

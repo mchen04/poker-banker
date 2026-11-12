@@ -14,11 +14,11 @@ export function usePwaUpdate(holds: Holds) {
   const pendingReload = useRef(false);
   const manualReload = useRef(false);
 
-  const canReload = useCallback((manual: boolean) => document.visibilityState === 'visible' && !current.current.busy && current.current.outboxCount === 0 && (manual || !current.current.sheetOpen), []);
+  const canReload = useCallback((manual: boolean) => document.visibilityState === 'visible' && !current.current.busy && current.current.outboxCount === 0 && (manual || manualReload.current || !current.current.sheetOpen), []);
   const reload = useCallback(async (manual: boolean) => {
     if (!pendingReload.current || !canReload(manual)) return;
     await flushDraftWrites();
-    if (!await hasAnyOutbox() && !hasPendingLocalWrites() && canReload(manual)) window.location.reload();
+    if (!await hasAnyOutbox() && !hasPendingLocalWrites() && canReload(manual)) { manualReload.current = false; window.location.reload(); }
   }, [canReload]);
 
   const activateWorker = useCallback(async (manual: boolean) => {
@@ -30,7 +30,7 @@ export function usePwaUpdate(holds: Holds) {
       if (pendingReload.current) { await reload(manual); return; }
       const worker = registration.current?.waiting;
       if (!worker) return;
-      manualReload.current = manual;
+      manualReload.current = manual || manualReload.current;
       worker.postMessage({ type: 'ACTIVATE' });
     } finally {
       activating.current = false;
@@ -65,7 +65,6 @@ export function usePwaUpdate(holds: Holds) {
         pendingReload.current = true;
         setWaiting(true);
         const manual = manualReload.current;
-        manualReload.current = false;
         void reload(manual).catch(() => {});
       }
       hadController = true;

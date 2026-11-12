@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { randomUUID } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
@@ -26,8 +27,8 @@ for (const failure of ['draft quota', 'restoration marker'] as const) {
   test(`signup displays and restores recovery codes after a failed ${failure} write`, async ({ page }) => {
     await page.goto('/');
     await page.getByRole('button', { name: 'Sign up', exact: true }).click();
-    await page.getByLabel('Username', { exact: true }).fill(`codes-${randomUUID().slice(0, 12)}`);
-    await page.getByLabel('Password', { exact: true }).fill(password);
+    await typeInput(page.getByLabel('Username', { exact: true }), `codes-${randomUUID().slice(0, 12)}`);
+    await typeInput(page.getByLabel('Password', { exact: true }), password);
     await page.evaluate(failure => {
       if (failure === 'draft quota') {
         const original = IDBObjectStore.prototype.put;
@@ -74,8 +75,8 @@ for (const failure of ['draft quota', 'restoration marker'] as const) {
 test('recovery-code restoration requires a successful owner draft read even when its marker is missing', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Sign up', exact: true }).click();
-  await page.getByLabel('Username', { exact: true }).fill(`restore-${randomUUID().slice(0, 12)}`);
-  await page.getByLabel('Password', { exact: true }).fill(password);
+  await typeInput(page.getByLabel('Username', { exact: true }), `restore-${randomUUID().slice(0, 12)}`);
+  await typeInput(page.getByLabel('Password', { exact: true }), password);
   await page.getByRole('button', { name: 'Create account', exact: true }).click();
   await expect(page.getByTestId('recovery-codes')).toBeVisible();
   const codes = (await page.getByTestId('recovery-codes').textContent())!;

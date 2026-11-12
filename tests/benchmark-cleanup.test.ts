@@ -1,3 +1,5 @@
+import { cleanupLeaves } from './teardown';
+import { withShutdownDeadline } from '../scripts/owned-process';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { beforeAll, expect, it } from 'vitest';
@@ -18,7 +20,7 @@ it('removes only its database and TLS scratch after concurrent benchmark stops',
     expect((await stack.client.request('/api/players')).status).toBe(200);
     await Promise.all([stack.stop(), stack.stop()]);
     expect(await scratch()).toEqual(before);
-  } finally { try { await stack?.stop(); } finally { await rm(output, { recursive: true, force: true }); await rm(sentinel, { recursive: true, force: true }); } }
+  } finally { try { await stack?.stop(); } finally { await cleanupLeaves(() => rm(output, { recursive: true, force: true }), () => rm(sentinel, { recursive: true, force: true })); } }
 });
 it('removes database and TLS scratch even when an owned benchmark cleanup fails', async () => {
   const output = await mkdtemp(resolve('.cache/benchmark-cleanup-'));
@@ -27,12 +29,12 @@ it('removes database and TLS scratch even when an owned benchmark cleanup fails'
   let calls = 0;
   try {
     stack = await benchmarkStack(output);
-    await stack.own(async () => { calls++; throw new Error('Intentional owned resource failure'); });
+    stack.owner.addCleanup('Intentional owned resource failure', 'pool', async () => { calls++; throw new Error('Intentional owned resource failure'); });
     const results = await Promise.allSettled([stack.stop(), stack.stop()]);
     expect(results.map(result => result.status)).toEqual(['rejected', 'rejected']);
     expect(calls).toBe(1);
     expect(await scratch()).toEqual(before);
-  } finally { await stack?.stop().catch(() => {}); await rm(output, { recursive: true, force: true }); }
+  } finally { await stack?.stop().catch(() => {}); await withShutdownDeadline('Test directory cleanup', () => rm(output, { recursive: true, force: true })); }
 });
 it('releases database and TLS allocated before an invalid benchmark output path fails', async () => {
   const output = await mkdtemp(resolve('.cache/benchmark-cleanup-'));
@@ -40,5 +42,19 @@ it('releases database and TLS allocated before an invalid benchmark output path 
   try {
     await expect(benchmarkStack(join(output, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await scratch()).toEqual(before);
-  } finally { await rm(output, { recursive: true, force: true }); }
+  } finally { await withShutdownDeadline('Test directory cleanup', () => rm(output, { recursive: true, force: true })); }
+});
+
+it('bounds a stalled owned resource and still closes the server, database and TLS directory', async () => {
+  const output = await mkdtemp(resolve('.cache/benchmark-cleanup-'));
+  const before = await scratch();
+  let stack: Awaited<ReturnType<typeof benchmarkStack>> | undefined;
+  let calls = 0;
+  try {
+    stack = await benchmarkStack(output);
+    stack.owner.addCleanup('Stalled owned resource', 'pool', () => { calls++; return new Promise(() => {}); });
+    await expect(stack.stop()).rejects.toThrow('Stalled owned resource');
+    expect(calls).toBe(1);
+    expect(await scratch()).toEqual(before);
+  } finally { await stack?.stop().catch(() => {}); await withShutdownDeadline('Test directory cleanup', () => rm(output, { recursive: true, force: true })); }
 });

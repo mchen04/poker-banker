@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Request } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { addPlayer, call, closeSession, createAccount, current, menu, money, newSession, signOut } from './helpers';
@@ -21,7 +22,7 @@ test('a lost create response reconciles the submitted draft before a fresh sessi
     await route.abort('failed');
   });
   await page.getByRole('button', { name: 'New session', exact: true }).click();
-  await page.getByLabel('Session name', { exact: true }).fill('First committed game');
+  await typeInput(page.getByLabel('Session name', { exact: true }), 'First committed game');
   await page.getByRole('button', { name: 'Create session', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
   await expect(page.getByLabel('Session name', { exact: true })).toHaveCount(0);
@@ -53,8 +54,8 @@ for (const recovery of ['sheet', 'workspace'] as const) {
       await route.abort('failed');
     });
     await page.getByRole('button', { name: 'New session', exact: true }).click();
-    await page.getByLabel('Session name', { exact: true }).fill('   ');
-    await page.getByLabel('Location', { exact: true }).fill('Retained typed location');
+    await typeInput(page.getByLabel('Session name', { exact: true }), '   ');
+    await typeInput(page.getByLabel('Location', { exact: true }), 'Retained typed location');
     await page.getByRole('button', { name: 'Create session', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
     await page.reload();
@@ -71,7 +72,7 @@ for (const recovery of ['sheet', 'workspace'] as const) {
     await expect(page.getByLabel('Session name', { exact: true })).toBeEnabled();
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toEqual(bodies[0]);
-    await page.getByLabel('Session name', { exact: true }).fill('Corrected rejected game');
+    await typeInput(page.getByLabel('Session name', { exact: true }), 'Corrected rejected game');
     await page.getByRole('button', { name: 'Create session', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Corrected rejected game', exact: true })).toBeVisible();
     expect(bodies).toHaveLength(3);
@@ -100,13 +101,13 @@ test('a dropped timer-bound rejection restores an editable correction without ap
     await route.abort('failed');
   });
   await page.getByTestId(`entry-${original.id}`).getByRole('button', { name: 'Correct', exact: false }).click();
-  await page.getByLabel('Entry time', { exact: true }).fill('2026-11-09T23:00:00');
+  await typeInput(page.getByLabel('Entry time', { exact: true }), '2026-11-09T23:00:00');
   await page.getByRole('button', { name: 'Save correction', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Check saved result', exact: true }).click();
   await expect(page.getByLabel('Entry time', { exact: true })).toHaveValue(/^2026-11-09T23:00(?::00)?$/);
   expect((await current(page)).entries).toHaveLength(1);
-  await page.getByLabel('Entry time', { exact: true }).fill('2026-11-10T03:00:00');
+  await typeInput(page.getByLabel('Entry time', { exact: true }), '2026-11-10T03:00:00');
   await page.getByRole('button', { name: 'Save correction', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const after = await current(page);
@@ -136,7 +137,7 @@ test('a committed reopen stays recoverable after reload changes the available li
     await route.abort('failed');
   });
   await menu(page, 'Reopen session');
-  await page.getByLabel('Reason', { exact: true }).fill('Review the saved payout');
+  await typeInput(page.getByLabel('Reason', { exact: true }), 'Review the saved payout');
   await page.getByRole('button', { name: 'Reopen session', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
   await page.reload();
@@ -163,7 +164,7 @@ test('a committed correction stays recoverable after its original entry becomes 
     await route.abort('failed');
   });
   await page.getByTestId(`entry-${original.id}`).getByRole('button', { name: 'Correct', exact: false }).click();
-  await page.getByLabel('Replacement amount', { exact: true }).fill('200');
+  await typeInput(page.getByLabel('Replacement amount', { exact: true }), '200');
   await page.getByRole('button', { name: 'Save correction', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
   await page.reload();
@@ -193,17 +194,19 @@ test('concurrent preparations preserve the first submitted payload and retain la
     const op_id = crypto.randomUUID();
     const first = { path: '/api/sessions', method: 'POST', body: { op_id, name: 'First snapshot', played_on: '2026-11-10', currency: 'USD' } };
     const second = { ...first, body: { ...first.body, name: 'Conflicting snapshot' } };
-    await data.writeDraft(key, { op_id, name: 'Typed draft' });
+    await data.writeDraft(key, { op_id, name: 'First snapshot' });
     const submitted = await Promise.all([data.prepareDraftSubmission(key, { op_id, name: 'First snapshot' }, first), data.prepareDraftSubmission(key, { op_id, name: 'Conflicting snapshot' }, second)]);
     await data.writeDraft(key, { op_id, name: 'Changed after submission' });
     const retained = await data.readDraft<{ __submitted: typeof first }>(key);
     await data.replaySubmittedDraft(key);
     const recovered = await data.readDraft<{ name: string; op_id: string }>(key);
     const stale = await data.prepareDraftSubmission(key, { op_id, name: 'Next reviewed intent' }, { ...first, body: { ...first.body, name: 'Next reviewed intent' } });
+    const unchanged = await data.readDraft<{ op_id: string; name: string }>(key);
+    await data.writeDraft(key, { ...unchanged!, name: 'Next reviewed intent' });
     const fresh = await data.readDraft<{ op_id: string; name: string }>(key);
     await data.prepareDraftSubmission(key, fresh!, { ...first, body: { ...first.body, op_id: fresh!.op_id, name: fresh!.name } });
     await data.replaySubmittedDraft(key);
-    return { submitted, retained, recovered, stale, fresh, unsent: await data.hasUnsent(banker), originalOp: op_id };
+    return { submitted, retained, recovered, stale, unchanged, fresh, unsent: await data.hasUnsent(banker), originalOp: op_id };
   }, account.banker.id);
   expect(result.submitted.map(item => item.first).sort()).toEqual([false, true]);
   expect(result.submitted[0]!.request).toEqual(result.submitted[1]!.request);
@@ -211,6 +214,7 @@ test('concurrent preparations preserve the first submitted payload and retain la
   expect(result.recovered?.name).toBe('Changed after submission');
   expect(result.recovered?.op_id).not.toBe(result.originalOp);
   expect(result.stale.previouslyConfirmed).toBe(true);
+  expect(result.unchanged).toEqual(result.recovered);
   expect(result.fresh!.name).toBe('Next reviewed intent');
   expect(result.fresh!.op_id).not.toBe(result.originalOp);
   expect(result.unsent).toBe(false);
@@ -238,7 +242,7 @@ test('a late form acknowledgement after another tab signs out cannot restore pri
     } finally { settled(); }
   });
   await page.getByRole('button', { name: 'New session', exact: true }).click();
-  await page.getByLabel('Session name', { exact: true }).fill('Held server acknowledgement');
+  await typeInput(page.getByLabel('Session name', { exact: true }), 'Held server acknowledgement');
   await page.getByRole('button', { name: 'Create session', exact: true }).click();
   await committedRequest;
   const other = await context.newPage();
@@ -283,7 +287,7 @@ test('a dropped timing-validation rejection restores editing before a fresh timi
     await route.abort('failed');
   });
   await menu(page, 'Correct times');
-  await page.getByLabel('Started at', { exact: true }).fill('2026-11-10T21:00:00');
+  await typeInput(page.getByLabel('Started at', { exact: true }), '2026-11-10T21:00:00');
   await page.getByRole('button', { name: 'Save timing', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check saved result', exact: true })).toBeEnabled();
   await page.reload();
@@ -294,7 +298,7 @@ test('a dropped timing-validation rejection restores editing before a fresh timi
   expect((await current(page)).session.started_at).toBe('2026-11-10T18:00:00.000Z');
   expect(bodies).toHaveLength(2);
   expect(bodies[0]).toEqual(bodies[1]);
-  await page.getByLabel('Started at', { exact: true }).fill('2026-11-10T19:00:00');
+  await typeInput(page.getByLabel('Started at', { exact: true }), '2026-11-10T19:00:00');
   await page.getByRole('button', { name: 'Save timing', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const saved = await current(page);
@@ -336,7 +340,7 @@ test('a rejected timer start leaves no pending operation and correct times remai
   });
   expect(pending).toEqual({ outbox: 0, submitted: 0 });
   await menu(page, 'Correct times');
-  await page.getByLabel('Started at', { exact: true }).fill('2026-11-10T18:00:00');
+  await typeInput(page.getByLabel('Started at', { exact: true }), '2026-11-10T18:00:00');
   await page.getByRole('button', { name: 'Save timing', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const saved = await current(page);

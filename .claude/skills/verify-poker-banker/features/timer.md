@@ -28,6 +28,7 @@ Preconditions:
 - **Start by both paths and verify persistence.** Save as `.cache/verify-timer.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-timer.ts --run RUN_ID --context iphone-webkit`. Manual start and first-buy-in start use different sessions, so one cannot hide a failure in the other.
 
 ```ts
+import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
 import { addPlayer, call, closeSession, current, menu, money, newSession } from '../e2e/helpers';
 import type { SessionState } from '../src/domain/session';
@@ -61,12 +62,12 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     await step('timer-live-after-reload-and-other-context');
     await menu(page, 'Correct times');
     const corrected = new Date(Date.parse(started) - 3600000).toISOString();
-    await page.getByLabel('Started at', { exact: true }).fill(corrected.slice(0, 19));
-    await page.getByLabel('Ended at', { exact: true }).fill(new Date(Date.parse(corrected) - 1000).toISOString().slice(0, 19));
+    await typeInput(page.getByLabel('Started at', { exact: true }), corrected.slice(0, 19));
+    await typeInput(page.getByLabel('Ended at', { exact: true }), new Date(Date.parse(corrected) - 1000).toISOString().slice(0, 19));
     await page.getByRole('button', { name: 'Save timing', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('Request validation failed');
     expect((await checkState()).session.started_at).toBe(started);
-    await page.getByLabel('Ended at', { exact: true }).fill('');
+    await typeInput(page.getByLabel('Ended at', { exact: true }), '');
     await page.getByRole('button', { name: 'Save timing', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await menu(page, 'Correct times');
