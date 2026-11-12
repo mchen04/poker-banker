@@ -107,9 +107,22 @@ function stopGroup(group: Group): Promise<void> {
 
 async function stopTree(group: Group) {
   const errors: unknown[] = [];
-  try { await stopGroup(group); } catch (error) { errors.push(error); }
-  for (let index = group.descendants.length - 1; index >= 0; index--) {
-    try { await stopTree(group.descendants[index]!); } catch (error) { errors.push(error); }
+  const stopped = new Set<Group>();
+  const collect = (current: Group, groups = new Set<Group>()): Set<Group> => {
+    if (groups.has(current)) return groups;
+    groups.add(current);
+    for (const descendant of current.descendants) collect(descendant, groups);
+    return groups;
+  };
+  for (const phase of ['process', 'database']) {
+    while (true) {
+      const groups = [...collect(group)].filter(current => current.phase === phase && !stopped.has(current)).reverse();
+      if (!groups.length) break;
+      for (const current of groups) {
+        stopped.add(current);
+        try { await stopGroup(current); } catch (error) { errors.push(error); }
+      }
+    }
   }
   if (errors.length) throw new AggregateError(errors, errors.map(error => error instanceof Error ? error.message : String(error)).join('; '));
 }

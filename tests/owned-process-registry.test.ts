@@ -318,3 +318,39 @@ it('retains the transferred subtree proof for explicit forced cleanup after hand
     await owner.stop().catch(() => {});
   }
 }, 12000);
+
+it('stops handed-off application groups before database groups during explicit fallback', async () => {
+  const owner = createProcessOwner();
+  const script = `
+    import {once} from 'node:events';
+    import {createProcessOwner} from ${JSON.stringify(new URL('../scripts/owned-process.ts', import.meta.url).href)};
+    const owner=createProcessOwner();
+    const databaseOwner=createProcessOwner({phase:'database',parent:owner});
+    const app=owner.spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});console.log("ready");setInterval(()=>{},1000)'],{stdio:['ignore','pipe','ignore']});
+    const database=databaseOwner.spawn(process.execPath,['-e','console.log("ready");setInterval(()=>{},1000)'],{stdio:['ignore','pipe','ignore']});
+    await Promise.all([once(app.stdout,'data'),once(database.stdout,'data')]);
+    console.log(JSON.stringify({app:app.pid,database:database.pid}));
+    setInterval(()=>{},1000);
+  `;
+  const wrapper = owner.spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const [output] = await once(wrapper.stdout!, 'data');
+  const pids = JSON.parse(String(output)) as { app: number; database: number };
+  await withShutdownDeadline('Fallback subtree registration', async () => {
+    while (!owner.groupIds().includes(pids.app) || !owner.groupIds().includes(pids.database)) await new Promise(resolve => setTimeout(resolve, 5));
+  });
+  await owner.handoff(wrapper);
+  await owner.stop();
+  const appAliveAtDatabaseStop: boolean[] = [];
+  const originalKill = process.kill.bind(process);
+  const kill = vi.spyOn(process, 'kill').mockImplementation((pid, value) => {
+    if (pid === -pids.database && value === 'SIGTERM') appAliveAtDatabaseStop.push(alive(pids.app));
+    return originalKill(pid, value);
+  });
+  try {
+    await expect(stopOwnedProcess(wrapper)).rejects.toThrow('SIGKILL');
+    expect(alive(wrapper.pid!)).toBe(false);
+    expect(alive(pids.app)).toBe(false);
+    expect(alive(pids.database)).toBe(false);
+    expect(appAliveAtDatabaseStop).toEqual([false]);
+  } finally { kill.mockRestore(); }
+}, 12000);
