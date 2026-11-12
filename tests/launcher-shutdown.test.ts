@@ -5,6 +5,7 @@ import { expect, it } from 'vitest';
 type Scenario = {
   launcher: 'database' | 'local' | 'e2e';
   childFailure?: boolean;
+  childSignal?: boolean;
   databaseFailure?: boolean;
   poolFailure?: boolean;
   closeFailure?: boolean;
@@ -47,7 +48,8 @@ async function probe(input: Scenario): Promise<Result> {
     }
     let child;
     if (input.launcher !== 'local') {
-      child = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>process.exit(' + (input.childFailure ? 1 : 0) + ')); console.log("ready"); setInterval(()=>{},1000)'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const handler = input.childSignal ? '' : 'process.on("SIGTERM",()=>process.exit(' + (input.childFailure ? 1 : 0) + '));';
+      child = spawn(process.execPath, ['-e', handler + 'console.log("ready"); setInterval(()=>{},1000)'], { stdio: ['ignore', 'pipe', 'ignore'] });
       await once(child.stdout, 'data');
     }
     const spawnOwned = () => {
@@ -114,13 +116,14 @@ async function probe(input: Scenario): Promise<Result> {
 
 for (const scenario of [
   { name: 'successful coalesced shutdown', failure: false },
+  { name: 'an expected SIGTERM termination', childSignal: true, failure: false },
   { name: 'an owned app exiting nonzero', childFailure: true, failure: true },
   { name: 'PostgreSQL stop failure', databaseFailure: true, failure: true },
   { name: 'PostgreSQL stop failure with a throwing log sink', databaseFailure: true, logFailure: true, failure: true },
 ]) it(`consumes local database launcher shutdown failures after ${scenario.name}`, async () => {
   const result = await probe({ launcher: 'database', ...scenario });
   expect(result.runError).toBeUndefined();
-  expect(result.childExit).toBe(scenario.childFailure ? 1 : 0);
+  expect(result.childExit).toBe(scenario.childSignal ? null : scenario.childFailure ? 1 : 0);
   expect(result.rejected).toEqual([]);
   expect(result.events).toEqual(['pool-end', 'child-stop', 'database-stop', 'hook-complete']);
   expect(result.exits.length).toBeGreaterThan(0);
@@ -145,6 +148,7 @@ for (const scenario of [
 
 for (const scenario of [
   { name: 'successful coalesced owner events', failure: false },
+  { name: 'an expected SIGTERM termination', childSignal: true, failure: false },
   { name: 'an owned app exiting nonzero', childFailure: true, failure: true },
   { name: 'database cleanup failure', databaseFailure: true, failure: true },
   { name: 'database cleanup failure with a throwing log sink', databaseFailure: true, logFailure: true, failure: true },
@@ -153,7 +157,7 @@ for (const scenario of [
 ]) it(`finishes e2e fixture cleanup after ${scenario.name}`, async () => {
   const result = await probe({ launcher: 'e2e', ...scenario });
   expect(result.runError).toBeUndefined();
-  expect(result.childExit).toBe(scenario.childFailure ? 1 : 0);
+  expect(result.childExit).toBe(scenario.childSignal ? null : scenario.childFailure ? 1 : 0);
   expect(result.rejected).toEqual([]);
   expect(result.events).toEqual(['child-stop', 'database-stop', 'tls-remove']);
   expect(result.exits.length).toBeGreaterThan(0);
