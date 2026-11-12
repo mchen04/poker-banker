@@ -355,6 +355,7 @@ A fresh owned-Chromium diagnostic (`evidence/bench/turn4/profile-current/run-01/
 | R44-01 | Skip unchanged full Activity mapping; current-context correction buttons | Cash-out 1166.5 → 962.5; buy-in 1206 → 973; installed open 488.5 → 414.5 | **Rejected**: small cash-out 269 → 340, a 71 ms rise above its 26 ms MAD floor. Small buy-in 353 → 353; standard cash-out 368 → 363. | `turn4/memo-{long,small-bounded,standard-bounded}/comparison.json` |
 | R44-02 | Compress every API response with existing Hono middleware | Cash-out 1239 → 716; buy-in 1202 → 730; sign-in 1349 → 841; first viewer 2152 → 1255; offline replay 1497 → 514 | **Rejected**: small cash-out 292 → 344.5, a 52.5 ms rise above 18.5 ms MAD. | `turn4/compression-{long,small,standard}/comparison.json` |
 | R44-03 | Compress full session states only at ≥32 KiB, via outer middleware | Cash-out 1105 → 731; buy-in 1111 → 743; sign-in 1346 → 748; first viewer 2140 → 1260; offline replay 1502 → 615 | **Rejected**: small cash-out 303.5 → 314, a 10.5 ms rise above 7.5 ms MAD. Standard cash-out 359 → 362.5 stayed within 51 ms MAD. | `turn4/threshold-{long,small,standard}/comparison.json` |
+| R44-04 | Inline compression only for ≥32 KiB full JSON; include player history | Cash-out 1231 → 628; report open 1210 → 358; report filter 1120 → 248 | **Kept**: all seven long targets win every pair; both workload guards pass. | `turn4/inline-{long,small,standard}/comparison.json` |
 
 R44-01’s long target won all five pairs (204 ms gap, 68 ms maximum MAD), but its small-workload guard vetoes it. The candidate never entered application source. There are 120 valid observations across those three complete campaigns; the long campaign was marked noisy, both guard campaigns were not. Time before POST dispatch fell 253.5 → 126 ms for cash-out and 281 → 119.5 ms for buy-in, supporting the mechanism without overriding the veto.
 
@@ -365,3 +366,23 @@ R44-02 also remains rejected. All five long targets won every pair, and real HTT
 R44-01 used two observations per long leg and one per guard leg. Before any subsequent guard result, the protocol increased guard legs to two observations to reduce synthetic 100 ms CPU-duty phase granularity; five fresh paired databases and the keep rule remain unchanged. This does not rescue or resample R44-01. R44-02 used one observation per long leg and two per guard leg. No p95 is claimed.
 
 R44-03 retained the full JSON contract and left smaller responses uncompressed; all five long targets won every pair. Nevertheless it missed the declared small cash-out guard, so it also never entered application source. Five real-HTTP tests passed and 170 comparison observations completed without sample errors. These guard vetoes are decisions under this conservative synthetic-profile rule, not proof of a universal device slowdown. The same API byte contract is tested with UTF-8 names, zero-body responses, native legacy-style fetch, private owner headers and idempotent replay.
+
+### Retained large-response transport
+
+R44-04 removes the outer middleware hop: smaller payloads return synchronously from the existing JSON serialization path; only responses of at least 32,768 UTF-8 bytes invoke installed Hono 4.13.17 compression. The same writer serves complete session mutation/poll/viewer responses and player history. No state fields, ledger entries or API versions are omitted, and no client merges partial state. The report summary itself was only about 1.5 KB; its concurrently fetched player history was about 216 KB and was refetched on filter changes. That unchanged history is now compressed too.
+
+Five alternating pairs per workload. Long legs have one observation per metric; small/standard guard legs have two, declared before this attempt: cash-out represents financial responses and report open represents history loading. There are **150 valid observations, zero errors**. All long targets win five of five pairs and exceed both sides’ MADs. Guards: small cash-out 351 → 347.5 ms and report 234 → 189; standard cash-out 368.5 → 360 and report 499.5 → 189. No guard worsens.
+
+| Long metric | A median ms | B median ms | Change | Max MAD ms | Paired wins |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cash_out.confirm | 1231 | 628 | -49.0% | 15 | 5/5 |
+| entry.confirm | 1101 | 624 | -43.3% | 32 | 5/5 |
+| auth.signin | 1351 | 843 | -37.6% | 6 | 5/5 |
+| viewer.first | 2133 | 1233 | -42.2% | 34 | 5/5 |
+| offline.replay | 1512 | 519 | -65.7% | 11 | 5/5 |
+| report.open | 1210 | 358 | -70.4% | 9 | 5/5 |
+| report.filter | 1120 | 248 | -77.9% | 6 | 5/5 |
+
+Six real-HTTP regressions passed: exact decoded identity/gzip/deflate replay bytes and one stored write, native legacy-style requests, private owner/cookie/error/304/HEAD behavior, viewer redaction, and byte-identical history for 200 closed sessions with another banker rejected. Typecheck passed. An installed-source review found no blocking header, context-finalization or transaction issue. `public/sw.js` and `src/client/pwa.ts` are unchanged. The browser/API compatibility recipe is a remaining final gate, not a claimed proof yet.
+
+These are local synthetic gains. Vercel’s existing compression behavior is unverified; no live gain is claimed. App `Server-Timing` measures handler construction and excludes the later streaming-compression drain; end-to-end HTTP and confirmed-render timings include it. Raw responses, resource sizes, query counts, exact financial checks, host observations, matching build/harness hashes, source patches and cleanup receipts remain under `evidence/bench/turn4/`.
