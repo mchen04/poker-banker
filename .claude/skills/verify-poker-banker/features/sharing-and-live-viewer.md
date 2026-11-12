@@ -29,7 +29,7 @@ Preconditions:
 ```ts
 import { writeFile } from 'node:fs/promises';
 import { expect } from '@playwright/test';
-import { addPlayer, menu, money, newSession, share, switchSession, workspaceReady } from '../e2e/helpers';
+import { newContextLike, addPlayer, menu, money, newSession, share, switchSession, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, browser, baseURL, runId, evidence, step }: RecipeContext) {
@@ -41,7 +41,7 @@ export default async function ({ page, browser, baseURL, runId, evidence, step }
   await newSession(page, 'Verify private other game');
   await switchSession(page, shared.session.id);
   const link = await share(page);
-  const viewerContext = await browser.newContext({ baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
+  const viewerContext = await newContextLike(page, browser, baseURL);
   try {
     const viewer = await viewerContext.newPage();
     await viewer.goto(link);

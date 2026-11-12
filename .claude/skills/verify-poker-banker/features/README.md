@@ -16,6 +16,7 @@ This directory is the maintained source for checking user-facing poker banker be
 - The mini runner excludes `.cache/`; copy only the newly written recipe with the explicit rsync command in SKILL.md, or write it inside the mini checkout.
 - Replace `RUN_ID` in commands with the run ID from launch. Select `iphone-webkit`, `iphone-standalone` or `desktop-webkit` explicitly.
 - Start each recipe with `page.goto('/')` and `workspaceReady(page)`. Use `openNewSession(page)` for creation and `switchSession(page, id)` for picker choices.
+- Secondary contexts use `newContextLike(page, browser, baseURL)` to retain the current viewport, touch profile and standalone emulation without copying cookies.
 - Import repository browser helpers from `../e2e/helpers`. They use real UI controls and public production endpoints.
 - API fixture setup is named as setup. It does not prove a UI mutation. Saved-state proof uses read-only production API responses.
 - Capture `step` evidence before and after meaningful actions. Additional pages need their own screenshots and ARIA snapshots because `step` captures the primary page.

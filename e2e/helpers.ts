@@ -1,10 +1,28 @@
 import { typeInput } from './input';
 import { randomUUID } from 'node:crypto';
-import type { Page, TestInfo } from '@playwright/test';
+import type { Browser, Page, TestInfo } from '@playwright/test';
 import type { SessionState } from '../src/domain/session';
 import { expect, screen } from './fixtures';
 
 export const password = randomUUID();
+export async function newContextLike(page: Page, browser: Browser, baseURL: string) {
+  const profile = await page.evaluate(() => ({
+    userAgent: navigator.userAgent, hasTouch: navigator.maxTouchPoints > 0, scale: devicePixelRatio,
+    standalone: !!(navigator as Navigator & { standalone?: boolean }).standalone,
+    dark: matchMedia('(prefers-color-scheme: dark)').matches,
+  }));
+  const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', viewport: page.viewportSize() ?? undefined, userAgent: profile.userAgent, hasTouch: profile.hasTouch, isMobile: profile.hasTouch && /iPhone|iPad|Android/.test(profile.userAgent), deviceScaleFactor: profile.scale, colorScheme: profile.dark ? 'dark' : 'light', locale: 'en-US', timezoneId: 'UTC' });
+  if (profile.standalone) await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'standalone', { configurable: true, value: true });
+    const native = window.matchMedia.bind(window);
+    window.matchMedia = query => {
+      const result = native(query);
+      if (query.includes('display-mode') && query.includes('standalone')) Object.defineProperty(result, 'matches', { configurable: true, value: true });
+      return result;
+    };
+  });
+  return context;
+}
 export async function call<T>(page: Page, path: string, method = 'GET', body?: unknown): Promise<T> {
   const origin = new URL(page.url()).origin;
   const response = await page.request.fetch(`${origin}/api${path}`, { method, headers: { origin, 'content-type': 'application/json' }, ...(body === undefined ? {} : { data: body }) });

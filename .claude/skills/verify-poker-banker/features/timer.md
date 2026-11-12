@@ -30,7 +30,7 @@ Preconditions:
 ```ts
 import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
-import { addPlayer, call, closeSession, current, menu, money, newSession, workspaceReady } from '../e2e/helpers';
+import { newContextLike, addPlayer, call, closeSession, current, menu, money, newSession, workspaceReady } from '../e2e/helpers';
 import type { SessionState } from '../src/domain/session';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
@@ -52,7 +52,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
   await expect.poll(() => page.getByTestId('session-timer').textContent()).not.toBe(firstText);
   await page.reload();
   expect((await checkState()).session.started_at).toBe(started);
-  const otherContext = await browser.newContext({ baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', locale: 'en-US', timezoneId: 'UTC' });
+  const otherContext = await newContextLike(page, browser, baseURL);
   try {
     await otherContext.addCookies(await context.cookies());
     const other = await otherContext.newPage();

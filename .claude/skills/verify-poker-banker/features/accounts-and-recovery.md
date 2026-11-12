@@ -30,19 +30,32 @@ Preconditions:
 import { typeInput } from '../e2e/input';
 import { writeFile } from 'node:fs/promises';
 import { expect } from '@playwright/test';
-import { addPlayer, createAccount, newSession, signIn, signOut, workspaceReady } from '../e2e/helpers';
+import { newContextLike, addPlayer, createAccount, newSession, signIn, signOut, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, browser, baseURL, evidence, step }: RecipeContext) {
   await page.goto('/');
   await workspaceReady(page);
-  const options = { baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', locale: 'en-US', timezoneId: 'UTC' };
-  const accountContext = await browser.newContext(options);
-  const oldContext = await browser.newContext(options);
-  const recoveryContext = await browser.newContext(options);
-  const otherContext = await browser.newContext(options);
+  const accountContext = await newContextLike(page, browser, baseURL);
+  const oldContext = await newContextLike(page, browser, baseURL);
+  const recoveryContext = await newContextLike(page, browser, baseURL);
+  const otherContext = await newContextLike(page, browser, baseURL);
   try {
     const accountPage = await accountContext.newPage();
+    await accountPage.goto('/');
+    await expect(accountPage.getByRole('button', { name: 'Sign in to workspace', exact: true })).toBeVisible();
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await accountPage.emulateMedia({ colorScheme });
+      await accountPage.screenshot({ path: `${evidence}/accounts-signin-${colorScheme}.png` });
+    }
+    await accountPage.getByRole('button', { name: 'Sign up', exact: true }).click();
+    await expect(accountPage.getByRole('button', { name: 'Create account', exact: true })).toBeVisible();
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await accountPage.emulateMedia({ colorScheme });
+      await accountPage.screenshot({ path: `${evidence}/accounts-signup-${colorScheme}.png` });
+    }
+    expect(accountPage.viewportSize()).toEqual(page.viewportSize());
+    expect(await accountPage.evaluate(() => !!(navigator as Navigator & { standalone?: boolean }).standalone)).toBe(await page.evaluate(() => !!(navigator as Navigator & { standalone?: boolean }).standalone));
     const account = await createAccount(accountPage);
     const saved = await newSession(accountPage, 'Owned recovery check');
     const player = await addPlayer(accountPage, 'Owned recovery player');
