@@ -55,9 +55,9 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
     const toast = page.getByTestId('saved-confirmation');
     const bounds = await toast.locator('span').first().boundingBox();
     if (!bounds) throw new Error('Saved toast must be on screen');
-    await page.mouse.move(bounds.x + 5, bounds.y + 5); await page.mouse.down();
+    await page.mouse.move(bounds.x + 5, bounds.y + 5); await page.mouse.down(); await page.mouse.move(1, 1);
     await page.waitForTimeout(8300); await expect(toast.getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
-    await page.mouse.move(1, 1); await page.mouse.up();
+    await page.mouse.up();
     await toast.getByRole('button', { name: 'Undo', exact: true }).focus();
     await page.waitForTimeout(8300); await expect(toast).toBeVisible();
     await both('undo-toast-focused');
@@ -118,7 +118,12 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
         await capture(viewer, evidence, `viewer-owes-paid-${colorScheme}`);
       }
     } finally { await viewerContext.close(); }
-    await nav.getByRole('button', { name: 'Players', exact: true }).click(); await expect(primary).toHaveText('Buy-in'); await both('players-open-session-footer');
+    await nav.getByRole('button', { name: 'Players', exact: true }).click(); await expect(primary).toHaveText('Buy-in');
+    const rosterDebt = await page.getByTestId(`roster-player-${owing.id}`).getByText('Owes bank $50.00', { exact: true }).evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight), background: getComputedStyle(element.closest('.roster-list')!).backgroundColor }));
+    const rosterZero = await page.getByTestId(`roster-player-${owing.id}`).getByText('Bank owes $0.00', { exact: true }).evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight) }));
+    expect(rosterDebt.color).not.toBe(rosterZero.color); expect(rosterDebt.weight).toBeGreaterThan(rosterZero.weight); expect(contrast(rosterDebt.color, rosterDebt.background)).toBeGreaterThanOrEqual(4.5);
+    proofs.rosterDebt = { ...rosterDebt, zero: rosterZero, contrast: contrast(rosterDebt.color, rosterDebt.background) };
+    await both('players-open-session-footer');
     await measure('Footer buy-in from Players, choose player and Venmo', async tap => {
       await tap(primary); await expect(page.getByRole('dialog', { name: 'Choose player' })).toBeVisible();
       await tap(page.getByTestId(`choose-buy-in-${owing.id}`)); await expect(page.getByTestId('money-player')).toHaveText(owing.display_name);
