@@ -30,3 +30,4 @@ ts	phase	decision	why	evidence	result
 2026-11-11T11:34:41Z	perf	kept the players aggregation in Postgres	live A/B: all five pairs improved, 447 to 140 ms median, beyond both MADs, identical bodies	docs/PERFORMANCE.md live comparison	kept
 2026-11-11T11:34:41Z	perf	did not tune concurrent writes	only one 5.2 s outlier in 50 and server time is not observable live	docs/PERFORMANCE.md live baseline	left as stated limit
 2026-11-11T11:34:41Z	ship	enabled the Vercel automation bypass for deployment URLs	needed to benchmark an unpromoted candidate against the same database	value only in the ignored env file	used for the live A/B
+2026-11-12T01:34:46Z	auth	fixed 180-day browser cookie; only session creation sets pb_session	Round 26 orchestrator decision: delayed authenticated or logout replies must not replace or clear a newer login; server expiry remains enforced	docs/ARCHITECTURE.md Auth and recovery; tests/auth-response-races.test.ts	decided
