@@ -78,7 +78,8 @@ function MetricList({ metrics, currency }: { metrics: Report['groups'][number]['
   }
   return <dl className="metric-list">{fields.map(field => {
     const metric = metrics[field.key];
-    return <div key={field.key} data-testid={`report-${field.key}`}><dt>{field.title}<small>{metric.sessions_used} session{metric.sessions_used === 1 ? '' : 's'} used</small></dt><dd className={metric.value === null ? 'unavailable' : undefined}>{display(metric, field.type, field.key)}</dd></div>;
+    const shortDuration = field.type === 'duration' && metric.value && 'numerator' in metric.value && BigInt(metric.value.numerator) > 0n && BigInt(metric.value.numerator) < 60000n * BigInt(metric.value.denominator);
+    return <div key={field.key} data-testid={`report-${field.key}`}><dt>{field.title}<small>{metric.sessions_used} session{metric.sessions_used === 1 ? '' : 's'} used</small>{shortDuration && <small>Under one minute; hourly rates use the exact time.</small>}</dt><dd className={metric.value === null ? 'unavailable' : undefined}>{display(metric, field.type, field.key)}</dd></div>;
   })}</dl>;
 }
 function FilterForm({ value, apply }: { value: ReportFilters; apply: (value: ReportFilters) => void }) {

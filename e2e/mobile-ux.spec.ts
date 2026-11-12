@@ -44,6 +44,11 @@ test('cents, invalid precision and zero cash-out agree across saved entries, tot
   await page.getByTestId(`roster-player-${player.id}`).click();
   await expect(page.getByTestId('report-profit_loss_minor')).toContainText('−$12.50');
   await expect(page.getByTestId('report-net_after_expenses_minor')).toContainText('−$13.25');
+  await expect(page.getByTestId('report-duration_ms')).toContainText('Under one minute; hourly rates use the exact time.');
+  for (const label of ['Overall', 'Location', 'Game', 'Weekday', 'Month']) {
+    const button = page.getByRole('button', { name: label, exact: true });
+    expect(await button.evaluate(button => { const range = document.createRange(); range.selectNodeContents(button); return range.getClientRects().length === 1 && button.scrollWidth <= button.clientWidth; })).toBe(true);
+  }
   await screen(page, info, 'ux-cents-report');
 });
 

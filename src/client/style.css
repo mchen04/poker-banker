@@ -146,7 +146,7 @@ ul { padding-left: 1.25rem; }
 .account-section { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .summary-value { font-size: 1.5rem; font-weight: 650; font-variant-numeric: tabular-nums; }
 .report-groups { flex-wrap: wrap; }
-.report-groups button { font-size: .8125rem; }
+.report-groups button { flex: 1 0 auto; font-size: .8125rem; white-space: nowrap; }
 .report-bucket { margin-top: 1.5rem; padding: 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: .65rem; }
 .metric-list { margin: 0; }
 .metric-list > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem 1rem; padding: .9rem 0; border-bottom: 1px solid var(--line); }
@@ -164,7 +164,7 @@ summary { cursor: pointer; min-height: 44px; padding: .6rem 0; font-size: .875re
 .outbox { border: 1px solid var(--line); background: var(--surface); padding: 1rem; overflow-wrap: anywhere; }
 .outbox li { border-top: 1px solid var(--line); padding: .75rem 0; display: flex; flex-wrap: wrap; gap: .5rem; }
 .outbox strong, .outbox span { flex-basis: 100%; font-size: .875rem; }
-@media (min-width: 700px) { .app-bar { padding: .8rem 1.5rem; } .workspace { padding-top: 2rem; } .session-switcher { padding-top: 1rem; } .session-heading h1 { font-size: 2.25rem; } .sheet-backdrop { align-items: center; padding: 2rem; } .sheet { border-radius: .85rem; max-height: 100%; } .totals { grid-template-columns: 1fr 1fr; } .payment-totals { grid-template-columns: 1fr 1fr; align-items: center; } }
+@media (min-width: 700px) { .app-bar { padding: .8rem 1.5rem; } .workspace { padding-top: 1rem; } .session-switcher { padding-top: .5rem; } .session-heading h1 { font-size: 2.25rem; } .sheet-backdrop { align-items: center; padding: 2rem; } .sheet { border-radius: .85rem; max-height: 100%; } .totals { grid-template-columns: 1fr 1fr; } .payment-totals { grid-template-columns: 1fr 1fr; align-items: center; } }
 .sheet-fields:has(.sheet-form) { display: flex; flex-direction: column; padding-bottom: 0; overflow: hidden; }
 .sheet-form { flex: 1 1 auto; overflow: hidden; display: flex; flex-direction: column; min-height: 0; margin: 0; }
 .form-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: .15rem 2px .75rem; }
