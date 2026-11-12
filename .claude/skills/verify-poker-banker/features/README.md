@@ -57,6 +57,26 @@ export default async function ({ page, browser, baseURL, evidence, runId }: Reci
 }
 ```
 
-The shared browser helpers retain an explicit `r36-previous-` release-fixture branch for the pinned `dc2082b` update proof. Only that archived client uses its old navigation, picker and paid-checkbox controls. Current-release journeys require Table navigation and the current segmented controls; there is no generic old-label fallback.
+The shared browser helpers retain explicit `r36-previous-` and `r38-legacy-302-` release-fixture branches for pinned `dc2082b` and `30209c1` update proofs. Those archived clients use their respective old navigation, picker and paid-checkbox controls. Current-release journeys require Table navigation and the current segmented controls; there is no generic old-label fallback.
 
 The recipe daemon uses `tsx`. Keep browser-evaluated callbacks self-contained; named local arrow helpers can serialize an unavailable `__name` helper. The shared capture helper uses inline callbacks and was executed through the skill in both contexts.
+
+## Footer and Undo follow-ups
+
+`e2e/ux-followups.ts` supplies `e2e/r39-ux.spec.ts` and the following local skill recipe. It creates its own session and can run after the approval capture on the same banker. It captures open/closed Table and Players footers, full-width cash-out blockers, debt/Paid up rows, two-line names, the paused Undo toast and retained-timer explanation in both themes. Desktop uses 1440×1000; phone uses 393×659. A logged-out viewer proves the same debt styling. Report setup uses two named public-API fixtures with hourly results of $0 and $2,000, so sample variation must show $1,414.21. Those fixtures prove display, not UI session creation.
+
+Save as `.cache/r39-ux.ts`, copy that single file explicitly, then run `recipe .cache/r39-ux.ts --run RUN_ID --context iphone-standalone` and repeat in a fresh local run with `desktop-webkit`. The ordinary approval helper must run first because it measures first-session creation. Evidence keeps both tap tables in separate directories.
+
+```ts
+import { join } from 'node:path';
+import { uxApproval } from '../e2e/ux-approval';
+import { uxFollowups } from '../e2e/ux-followups';
+import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
+
+export default async function (context: RecipeContext) {
+  await uxApproval({ ...context, evidence: join(context.evidence, 'approval') });
+  await uxFollowups({ ...context, evidence: join(context.evidence, 'followups') });
+}
+```
+
+Pointer hold, focus and an open sheet each keep Undo available for an observed 8.3 seconds without changing the clock. An idle toast remains at 4.8 seconds and disappears by 8.4. Undo remains restricted to the latest owned receipt. Undoing the automatic first buy-in keeps the separately recorded timer and offers Correct times; its visible history is never silently reset. Emulated pointer/viewport behavior does not prove a physical iOS touch or software keyboard. Seal evidence and clean up after every attempt.
