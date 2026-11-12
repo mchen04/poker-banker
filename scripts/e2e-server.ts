@@ -8,6 +8,8 @@ import { testDatabase } from '../tests/database';
 const owner = createProcessOwner();
 let exitCode = 0;
 let stopping: Promise<void> | undefined;
+let certificateDir: string | undefined;
+owner.addCleanup('E2E TLS cleanup', 'cleanup', () => certificateDir ? rm(certificateDir, { recursive: true, force: true }) : undefined);
 function fail(message: string) {
   exitCode ||= 1;
   process.exitCode = exitCode;
@@ -25,10 +27,9 @@ if (typeof process.send === 'function' && !process.connected) finish(1);
 
 async function initialize() {
   const database = await testDatabase({ owner });
-  const certificateDir = await owner.launch(() => mkdtemp(resolve('.cache/e2e-tls-')));
-  owner.addCleanup('E2E TLS cleanup', 'cleanup', () => rm(certificateDir, { recursive: true, force: true }));
-  const key = `${certificateDir}/key.pem`;
-  const cert = `${certificateDir}/cert.pem`;
+  const directory = await owner.launch(async () => certificateDir = await mkdtemp(resolve('.cache/e2e-tls-')));
+  const key = `${directory}/key.pem`;
+  const cert = `${directory}/cert.pem`;
   await runOwned(owner, 'openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', key, '-out', cert]);
   owner.checkpoint();
   const child = spawnOwned(owner, process.execPath, ['--import', 'tsx', fileURLToPath(new URL('../src/server/local.ts', import.meta.url))], {

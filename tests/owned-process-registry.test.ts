@@ -269,3 +269,34 @@ it.each([0, 1])('authorizes supervisor SIGTERM through %s relay owners before ac
   expect(wrapper.exitCode).toBe(0);
   expect(pids.map(pid => alive(pid))).toEqual(pids.map(() => false));
 });
+
+it('retains the transferred subtree proof for explicit forced cleanup after handoff', async () => {
+  const owner = createProcessOwner();
+  const script = `
+    import {createProcessOwner} from ${JSON.stringify(new URL('../scripts/owned-process.ts', import.meta.url).href)};
+    const owner=createProcessOwner();
+    const child=owner.spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});console.log("ready");setInterval(()=>{},1000)'],{stdio:['ignore','pipe','ignore']});
+    child.stdout.once('data',()=>console.log(child.pid));
+    process.on('SIGTERM',()=>{});
+    setInterval(()=>{},1000);
+  `;
+  const wrapper = owner.spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+  try {
+    const [output] = await once(wrapper.stdout!, 'data');
+    const descendantPid = Number(String(output).trim());
+    await withShutdownDeadline('Transferred subtree registration', async () => {
+      while (!owner.groupIds().includes(descendantPid)) await new Promise(resolve => setTimeout(resolve, 5));
+    });
+    await owner.handoff(wrapper);
+    await owner.stop();
+    expect(owner.groupIds()).toEqual([]);
+    expect(alive(wrapper.pid!)).toBe(true);
+    expect(alive(descendantPid)).toBe(true);
+    await expect(stopOwnedProcess(wrapper)).rejects.toThrow('SIGKILL');
+    expect(alive(wrapper.pid!)).toBe(false);
+    expect(alive(descendantPid)).toBe(false);
+  } finally {
+    await stopOwnedProcess(wrapper).catch(() => {});
+    await owner.stop().catch(() => {});
+  }
+}, 12000);

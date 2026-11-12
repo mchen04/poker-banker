@@ -256,12 +256,12 @@ export class ProcessOwner {
     }
   }
 
-  private removeGroup(group: Group) {
+  private removeGroup(group: Group, detach = true) {
     group.handedOff = true;
     if (this.groups.get(group.pid) === group) this.groups.delete(group.pid);
-    for (const descendant of group.descendants) this.removeGroup(descendant);
-    if (group.parent) group.parent.descendants = group.parent.descendants.filter(descendant => descendant !== group);
-    this.parent?.removeGroup(group);
+    for (const descendant of group.descendants) this.removeGroup(descendant, false);
+    if (detach && group.parent) group.parent.descendants = group.parent.descendants.filter(descendant => descendant !== group);
+    this.parent?.removeGroup(group, detach);
   }
 
   async handoff(child: ChildProcess) {

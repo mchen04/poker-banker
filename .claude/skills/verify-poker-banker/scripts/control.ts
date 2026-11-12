@@ -262,11 +262,13 @@ else if (action === 'launch') {
   const stopLaunch = () => launchCleanup ??= (async () => {
     child?.ref();
     if (handoffTask) await handoffTask.catch(() => {});
+    const errors: unknown[] = [];
     if (handedOff && child) {
-      await request({ action: 'cleanup' });
-      await stopOwned(child);
+      try { await request({ action: 'cleanup' }); } catch (error) { errors.push(error); }
+      try { await stopOwned(child); } catch (error) { errors.push(error); }
     }
-    await owner.stop();
+    try { await owner.stop(); } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, 'Verification launch cleanup failed');
     await withShutdownDeadline('Verification launch socket removal', () => rm(socket, { force: true }));
     await withShutdownDeadline('Verification launch metadata removal', () => rm(metadata, { force: true }));
   })();
