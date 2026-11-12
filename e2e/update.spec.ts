@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { test, expect, screen } from './fixtures';
 import { addPlayer, createAccount, current, newSession, openMoney, workerReady } from './helpers';
 import { buildRelease } from './global-setup';
@@ -20,21 +21,21 @@ test('waiting release update after hidden and visible preserves auth, drafts and
   test.setTimeout(120000);
   const releaseA = `e2e-A-${testInfo.project.name}`;
   const releaseB = `e2e-B-${testInfo.project.name}`;
-  buildRelease(releaseA);
+  await buildRelease(releaseA);
   const user = await createAccount(page);
   const state = await newSession(page, 'Survives update');
   const player = await addPlayer(page, 'Justin');
   await workerReady(page);
   await expect.poll(() => version(page)).toBe(releaseA);
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('37.');
+  await typeInput(page.getByTestId('money-amount'), '37.');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }).click();
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
     document.dispatchEvent(new Event('visibilitychange'));
   });
-  buildRelease(releaseB);
+  await buildRelease(releaseB);
   await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration('/'); if (!registration) throw new Error('Local service worker registration disappeared'); await registration.update(); });
   await expect.poll(() => page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/'))?.waiting)).toBe(true);
   expect(await version(page)).toBe(releaseA);
@@ -50,7 +51,7 @@ test('waiting release update after hidden and visible preserves auth, drafts and
   await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
   await expect(page.getByRole('heading', { name: 'Survives update', exact: true })).toBeVisible();
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('37.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('37.');
   await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect((await current(page)).session.id).toBe(state.session.id);
   expect((await page.request.get('/api/auth/me')).status()).toBe(200);

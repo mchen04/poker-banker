@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { test, expect, screen } from './fixtures';
 import { addPlayer, createAccount, current, newSession, openMoney, workerReady } from './helpers';
 
@@ -10,7 +11,7 @@ test('an offline reload leaves the start unknown until real entry and table time
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Unknown offline start', exact: true })).toBeVisible();
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('100');
+  await typeInput(page.getByTestId('money-amount'), '100');
   await page.getByLabel('Paid now', { exact: true }).uncheck();
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Not saved yet', exact: true })).toBeVisible();
@@ -30,14 +31,14 @@ test('an offline reload leaves the start unknown until real entry and table time
   await screen(page, testInfo, 'start-time-unknown');
   const realStart = new Date(Date.parse(unknown.server_now) - 7200000).toISOString().slice(0, 19);
   await page.getByRole('button', { name: 'Correct Buy-in $100.00', exact: true }).click();
-  await page.getByLabel('Entry time', { exact: true }).fill(realStart);
+  await typeInput(page.getByLabel('Entry time', { exact: true }), realStart);
   await page.getByRole('button', { name: 'Save correction', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const corrected = await current(page);
   expect(corrected.session.started_at).toBeNull();
   expect(corrected.entries.find(entry => entry.kind === 'buy_in' && entry.voids_entry_id === null && entry.occurred_at !== null)?.occurred_at).toBe(`${realStart}.000Z`);
   await page.getByRole('button', { name: 'Correct times', exact: true }).click();
-  await page.getByLabel('Started at', { exact: true }).fill(realStart);
+  await typeInput(page.getByLabel('Started at', { exact: true }), realStart);
   await page.getByRole('button', { name: 'Save timing', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.reload();

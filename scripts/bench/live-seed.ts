@@ -1,3 +1,4 @@
+import { withShutdownDeadline } from '../owned-process';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, realpath, lstat } from 'node:fs/promises';
@@ -115,7 +116,7 @@ export async function writeLiveSeedState(path: string, client: LiveClient, fixtu
   const parsed = seedStateSchema.safeParse({ format: 'poker-banker-live-seed-v1', baseURL: client.baseURL, sessionCookie: await client.sessionCookie(), fixture });
   assert(parsed.success, 'Invalid owned live seed state');
   const file = await open(target, 'wx', 0o600);
-  try { await file.writeFile(JSON.stringify(parsed.data)); } finally { await file.close(); }
+  try { await file.writeFile(JSON.stringify(parsed.data)); } finally { await withShutdownDeadline('Owned benchmark seed file close', () => file.close()); }
 }
 export async function readLiveSeedState(path: string): Promise<LiveSeedState> {
   const target = await statePath(path, false);
@@ -130,7 +131,7 @@ export async function readLiveSeedState(path: string): Promise<LiveSeedState> {
     liveOrigin(parsed.data.baseURL);
     assert(parsed.data.fixture.playerIds.includes(parsed.data.fixture.playerId), 'Invalid owned seed player');
     return parsed.data;
-  } finally { await file.close(); }
+  } finally { await withShutdownDeadline('Owned benchmark seed file close', () => file.close()); }
 }
 export async function reuseLiveSeed(client: LiveClient, state: LiveSeedState) {
   client.ownSecret(state.fixture.token);

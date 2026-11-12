@@ -1,23 +1,36 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { closeOwnedServer } from '../scripts/close-server';
+import { spawn } from './processes';
+import type { ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { afterAll, expect, it } from 'vitest';
 import { testDatabase } from './database';
-import { stopOwnedProcess } from '../scripts/owned-process';
+import { stopOwnedProcess, withShutdownDeadline } from '../scripts/owned-process';
 
 await mkdir('.cache', { recursive: true });
 const marker = await mkdtemp(resolve('.cache/pg-sentinel-'));
 await writeFile(`${marker}/keep.txt`, 'another run');
-afterAll(async () => { await rm(marker, { recursive: true, force: true }); });
+afterAll(async () => { await withShutdownDeadline('Test directory cleanup', () => rm(marker, { recursive: true, force: true })); });
 async function scratch() { return (await readdir(resolve('.cache'))).filter(name => /^(pg-|e2e-tls-)/.test(name)).sort(); }
 async function exists(path: string) { try { await access(path); return true; } catch { return false; } }
 async function availablePort() {
   const server = createServer(); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as { port: number }).port;
-  await new Promise<void>(resolve => server.close(() => resolve())); return port;
+  await closeOwnedServer(server); return port;
 }
-function exited(child: ChildProcess) { return new Promise<number | null>(resolve => child.once('exit', code => resolve(code))); }
+function exited(child: ChildProcess) { return child.exitCode !== null || child.signalCode !== null ? Promise.resolve(child.exitCode) : once(child, 'exit', { signal: AbortSignal.timeout(10000) }).then(([code]) => code as number | null); }
+async function ready(child: ChildProcess, output: () => string, signal: AbortSignal) {
+  const stopped = new AbortController();
+  const onExit = () => stopped.abort(new Error('Owned server exited before readiness'));
+  child.once('exit', onExit);
+  try {
+    if (child.exitCode !== null || child.signalCode !== null) onExit();
+    const current = AbortSignal.any([signal, stopped.signal]);
+    while (!output().includes('Poker banker ready at')) await once(child.stdout!, 'data', { signal: current });
+  } finally { child.removeListener('exit', onExit); }
+}
 it('removes exactly its database directory after concurrent stops while keeping another run intact', async () => {
   const before = await scratch();
   const database = await testDatabase();
@@ -42,9 +55,9 @@ it('removes its database on migration failure without touching the caller-owned 
     await expect(testDatabase({ migrationDirectory: directory })).rejects.toThrow();
     expect(await scratch()).toEqual(before);
     expect(await readFile(`${directory}/0001_bad.sql`, 'utf8')).toBe('SELECT * FROM absent_cleanup_table');
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  } finally { await withShutdownDeadline('Test directory cleanup', () => rm(directory, { recursive: true, force: true })); }
 });
-for (const method of ['ipc', 'signal', 'startup'] as const) it(`cleans database and TLS scratch on ${method} server shutdown`, async () => {
+for (const method of ['ipc', 'signal', 'startup'] as const) it(`cleans database and TLS scratch on ${method} server shutdown`, async ({ signal }) => {
   const before = await scratch();
   const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { env: { ...process.env, PORT: String(await availablePort()) }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let output = '';
@@ -55,7 +68,7 @@ for (const method of ['ipc', 'signal', 'startup'] as const) it(`cleans database 
       await expect.poll(async () => (await scratch()).filter(name => !before.includes(name)).length).toBeGreaterThan(0);
       await stopOwnedProcess(child);
     } else {
-      await expect.poll(() => output).toContain('Poker banker ready at');
+      await ready(child, () => output, signal);
       if (method === 'signal') {
         const done = exited(child); child.kill('SIGTERM'); expect(await done).toBe(0);
       } else await stopOwnedProcess(child);
@@ -69,7 +82,7 @@ it('cleans database and TLS scratch when the HTTP listener cannot start', async 
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/e2e-server.ts'], { env: { ...process.env, PORT: String((server.address() as { port: number }).port) }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   try { expect(await exited(child)).toBe(1); expect(await scratch()).toEqual(before); }
-  finally { await new Promise<void>(resolve => server.close(() => resolve())); if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child); }
+  finally { try { await closeOwnedServer(server); } finally { if (child.exitCode === null && child.signalCode === null) await stopOwnedProcess(child); } }
 });
 
 it('removes its database after its owning process exits without calling stop', async () => {
@@ -86,7 +99,7 @@ it('removes its database after its owning process exits without calling stop', a
 it('reports a failed spawn without waiting for an exit event that cannot arrive', async () => {
   const child = spawn(`${marker}/missing-owned-process`, [], { stdio: 'ignore' });
   await new Promise<void>(resolve => child.once('error', () => resolve()));
-  await expect(stopOwnedProcess(child)).rejects.toThrow('Owned process failed to start');
+  await expect(stopOwnedProcess(child)).rejects.toThrow('ENOENT');
 });
 
 it('removes a database when its owner exits during startup before readiness', async () => {
@@ -110,9 +123,9 @@ it('removes a database when its owner exits during startup before readiness', as
 
 it('accepts requested termination before a handler is installed but rejects unrelated failed exits', async () => {
   const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
-  await stopOwnedProcess(child, 'signal');
+  await stopOwnedProcess(child);
   expect(child.signalCode).toBe('SIGTERM');
   const failed = spawn(process.execPath, ['-e', 'process.exit(17)'], { stdio: 'ignore' });
   await exited(failed);
-  await expect(stopOwnedProcess(failed, 'signal')).rejects.toThrow('Owned process exited 17');
+  await expect(stopOwnedProcess(failed)).rejects.toThrow('Owned process exited 17');
 });

@@ -18,7 +18,14 @@ export async function transaction<T>(pool: Database, action: (client: Transactio
   }
 }
 
-export function createPool(connectionString = process.env.DATABASE_URL): Database {
+export function createPool(connectionString = process.env.DATABASE_URL, max = 10): Database {
   if (!connectionString) throw new Error('DATABASE_URL is required');
-  return new pg.Pool({ connectionString, max: 10 });
+  const pool = new pg.Pool({ connectionString, max });
+  pool.on('error', error => {
+    try {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      console.error(typeof code === 'string' && /^[A-Z0-9_]{1,64}$/.test(code) ? code : 'Database connection error');
+    } catch {}
+  });
+  return pool;
 }

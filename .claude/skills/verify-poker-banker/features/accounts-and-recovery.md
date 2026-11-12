@@ -27,6 +27,7 @@ Preconditions:
 - **Exercise access and recovery.** Save the block as `.cache/verify-accounts.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-accounts.ts --run RUN_ID --context iphone-webkit`. The assertions prove acknowledgement, signin, wrong-password rejection, code reuse rejection and revoked cookies. The primary banker's data remains untouched.
 
 ```ts
+import { typeInput } from '../e2e/input';
 import { writeFile } from 'node:fs/promises';
 import { expect } from '@playwright/test';
 import { addPlayer, createAccount, newSession, signIn, signOut } from '../e2e/helpers';
@@ -48,8 +49,8 @@ export default async function ({ page, browser, baseURL, evidence, step }: Recip
     await oldContext.addCookies(await accountContext.cookies());
     expect((await oldContext.request.get(`${baseURL}/api/auth/me`)).status()).toBe(200);
     await signOut(accountPage);
-    await accountPage.getByLabel('Username', { exact: true }).fill(account.username);
-    await accountPage.getByLabel('Password', { exact: true }).fill('deliberately-wrong-password');
+    await typeInput(accountPage.getByLabel('Username', { exact: true }), account.username);
+    await typeInput(accountPage.getByLabel('Password', { exact: true }), 'deliberately-wrong-password');
     await accountPage.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
     await expect(accountPage.getByRole('alert')).toBeVisible();
     await signIn(accountPage, account.username);
@@ -58,9 +59,9 @@ export default async function ({ page, browser, baseURL, evidence, step }: Recip
     await recover.getByRole('button', { name: 'Recover account', exact: true }).click();
     await recover.screenshot({ path: `${evidence}/accounts-recovery-before.png` });
     await writeFile(`${evidence}/accounts-recovery-before.aria.txt`, await recover.locator('body').ariaSnapshot());
-    await recover.getByLabel('Username', { exact: true }).fill(account.username);
-    await recover.getByLabel('Recovery code', { exact: true }).fill(account.codes[0]!);
-    await recover.getByLabel('New password', { exact: true }).fill('owned-recovery-password-2026');
+    await typeInput(recover.getByLabel('Username', { exact: true }), account.username);
+    await typeInput(recover.getByLabel('Recovery code', { exact: true }), account.codes[0]!);
+    await typeInput(recover.getByLabel('New password', { exact: true }), 'owned-recovery-password-2026');
     await recover.getByRole('button', { name: 'Reset password', exact: true }).click();
     await expect(recover.getByText('Password reset. Sign in with your new password.', { exact: true })).toBeVisible();
     expect((await oldContext.request.get(`${baseURL}/api/auth/me`)).status()).toBe(401);

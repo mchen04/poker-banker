@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Page, Request } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { addPlayer, call, createAccount, keepMoneyDraft, menu, newSession, openMoney, password } from './helpers';
@@ -87,7 +88,7 @@ for (const action of ['roster', 'share', 'logout'] as const) {
     const sessionA = await newSession(page, `A private ${action}`);
     const playerA = await addPlayer(page, `A player ${action}`);
     await openMoney(page, playerA.id);
-    await page.getByLabel('Amount', { exact: true }).fill('37.25');
+    await typeInput(page.getByTestId('money-amount'), '37.25');
     await keepMoneyDraft(page);
     const resumePoll = await holdCurrentPoll(page, sessionA.session.id);
     const blank = await context.newPage();

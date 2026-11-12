@@ -1,3 +1,4 @@
+import { closeOwnedServer } from '../scripts/close-server';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
@@ -23,7 +24,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try {
-    if (server) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    if (server) await closeOwnedServer(server);
   } finally { await database?.stop(); }
 });
 
@@ -36,7 +37,7 @@ function request(path: string, cookie = '', method = 'GET', body?: unknown, clai
 }
 
 async function signup() {
-  const response = await request('/auth/signup', '', 'POST', { username: `proof-${randomUUID().slice(0, 12)}`, password: 'a-secure-response-proof-password' });
+  const response = await request('/auth/signup', '', 'POST', { username: `proof-${randomUUID().slice(0, 12)}`, password: randomUUID() });
   expect(response.status).toBe(200);
   const value = await response.json() as { banker: { id: string } };
   return { id: value.banker.id, cookie: response.headers.get('set-cookie')!.split(';')[0]! };

@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import type { Request } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
@@ -31,12 +32,12 @@ test('a version 1 database upgrades forward and preserves both session drafts ex
   }, [{ key, value }, { key: otherKey, value: otherValue }]);
   await page.goto(`/?session=${first.session.id}`);
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('73.45');
+  await expect(page.getByTestId('money-amount')).toHaveValue('73.45');
   await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await keepMoneyDraft(page);
   await page.getByTestId(`session-tab-${second.session.id}`).click();
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('91.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('91.');
   const migrated = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => { const open = indexedDB.open('poker-banker'); open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
     const records = await new Promise<Record<string, unknown>[]>((resolve, reject) => { const read = db.transaction('drafts').objectStore('drafts').getAll(); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error); });
@@ -55,7 +56,7 @@ test('rejected writes stay visible, block the session in order, and support retr
   await page.context().setOffline(true);
   for (const amount of ['20', '30']) {
     await openMoney(page, player.id);
-    await page.getByLabel('Amount', { exact: true }).fill(amount);
+    await typeInput(page.getByTestId('money-amount'), amount);
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   }
   state = await call<SessionState>(page, `/sessions/${state.session.id}/entries`, 'POST', { op_id: randomUUID(), player_id: player.id, kind: 'cash_out', amount_minor: '10000' });
@@ -80,7 +81,7 @@ test('rejected writes stay visible, block the session in order, and support retr
   expect(buys.map(entry => entry.amount_minor)).toEqual(['10000', '2000', '3000']);
   await page.context().setOffline(true);
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('99');
+  await typeInput(page.getByTestId('money-amount'), '99');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Discard', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
@@ -114,7 +115,7 @@ test('signing out in another tab prevents a late acknowledged write from restori
     } finally { settled(); }
   });
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('25');
+  await typeInput(page.getByTestId('money-amount'), '25');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect.poll(() => committed).toBe(true);
   const other = await context.newPage();

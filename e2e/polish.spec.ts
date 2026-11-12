@@ -1,3 +1,4 @@
+import { typeInput } from './input';
 import { test, expect, screen } from './fixtures';
 import { addPlayer, createAccount, current, keepMoneyDraft, money, newSession, openMoney } from './helpers';
 
@@ -9,7 +10,7 @@ test('money cancellation, last buy-in, method selection and compact controls pre
   await money(page, player.id, '40', { method: 'cash' });
   await money(page, player.id, '60', { method: 'venmo' });
   await openMoney(page, player.id);
-  const amount = page.getByLabel('Amount', { exact: true });
+  const amount = page.getByTestId('money-amount');
   await amount.focus();
   const focus = await amount.evaluate(input => { const style = getComputedStyle(input); return { width: style.outlineWidth, offset: style.outlineOffset, outline: style.outlineColor, border: style.borderTopColor, shadow: style.boxShadow }; });
   expect(focus).toMatchObject({ width: '2px', offset: '-2px', shadow: 'none' });
@@ -35,7 +36,7 @@ test('money cancellation, last buy-in, method selection and compact controls pre
   await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
   await openMoney(page, player.id);
   await expect(amount).toHaveValue('');
-  await amount.fill('17.');
+  await typeInput(amount, '17.');
   await keepMoneyDraft(page);
   await page.reload();
   await openMoney(page, player.id);

@@ -93,10 +93,10 @@ function RenameForm({ player, saved }: { player: { id: string; display_name: str
   const [error, setError] = useState('');
   useFormBusy(busy);
   if (!draft.ready) return draft.error ? <ErrorText text={draft.error} /> : <p>Restoring draft…</p>;
-  if (draft.submitted) return <DraftRecovery pending={busy} recover={() => draft.reconcile()} recovered={() => saved()} />;
+  if (draft.submitted) return <DraftRecovery pending={busy} notice={draft.error} recover={() => draft.reconcile()} recovered={() => saved()} />;
   return <form onSubmit={event => {
     event.preventDefault(); if (busy) return; setBusy(true); setError('');
     void draft.submit(`/api/players/${player.id}`, { op_id: draft.value.op_id, display_name: draft.value.name }, 'PATCH')
       .then(async () => { saved(); }).catch(problem => { setError(problem.message); setBusy(false); });
-  }}><label>Player name<input value={draft.value.name} onChange={event => draft.update({ ...draft.value, name: event.target.value })} required /></label><ErrorText text={error || draft.error} /><button className="primary wide" disabled={busy}>Save name</button></form>;
+  }}><label>Player name<input value={draft.value.name} onChange={event => draft.update({ ...draft.value, name: event.target.value })} required /></label><ErrorText text={draft.error || error} /><button className="primary wide" disabled={busy}>Save name</button></form>;
 }

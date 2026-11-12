@@ -31,6 +31,7 @@ Preconditions:
 - **Queue, reload, reconnect and replay.** Save as `.cache/verify-offline.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-offline.ts --run RUN_ID --context iphone-webkit`. The recipe captures the real POST body when connectivity returns and replays that production request without editing the outbox.
 
 ```ts
+import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
 import { addPlayer, current, menu, newSession, openMoney, workerReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
@@ -45,7 +46,7 @@ export default async function ({ page, context, baseURL, runId, step, checkState
   await context.setOffline(true);
   try {
     await openMoney(page, player.id);
-    await page.getByLabel('Amount', { exact: true }).fill('20');
+    await typeInput(page.getByTestId('money-amount'), '20');
     await page.getByRole('button', { name: 'Save entry', exact: true }).dblclick();
     await expect(page.getByText('Not saved yet', { exact: true }).first()).toBeVisible();
     await expect(page.getByTestId('totals')).not.toContainText('$20.00');
@@ -89,6 +90,7 @@ export default async function ({ page, context, baseURL, runId, step, checkState
 - **Prove rejection, Retry and Discard.** Save the next block as `.cache/verify-rejected.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-rejected.ts --run RUN_ID --context iphone-webkit`. A second owned context closes the game while the first is offline. The visible rejection is therefore produced by the real server lifecycle.
 
 ```ts
+import { typeInput } from '../e2e/input';
 import { randomUUID } from 'node:crypto';
 import { expect } from '@playwright/test';
 import { addPlayer, closeSession, menu, money, newSession, openMoney } from '../e2e/helpers';
@@ -112,7 +114,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     await context.setOffline(true);
     for (const amount of ['20', '30']) {
       await openMoney(page, player.id);
-      await page.getByLabel('Amount', { exact: true }).fill(amount);
+      await typeInput(page.getByTestId('money-amount'), amount);
       await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     }
     await closeSession(other);
@@ -120,11 +122,11 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     await expect(page.getByText('Reopen this session before writing', { exact: false })).toBeVisible();
     await step('offline-rejected-with-reason');
     await menu(other, 'Reopen session');
-    await other.getByLabel('Reason', { exact: true }).fill('Apply owned queued entries');
+    await typeInput(other.getByLabel('Reason', { exact: true }), 'Apply owned queued entries');
     await other.getByRole('dialog').getByRole('button', { name: 'Reopen session', exact: true }).click();
     await expect(other.getByRole('dialog')).toHaveCount(0);
     await menu(other, 'Correct times');
-    await other.getByLabel('Ended at', { exact: true }).fill('');
+    await typeInput(other.getByLabel('Ended at', { exact: true }), '');
     await other.getByRole('button', { name: 'Save timing', exact: true }).click();
     await expect(other.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
@@ -136,7 +138,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     expect(new Set(buyIns.map(entry => entry.revision)).size).toBe(3);
     await context.setOffline(true);
     await openMoney(page, player.id);
-    await page.getByLabel('Amount', { exact: true }).fill('99');
+    await typeInput(page.getByTestId('money-amount'), '99');
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     await page.getByRole('button', { name: 'Discard', exact: true }).click();
     await context.setOffline(false);
@@ -150,6 +152,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
 - **Prove the update path.** Save as `.cache/verify-update.ts`, then run `.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-update.ts --run RUN_ID --context iphone-standalone`. This recipe deliberately refuses live URLs and builds release B only into this checkout's local `dist/`.
 
 ```ts
+import { typeInput } from '../e2e/input';
 import { execFileSync } from 'node:child_process';
 import { expect } from '@playwright/test';
 import { addPlayer, newSession, openMoney, workerReady } from '../e2e/helpers';
@@ -165,7 +168,7 @@ export default async function ({ page, context, baseURL, runId, step, checkState
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
   const releaseA = await page.locator('meta[name="pb-release"]').getAttribute('content');
   await openMoney(page, player.id);
-  await page.getByLabel('Amount', { exact: true }).fill('37.');
+  await typeInput(page.getByTestId('money-amount'), '37.');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true }).click();
   await step('updates-draft-before-new-release');
   await page.evaluate(() => {
@@ -184,18 +187,18 @@ export default async function ({ page, context, baseURL, runId, step, checkState
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await expect(page.getByText('Update ready', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('37.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('37.');
   await step('updates-ready-with-sheet-open');
   await Promise.all([page.waitForEvent('domcontentloaded'), page.getByTestId('update-reload').click()]);
   await expect(page.locator('meta[name="pb-release"]')).toHaveAttribute('content', releaseB);
   await expect(page.getByRole('heading', { name: 'Verify update preservation', exact: true })).toBeVisible();
   await openMoney(page, player.id);
-  await expect(page.getByLabel('Amount', { exact: true })).toHaveValue('37.');
+  await expect(page.getByTestId('money-amount')).toHaveValue('37.');
   await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect((await checkState()).players.some(row => row.id === player.id)).toBe(true);
   expect((await page.request.get(`${baseURL}/api/auth/me`)).status()).toBe(200);
   await step('updates-new-release-draft-and-data-preserved');
-  await page.getByLabel('Amount', { exact: true }).fill('37');
+  await typeInput(page.getByTestId('money-amount'), '37');
   const releaseC = `verify-C-${runId}`;
   execFileSync('pnpm', ['build'], { env: { ...process.env, RELEASE_VERSION: releaseC }, stdio: 'inherit' });
   await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration('/'); if (!registration) throw new Error('No service worker'); await registration.update(); });
