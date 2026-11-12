@@ -33,7 +33,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
     catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, 'Owned browser server cleanup failed');
   })();
-  const releaseServer = await stack.own(closeServer);
+  const releaseServer = await stack.own(closeServer, { selfBounded: true });
   let browser: Awaited<ReturnType<typeof webkit.connect>>;
   try { browser = await webkit.connect(server.wsEndpoint()); } catch (error) {
     try { await closeServer(); }
@@ -51,7 +51,7 @@ export async function benchmarkBrowser(stack: Stack, engine: Engine, output: str
     try { await closeServer(); } catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, 'Owned benchmark browser cleanup failed');
   })();
-  const releaseBrowser = await stack.own(closeBrowser);
+  const releaseBrowser = await stack.own(closeBrowser, { selfBounded: true });
   releaseServer();
   const errors: string[] = [];
   const teardownErrors: { url: string; message: string }[] = [];

@@ -46,10 +46,10 @@ export async function benchmarkStack(output: string, signal?: AbortSignal) {
     });
     return Promise.race([task, startupStopped]);
   }
-  const owned = new Set<() => Promise<void>>();
-  async function own(cleanup: () => Promise<void>) {
-    if (stopping) { await withShutdownDeadline('Late benchmark cleanup', cleanup); throw new Error('Owned benchmark stack is stopping'); }
-    owned.add(cleanup);
+  const owned = new Map<() => Promise<void>, boolean>();
+  async function own(cleanup: () => Promise<void>, options: { selfBounded?: boolean } = {}) {
+    if (stopping) { await (options.selfBounded ? cleanup() : withShutdownDeadline('Late benchmark cleanup', cleanup)); throw new Error('Owned benchmark stack is stopping'); }
+    owned.set(cleanup, options.selfBounded ?? false);
     return () => { owned.delete(cleanup); };
   }
   own.withDeadline = withShutdownDeadline;
@@ -60,7 +60,7 @@ export async function benchmarkStack(output: string, signal?: AbortSignal) {
       const errors: unknown[] = [];
       const attempt = async (action: () => unknown | Promise<unknown>) => { try { await action(); } catch (error) { errors.push(error); } };
       const bounded = (label: string, action: () => unknown | Promise<unknown>) => attempt(() => withShutdownDeadline(label, action));
-      for (const cleanup of owned) await bounded('Owned benchmark action cleanup', cleanup);
+      for (const [cleanup, selfBounded] of owned) await (selfBounded ? attempt(cleanup) : bounded('Owned benchmark action cleanup', cleanup));
       owned.clear();
       await bounded('Benchmark client close', () => client?.close());
       await bounded('Benchmark proxy close', () => proxy?.close());

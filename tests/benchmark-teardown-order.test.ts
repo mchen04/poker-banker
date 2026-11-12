@@ -15,7 +15,7 @@ for (const stalled of [true, false]) it(`finishes browser termination before dat
   const child = spawn(process.execPath, ['-e', `${stalled ? 'process.on("SIGTERM",()=>{});' : ''}console.log("ready");setInterval(()=>{},1000);`], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
   let main: Promise<unknown> | undefined;
   try {
-    await once(child.stdout!, 'data');
+    await once(child.stdout!, 'data', { signal: AbortSignal.timeout(5000) });
     const source = await strip('../scripts/bench/stack.ts');
     const start = source.indexOf('  let database');
     const end = source.indexOf('\n  try {\n    database =');
@@ -47,7 +47,7 @@ for (const stalled of [true, false]) it(`finishes browser termination before dat
     if (alive(child)) {
       const exited = once(child, 'exit');
       process.kill(-child.pid!, 'SIGKILL');
-      await exited;
+      await withShutdownDeadline('Ordered browser regression cleanup', () => exited);
     }
     await main;
   }
