@@ -7,12 +7,14 @@ The banker closes only after everyone with entries has cashed out. A mismatch ne
 - `close-playing-blocker` explains who still needs to cash out.
 - `close-pending-blocker` explains unsaved entries separately.
 - `close-balanced` closes matching chip totals.
+- `close-ready-card` offers Everyone has cashed out · Close session and an unsettled count once no player is playing.
 - `close-discrepancy` requires acceptance of the exact displayed difference.
 - `reopen-reason` records why the game reopened.
 - `cumulative-reclose-once` counts closed games once and keeps outstanding payments separate.
 
 ## How to get to it (user POV)
 
+- After everyone has cashed out, choose `Everyone has cashed out · Close session`, then confirm. The card also names outstanding settlements; it does not bypass the existing blockers or discrepancy acceptance.
 - In an open session, choose `Session menu` → `Close session`. The centre action remains Buy-in on Table and Players; closing never replaces it.
 - Tap a full-width blocker row to open that player’s cash-out. Save or discard Not saved yet entries before closing.
 - If chip totals differ, check `Accept discrepancy of …`, then choose `Close session`.

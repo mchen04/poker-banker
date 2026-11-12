@@ -80,3 +80,23 @@ export default async function (context: RecipeContext) {
 ```
 
 Pointer hold, focus and an open sheet each keep Undo available for an observed 8.3 seconds without changing the clock. An idle toast remains at 4.8 seconds and disappears by 8.4. Undo remains restricted to the latest owned receipt. Undoing the automatic first buy-in keeps the separately recorded timer and offers Correct times; its visible history is never silently reset. Emulated pointer/viewport behavior does not prove a physical iOS touch or software keyboard. Seal evidence and clean up after every attempt.
+
+## Ready-to-close and lasting timer follow-ups
+
+`e2e/ux-close-readiness.ts` supplies `e2e/r41-ux.spec.ts` and this focused skill capture. It proves the ready card is absent while playing, includes the unsettled count after cash-out, and opens the unchanged confirmation flow in two controls. Desktop shows one New action after closing and a toast at most 420 px wide inside the table column, with the last player row scrollable above it. Undo's retained timer line survives reload, clears after timing correction, returns after another Undo and clears after a new buy-in. No worker or update behavior is changed.
+
+Save as `.cache/r41-ux.ts`, copy only that file explicitly to the mini, then run `recipe .cache/r41-ux.ts --run RUN_ID --context iphone-standalone`. Use a fresh local launch for `desktop-webkit`. Run it first because the approval helper measures first-session creation. Both helpers retain their own light/dark screenshots and actual control-tap receipts; close and create-another must each take two. The extra seats and rebuys used to extend Activity are explicitly named public-API fixture setup, not UI mutation proof.
+
+```ts
+import { join } from 'node:path';
+import { uxApproval } from '../e2e/ux-approval';
+import { uxCloseReadiness } from '../e2e/ux-close-readiness';
+import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
+
+export default async function (context: RecipeContext) {
+  await uxApproval({ ...context, evidence: join(context.evidence, 'approval') });
+  await uxCloseReadiness({ ...context, evidence: join(context.evidence, 'followups') });
+}
+```
+
+The footer keeps its existing Buy-in/New session meaning. Menu still offers Close and reason-required Reopen. The timer remains recorded; the lasting line is reconstructed from confirmed ledger/timing history and does not create local state or silently reset it. Seal evidence and clean up every run. Browser emulation does not prove physical iOS keyboard or suspension behavior.

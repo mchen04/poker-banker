@@ -10,13 +10,15 @@ Session time is server state. A timer can start manually or with the first buy-i
 - `timer-correction` saves corrected bounds and visible history.
 - `timer-invalid-range` rejects an end before its start.
 - `timer-close` freezes elapsed time when closed.
+- `timer-retained-after-undo` keeps a lasting Timer started … · Correct times line when voiding buy-ins leaves no confirmed buy-in and a running timer. It survives reload and clears after timing correction or a new buy-in.
 
 ## How to get to it (user POV)
 
 - Choose `Start timer` beside the session timer in a new game.
 - Alternatively record the game's first buy-in.
 - Choose `Session menu` → `Correct times`, edit `Started at` and `Ended at`, then `Save timing`.
-- Close through `Session menu` → `Close session`.
+- After Undo leaves no buy-ins, use the lasting `Correct times` line below the timer, even after the toast disappears or the page reloads. The focused follow-up recipe in [the feature map](README.md#ready-to-close-and-lasting-timer-follow-ups) proves this path.
+- Close through the ready-to-close card or `Session menu` → `Close session`.
 
 ## Driving it with Playwright
 
