@@ -1,10 +1,10 @@
 # Mobile UX
 
-This inventory follows the approved UI continuation and the [independent baseline review](../evidence/turn3/audit/independent-baseline-ux.md). It describes the working design and acceptance scope; implementation alone does not establish that every state has passed visual or device verification. The safe automatic-update behavior from Round 36 remains unchanged.
+This inventory follows the approved UI continuation and the [independent baseline review](../evidence/turn3/audit/independent-baseline-ux.md). It describes the working design and acceptance scope; implementation alone does not establish that every state has passed visual or device verification. Round 38’s safe automatic-update behavior remains unchanged in this UX follow-up.
 
 ## Structure
 
-The phone has one safe-area-aware bar: Table, one contextual action, and Players. The action adds the first player, opens an explicit player chooser for a buy-in, or reviews closing once everyone has cashed out. A money sheet never chooses a player implicitly. The session title opens Sessions; a separate + beside it opens New session directly. Current and open sessions precede the month-grouped closed history. Desktop moves navigation to the top and places activity beside the wider table. Session names the saved record; Game in settings and reports means the poker variant.
+The phone has one safe-area-aware bar: Table, one contextual action, and Players. For the current open session, the action is always Buy-in on Table and Players, including an empty table or everyone cashed out. It opens the explicit player chooser. Without a current open session it is New session; Reopen stays in Menu with its required reason. A money sheet never chooses a player implicitly. The session title opens Sessions; a visibly labelled + New beside it opens New session directly. Current and open sessions precede the month-grouped closed history. Desktop moves navigation to the top and places activity beside the wider table. Session names the saved record; Game in settings and reports means the poker variant.
 
 The integrated bar replaces the former two-bar design. Rows keep player identity, position and payment balance together with a direct state-aware action. Playing rows show chips bought, never invented live profit; a net result appears only after cash-out. Financial review, duplicate-name checks, exact discrepancy acceptance and destructive confirmations remain.
 
@@ -80,26 +80,26 @@ The database/API per-entry maximum is **9,223,372,036,854,775,807 minor units**,
 
 ## Measured action counts
 
-A tap is a successful navigation, choice, toggle or commit control activation. Typing, focus, scrolling, fixture setup and screenshot-only actions are excluded. Each row names its starting surface. The prior column is the judge-checked Round 35 measurement; the footer path had no prior measurement. The revised counts come from the executed shared `e2e/ux-approval.ts` helper through the local verification skill. The [phone control receipt](../evidence/verify/20261112T130200912Z-14f6b34d/iphone-standalone/recipe-1794488670632-d41e52/tap-counts.json) and [desktop receipt](../evidence/verify/20261112T130627916Z-add7b2ee/desktop-webkit/recipe-1794488937695-58ee85/tap-counts.json) record each actual control. The [prior receipt](../evidence/verify/20261112T105401394Z-041661c4/iphone-standalone/recipe-1794480963336-0e1ea5/tap-counts-after.json) supplies Round 35 values.
+A tap is a successful navigation, choice, toggle or commit control activation. Typing, focus, scrolling, fixture setup and screenshot-only actions are excluded. Each row names its starting surface. Round 35 and 37 are the judge-checked previous measurements; Round 39 comes from the same executed helper in the [phone control receipt](../evidence/verify/20261112T144719639Z-49606dff/iphone-standalone/recipe-1794494858788-07446d/approval/tap-counts.json) and [desktop receipt](../evidence/verify/20261112T144911445Z-33a9ae17/desktop-webkit/recipe-1794494969822-4a3d67/approval/tap-counts.json). All fourteen counts match across both contexts. Close now uses Menu, Close and confirmation so the centre action keeps its meaning.
 
-| Representative journey | Round 35 | Round 37 | Retained safeguard / trade-off |
-| --- | ---: | ---: | --- |
-| Create first session | 2 | 2 | Creation keeps name/date/currency review. |
-| Add a new player | 2 | 2 | Duplicate-name safeguard remains. |
-| Buy-in from player row, choose Venmo | 3 | 3 | Fixed chosen player and explicit Save. |
-| Repeat last buy-in with player's remembered method | 2 | 2 | Prefill opens review; the player’s saved draft wins. |
-| Cash out actual chips and mark paid | 5 | 3 | Actual chips remain typed; payout is explicit. |
-| Record outstanding payment with Zelle | 4 | 3 | Direction is explicit; balance is a reviewable suggestion. |
-| Correct a payment method | 3 | 3 | Original and replacement stay visible. |
-| Close a balanced session | 2 | 2 | Still reviews blockers and exact discrepancy consent. |
-| Create another session | 3 | 2 | The + beside the title opens creation directly. |
-| Reuse an existing player | 2 | 2 | Reuses the stable player identity. |
-| Return to another recent session | 2 | 2 | Title plus choice replaces the duplicate switcher row. |
-| Open player report and apply a filter | 4 | 4 | Filter application remains explicit. |
-| Enable and copy viewer link | 4 | 4 | Rotation/disable need separate confirmation. |
-| Footer buy-in, explicitly choose player and Venmo | Not measured | 4 | The extra player choice prevents wrong-player money. |
+| Representative journey | Round 35 | Round 37 | Round 39 | Retained safeguard / trade-off |
+| --- | ---: | ---: | ---: | --- |
+| Create first session | 2 | 2 | 2 | Creation keeps name/date/currency review. |
+| Add a new player | 2 | 2 | 2 | Duplicate-name safeguard remains. |
+| Buy-in from player row, choose Venmo | 3 | 3 | 3 | Fixed chosen player and explicit Save. |
+| Repeat last buy-in with player's remembered method | 2 | 2 | 2 | Prefill opens review; the player’s saved draft wins. |
+| Cash out actual chips and mark paid | 5 | 3 | 3 | Actual chips remain typed; payout is explicit. |
+| Record outstanding payment with Zelle | 4 | 3 | 3 | Direction is explicit; balance is a reviewable suggestion. |
+| Correct a payment method | 3 | 3 | 3 | Original and replacement stay visible. |
+| Close a balanced session | 2 | 2 | 3 | Menu → Close → confirm keeps the centre Buy-in stable; adds one deliberate navigation tap. |
+| Create another session | 3 | 2 | 2 | The labelled + New beside the title opens creation directly. |
+| Reuse an existing player | 2 | 2 | 2 | Reuses the stable player identity. |
+| Return to another recent session | 2 | 2 | 2 | Title plus choice replaces the duplicate switcher row. |
+| Open player report and apply a filter | 4 | 4 | 4 | Filter application remains explicit. |
+| Enable and copy viewer link | 4 | 4 | 4 | Rotation/disable need separate confirmation. |
+| Footer buy-in, explicitly choose player and Venmo | Not measured | 4 | 4 | The extra player choice prevents wrong-player money. |
 
-The original pre-Round-35 tab strip needed one tap for a visible recent session. The picker still needs two, but now the title itself is the trigger and the extra switcher row is gone. There was no historical footer measurement; no before value is invented. The new footer path is four taps when changing Cash to Venmo, or three when retaining the player's method. These are representative control counts, not full task costs including typing or reconnecting a device.
+The original pre-Round-35 tab strip needed one tap for a visible recent session. The picker still needs two, but now the title itself is the trigger and the extra switcher row is gone. There was no historical footer measurement; no before value is invented. The new footer path is four taps when changing Cash to Venmo, or three when retaining the player's method. These are representative control counts, not full task costs including typing or reconnecting a device. The additional [phone follow-up receipt](../evidence/verify/20261112T144719639Z-49606dff/iphone-standalone/recipe-1794494858788-07446d/followups/tap-counts.json) and [desktop follow-up receipt](../evidence/verify/20261112T144911445Z-33a9ae17/desktop-webkit/recipe-1794494969822-4a3d67/followups/tap-counts.json) record footer buy-in from Players at four taps with Venmo, balanced close at three, and Menu reopen with its required reason at three. The extra close tap is an intentional hierarchy safeguard; no financial confirmation was removed.
 
 ## Safeguards and evidence boundaries
 
@@ -126,7 +126,7 @@ The approval recipe captures eight players at 393×659 and 393×852 in light and
 | M7 | State-aware buy-in/rebuy/cash-out/settlement, readable position/owed values and results-only display modes. |
 | M8 | Wide desktop table/activity layout with top navigation. |
 | m1 | One inset focus ring for all fields. |
-| m2 | Four-second descriptive saved toast; latest-receipt atomic Undo for new money commands. |
+| m2 | Eight seconds of available toast time, paused while touched, hovered, focused or editing; latest-receipt atomic Undo remains guarded. |
 | m3 | Session names throughout, Table destination and one leading Cancel convention. |
 | m4 | Typical stake comes from effective saved buy-ins and is absent without history. |
 | m5 | Money spans do not break the sign from the value. |
@@ -139,4 +139,22 @@ The approval recipe captures eight players at 393×659 and 393×852 in light and
 | m12 | Rebuy/repeat use that player's effective method. |
 | m13 | Offline reference PDF read; all 14 representative journeys measured, including footer. |
 
-Undo is available only while its original receipt is the latest revision. It reverses a newly saved entry and its generated payment in one database transaction; newer work is never reversed by that button. Voids/corrections retain their explicit review flow. Cash-out stays blank with an explicit zero shortcut because buy-ins cannot determine the actual chips returned. No ledger safeguard was removed to reduce taps.
+Undo is available for eight seconds of unpaused time and only while its original receipt is the latest revision. The budget pauses during touch, hover, focus, open sheets and busy Undo; resuming keeps the remaining time. A first-buy-in Undo preserves the independently recorded timer, explicitly names its running start and offers Correct times. This follows the approved rule for visible timing corrections instead of silently resetting recorded time. It reverses a newly saved entry and its generated payment in one database transaction; newer work is never reversed by that button. Voids/corrections retain their explicit review flow. Cash-out stays blank with an explicit zero shortcut because buy-ins cannot determine the actual chips returned. No ledger safeguard was removed to reduce taps.
+
+## Round 39 follow-up proof
+
+The [standalone run](../evidence/verify/20261112T144719639Z-49606dff) and [desktop WebKit run](../evidence/verify/20261112T144911445Z-33a9ae17) each passed the 14-journey approval capture, focused follow-up recipe and ledger drive. The runs retained 75 screenshots each after cleanup. Both themes show the open/closed Table and Players footers, actionable close blockers, debt/Paid up rows, Undo and its retained-timer explanation, and grouped report variation. The eight-player fixture still shows 4 complete rows at 393×659 and 6 at 393×852. Long names receive two lines before truncation. Debt text in the session, viewer, roster and player detail has weight 700 and measured contrast of 6.72:1 in light and 9.13:1 in dark.
+
+The timer remains recorded after Undo because the approved spec requires explicit correction with visible history instead of a silent reset. Its toast states the retained running start and opens Correct times. Pointer hold, focus and an open sheet each preserved Undo for 8.3 seconds. A separate check spent 4.8 seconds, paused 8.3, then spent 3.6 more and required dismissal, proving that resuming keeps the remaining budget. A held real Undo response followed by a session switch produces no wrong-session timing action. No physical iPhone or full-suite claim is made.
+
+| Follow-up finding | Current response |
+| --- | --- |
+| R2-M1 | Buy-in stays in the centre for the current open session on both tabs, including empty/cashed-out tables. Closed or absent current session uses New session. Reopen stays in Menu with a reason. |
+| n1 | Full-width, left-aligned blocker rows name the player/state and open that exact cash-out. |
+| n2 | Owes/owed use warning colour and weight 700; Paid up stays muted, with text retaining the distinction. |
+| n3 | Eight seconds of available Undo time, paused during touch, focus, hover and sheets; the remaining budget is preserved. |
+| n4 | Header creation visibly says + New and retains the New session accessible name. |
+| n5 | Desktop navigation uses a transparent backing aligned above the header rule. |
+| n6 | Player names clamp after two readable lines; money groups do not gain ellipsis. |
+| n7 | Variation uses the exact grouped currency formatter after half-even rounding; hand-derived sample displays $1,414.21. |
+| n8 | Recorded timing is preserved and explained, with an actionable Correct times link. |
