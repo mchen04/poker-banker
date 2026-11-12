@@ -50,7 +50,7 @@ it('rechecks authentication busy state when an update finishes flushing local wr
     expect(worker.postMessage).not.toHaveBeenCalled();
     holds.busy = false;
     await update.activate();
-    expect(worker.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'ACTIVATE' });
+    expect(worker.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'ACTIVATE', updateProtocol: 1 });
   } finally { release(); for (const cleanup of cleanups) cleanup?.(); }
 });
 
@@ -100,7 +100,7 @@ it('keeps an accepted manual update moving while the worker is still waiting and
   const harness = await updateHarness();
   try {
     await harness.update.activate();
-    expect(harness.worker.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'ACTIVATE' });
+    expect(harness.worker.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'ACTIVATE', updateProtocol: 1 });
     harness.tick();
     await vi.waitFor(() => expect(harness.worker.postMessage).toHaveBeenCalledTimes(2));
     harness.controllerChanged();
@@ -169,7 +169,7 @@ it('retains explicit Reload intent accepted during a background request while a 
     harness.data.hasInFlightRequests.mockReturnValue(false);
     harness.tick();
     await settled();
-    expect(harness.worker.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'ACTIVATE' });
+    expect(harness.worker.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'ACTIVATE', updateProtocol: 1 });
     harness.controllerChanged();
     await settled();
     expect(harness.reload).toHaveBeenCalledOnce();
@@ -288,7 +288,7 @@ it.each(['activation', 'reload'] as const)('waits when an HTTP request starts du
 it('holds a page claimed by another tab until its sheet closes and announces the page release', async () => {
   const harness = await updateHarness();
   try {
-    expect(harness.controller.postMessage).toHaveBeenCalledWith({ type: 'CLIENT_RELEASE', release: 'manual-reconciliation' });
+    expect(harness.controller.postMessage).toHaveBeenCalledWith({ type: 'CLIENT_RELEASE', release: 'manual-reconciliation', updateProtocol: 1 });
     harness.controllerChanged();
     await settled();
     expect(harness.reload).not.toHaveBeenCalled();
@@ -298,7 +298,7 @@ it('holds a page claimed by another tab until its sheet closes and announces the
     expect(harness.reload).toHaveBeenCalledOnce();
     const source = { postMessage: vi.fn() };
     harness.message({ type: 'CLIENT_RELEASE_REQUEST', requestId: 'new-worker:1' }, source);
-    expect(source.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'CLIENT_RELEASE', requestId: 'new-worker:1', release: 'manual-reconciliation' });
+    expect(source.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'CLIENT_RELEASE', requestId: 'new-worker:1', release: 'manual-reconciliation', updateProtocol: 1 });
   } finally { harness.close(); }
 });
 
@@ -337,4 +337,49 @@ it.each(['empty', 'disabled', 'readOnly', 'checkbox', 'hidden', 'offscreen', 'in
     await settled();
     expect(harness.worker.postMessage).toHaveBeenCalledOnce();
   } finally { harness.close(); }
+});
+
+it('starts one navigation when lifecycle events and timer flushes overlap and navigation stalls', async () => {
+  const harness = await updateHarness();
+  let release!: () => void;
+  try {
+    harness.holds.sheetOpen = false;
+    const flushing = new Promise<void>(resolve => { release = resolve; });
+    harness.data.flushDraftWrites.mockImplementation(() => flushing);
+    harness.controllerChanged();
+    for (const name of ['visibilitychange', 'pageshow', 'focus']) harness.dispatch(name);
+    harness.tick();
+    expect(harness.data.flushDraftWrites.mock.calls.length).toBeGreaterThan(1);
+    release();
+    await settled();
+    expect(harness.reload).toHaveBeenCalledOnce();
+    for (let i = 0; i < 5; i++) {
+      harness.tick();
+      harness.dispatch('focus');
+      harness.dispatch('pageshow');
+      harness.controllerChanged();
+      await settled();
+    }
+    await harness.update.activate();
+    expect(harness.reload).toHaveBeenCalledOnce();
+  } finally { release?.(); harness.close(); }
+});
+
+it('rechecks the reload guards after the asynchronous outbox read', async () => {
+  const harness = await updateHarness();
+  let release!: (value: boolean) => void;
+  try {
+    harness.holds.sheetOpen = false;
+    harness.data.hasAnyOutbox.mockImplementationOnce(() => new Promise<boolean>(resolve => { release = resolve; }));
+    harness.controllerChanged();
+    await settled();
+    harness.data.hasInFlightRequests.mockReturnValue(true);
+    release(false);
+    await settled();
+    expect(harness.reload).not.toHaveBeenCalled();
+    harness.data.hasInFlightRequests.mockReturnValue(false);
+    harness.tick();
+    await settled();
+    expect(harness.reload).toHaveBeenCalledOnce();
+  } finally { release?.(false); harness.close(); }
 });

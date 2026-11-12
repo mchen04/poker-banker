@@ -4,6 +4,7 @@ import { flushDraftWrites, hasAnyOutbox, hasInFlightRequests, hasPendingLocalWri
 declare const __APP_RELEASE__: string;
 
 type Holds = { sheetOpen: boolean; outboxCount: number; busy: boolean };
+let navigationStarted = false;
 
 function hasVisibleInput() {
   return Array.from(document.querySelectorAll?.<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select') ?? []).some(input =>
@@ -20,11 +21,16 @@ export function usePwaUpdate(holds: Holds) {
   const pendingReload = useRef(false);
   const manualReload = useRef(false);
 
-  const canReload = useCallback((manual: boolean, preparingManual = false) => document.visibilityState === 'visible' && !current.current.busy && (preparingManual || !hasInFlightRequests()) && current.current.outboxCount === 0 && (manual || manualReload.current || (!current.current.sheetOpen && !hasVisibleInput())), []);
+  const canReload = useCallback((manual: boolean, preparingManual = false) => !navigationStarted && document.visibilityState === 'visible' && !current.current.busy && (preparingManual || !hasInFlightRequests()) && current.current.outboxCount === 0 && (manual || manualReload.current || (!current.current.sheetOpen && !hasVisibleInput())), []);
   const reload = useCallback(async (manual: boolean) => {
     if (!pendingReload.current || !canReload(manual)) return;
     await flushDraftWrites();
-    if (!await hasAnyOutbox() && !hasPendingLocalWrites() && canReload(manual)) { manualReload.current = false; window.location.reload(); }
+    if (!pendingReload.current || !canReload(manual)) return;
+    if (!await hasAnyOutbox() && !hasPendingLocalWrites() && canReload(manual)) {
+      manualReload.current = false;
+      navigationStarted = true;
+      window.location.reload();
+    }
   }, [canReload]);
 
   const activateWorker = useCallback(async (manual: boolean) => {
@@ -38,7 +44,7 @@ export function usePwaUpdate(holds: Holds) {
       if (pendingReload.current) { await reload(manual); return; }
       const worker = registration.current?.waiting;
       if (!worker) return;
-      worker.postMessage({ type: 'ACTIVATE' });
+      worker.postMessage({ type: 'ACTIVATE', updateProtocol: 1 });
     } finally {
       activating.current = false;
     }
@@ -67,7 +73,7 @@ export function usePwaUpdate(holds: Holds) {
       finally { checking = false; }
       if (!stopped) { announceRelease(); waitingChanged(); }
     };
-    const announceRelease = () => navigator.serviceWorker.controller?.postMessage({ type: 'CLIENT_RELEASE', release: __APP_RELEASE__ });
+    const announceRelease = () => navigator.serviceWorker.controller?.postMessage({ type: 'CLIENT_RELEASE', release: __APP_RELEASE__, updateProtocol: 1 });
     const controllerChanged = () => {
       if (hadController) {
         pendingReload.current = true;
@@ -87,7 +93,7 @@ export function usePwaUpdate(holds: Holds) {
     const online = () => { void check(); };
     const message = (event: MessageEvent) => {
       if (event.data?.type === 'CLIENT_RELEASE_REQUEST') {
-        (event.source as ServiceWorker | null)?.postMessage({ type: 'CLIENT_RELEASE', requestId: event.data.requestId, release: __APP_RELEASE__ });
+        (event.source as ServiceWorker | null)?.postMessage({ type: 'CLIENT_RELEASE', requestId: event.data.requestId, release: __APP_RELEASE__, updateProtocol: 1 });
       } else if (event.data?.type === 'ASSET_ACCESSED') void check();
     };
     const preloadFailed = (event: Event) => { event.preventDefault(); void check(); };
