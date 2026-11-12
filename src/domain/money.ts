@@ -8,11 +8,28 @@ export function currencyExponent(currency: string): number {
 
 export function parseMoney(input: string, currency: string): bigint {
   const exponent = currencyExponent(currency);
-  const pattern = exponent === 0 ? /^\d+$/ : new RegExp(`^\\d+(?:\\.\\d{1,${exponent}})?$`);
-  if (!pattern.test(input)) throw new Error('Enter an exact nonnegative amount');
-  const [whole = '', fraction = ''] = input.split('.');
-  const minor = BigInt(whole) * 10n ** BigInt(exponent) + BigInt(fraction.padEnd(exponent, '0') || '0');
-  if (minor > MAX_MINOR) throw new Error('Amount is too large');
+  let amount = input.trim();
+  const symbols = [...new Set((['symbol', 'narrowSymbol'] as const).map(currencyDisplay =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency, currencyDisplay })
+      .formatToParts(0n).find(part => part.type === 'currency')!.value,
+  ))].sort((left, right) => right.length - left.length);
+  const symbol = symbols.find(value => amount.startsWith(value));
+  if (symbol) amount = amount.slice(symbol.length).trimStart();
+  if (!amount) throw new Error(`Enter an amount in ${currency}.`);
+  if (/^[-−]/.test(amount)) throw new Error('Enter zero or a positive amount; remove the minus sign.');
+  if (!/^(?:(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?|\.\d+)$/.test(amount)) {
+    throw new Error(exponent === 0
+      ? `Enter a whole ${currency} amount like 1234 or 1,234.`
+      : `Enter a ${currency} amount like 12.50 or 1,234.56. Use commas only in groups of three digits.`);
+  }
+  const [whole = '', fraction = ''] = amount.replaceAll(',', '').split('.');
+  if (fraction.length > exponent) {
+    throw new Error(exponent === 0
+      ? `${currency} uses whole amounts. Remove the decimal part.`
+      : `Enter no more than ${exponent} decimal places for ${currency}.`);
+  }
+  const minor = BigInt(whole || '0') * 10n ** BigInt(exponent) + BigInt(fraction.padEnd(exponent, '0') || '0');
+  if (minor > MAX_MINOR) throw new Error(`Enter ${formatMoney(MAX_MINOR, currency)} or less.`);
   return minor;
 }
 

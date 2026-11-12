@@ -1,4 +1,5 @@
 import { observeServerTime } from './clock';
+import { parseMoney } from '../domain/money';
 import type { SessionState } from '../domain/session';
 
 export type Banker = { id: string; username: string };
@@ -322,10 +323,7 @@ function recoverOperation(value: unknown, request: DraftRequest, currency?: stri
 }
 function recoveryMinor(value: unknown, currency: string | undefined): string {
   if (!currency) throw new Error('The session currency is unavailable. Review the amount in minor units.');
-  const exponent = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits!;
-  const match = /^(\d+)(?:\.(\d*))?$/.exec(String(value).trim());
-  if (!match || (match[2]?.length ?? 0) > exponent) throw new Error('Enter an exact amount for this currency.');
-  return String(BigInt(match[1]!) * 10n ** BigInt(exponent) + BigInt((match[2] ?? '').padEnd(exponent, '0') || '0'));
+  return String(parseMoney(String(value), currency));
 }
 function recoveryRequest(value: DraftValue, request: DraftRequest, currency?: string): DraftRequest {
   const body: Record<string, unknown> = { ...request.body, op_id: value.op_id };

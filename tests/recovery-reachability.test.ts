@@ -65,7 +65,10 @@ it('keeps a mismatched ordinary form reachable after reload', async () => {
   expect(await reopened.listRecoveredDrafts(owner)).toEqual([expect.objectContaining({ key, value: expect.objectContaining({ reason: value.reason }), request: expect.objectContaining({ path: request.path }) })]);
 });
 
-it('reconstructs a current money edit rather than resubmitting the earlier operation amount', async () => {
+it.each([
+  ['60.00', '6000'], ['12.5', '1250'], ['.75', '75'], ['$1,234.56', '123456'],
+  ['$90,071,992,547,409.93', '9007199254740993'],
+])('resubmits the current recovered amount %s exactly rather than the earlier operation amount', async (amount, amountMinor) => {
   const data = await import('../src/client/data');
   const key = data.draftKey(owner, session, 'buy_in', 'player');
   const request = { path: `/api/sessions/${session}/entries`, method: 'POST', body: { op_id: 'old', player_id: 'player', kind: 'buy_in', amount_minor: '1000', paid_now: true, method: 'cash', occurred_at: null } };
@@ -73,11 +76,30 @@ it('reconstructs a current money edit rather than resubmitting the earlier opera
   const recovery = (await data.listRecoveredDrafts(owner))[0]!;
   expect(recovery.request?.body).toMatchObject({ amount_minor: '5000', occurred_at: null });
   vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/auth/me' ? { banker: { id: owner, username: owner } } : { ok: true }, { headers: { 'X-PB-Banker-ID': owner } })));
-  await data.editRecoveredDraft(recovery, { ...(recovery.value as object), amount: '60.00' }, 'submit');
+  await data.editRecoveredDraft(recovery, { ...(recovery.value as object), amount }, 'submit');
   const sends = vi.mocked(fetch).mock.calls.filter(([path]) => path !== '/api/auth/me');
   expect(sends).toHaveLength(1);
-  expect(JSON.parse(String(sends[0]![1]?.body))).toMatchObject({ amount_minor: '6000', occurred_at: null });
+  expect(JSON.parse(String(sends[0]![1]?.body))).toMatchObject({ amount_minor: amountMinor, occurred_at: null });
   expect(await data.listRecoveredDrafts(owner)).toEqual([]);
+});
+
+it.each([
+  ['1.005', 'Enter no more than 2 decimal places for USD.'],
+  ['92233720368547758.08', 'Enter $92,233,720,368,547,758.07 or less.'],
+])('keeps the complete recovered draft when amount %s needs correction', async (amount, message) => {
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, 'buy_in', 'player');
+  const request = { path: `/api/sessions/${session}/entries`, method: 'POST', body: { op_id: 'old', player_id: 'player', kind: 'buy_in', amount_minor: '1000', paid_now: true, method: 'cash', occurred_at: null } };
+  const value = { op_id: 'fresh', amount, kind: 'buy_in', paid_now: true, method: 'cash', note: 'Keep this note', occurred_at: '', __recovered_occurred_at: null, __operation_conflict: 'Review', __recovery_request: request, __recovery_currency: 'USD' };
+  await data.writeDraft(key, value);
+  const recovery = (await data.listRecoveredDrafts(owner))[0]!;
+  expect(recovery.request).toBeUndefined();
+  expect(recovery.request_error).toBe(message);
+  await expect(data.editRecoveredDraft(recovery, recovery.value, 'submit')).rejects.toThrow(message);
+  expect(await data.readDraft(key)).toEqual(value);
+  expect(await data.listSubmittedDrafts(owner)).toEqual([]);
+  expect(await data.listOutbox(owner)).toEqual([]);
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 it.each(['save', 'discard', 'submit'] as const)('rejects a stale recovered %s before changing a newer draft or sending', async action => {
