@@ -87,8 +87,9 @@ export function createApp(pool: Database, config: Config = {}) {
     const result = await pool.query<{ id: string; name: string; played_on: string; currency: string; status: string; revision: string }>(
       `SELECT id, name, to_char(played_on,'YYYY-MM-DD') AS played_on, currency, status, revision::text FROM game_sessions
        WHERE banker_id = $1 AND position(lower($2) in lower(name)) > 0
+       AND ($5::text IS NULL OR status = $5)
        AND ($3::date IS NULL OR (played_on,id) < ($3::date,$4::uuid))
-       ORDER BY played_on DESC,id DESC LIMIT 31`, [c.get('banker').id, query.q ?? '', before?.[0] ?? null, before?.[1] ?? null]);
+       ORDER BY played_on DESC,id DESC LIMIT 31`, [c.get('banker').id, query.q ?? '', before?.[0] ?? null, before?.[1] ?? null, query.status ?? null]);
     const sessions = result.rows.slice(0, 30);
     const last = sessions.at(-1);
     return c.json({ sessions, next: result.rows.length > 30 && last ? `${last.played_on},${last.id}` : null });

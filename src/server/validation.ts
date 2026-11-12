@@ -59,5 +59,5 @@ export const reopenSession = z.strictObject({ op_id: opId, reason: z.string().tr
 export const shareSession = z.strictObject({ op_id: opId, action: z.enum(['enable', 'rotate', 'disable']) });
 export const sinceQuery = z.strictObject({ since: revision.optional() });
 export const searchQuery = z.strictObject({ q: z.string().max(100).optional() });
-export const listQuery = z.strictObject({ q: z.string().max(100).optional(), before: z.string().max(100).optional() });
+export const listQuery = z.strictObject({ q: z.string().max(100).optional(), before: z.string().max(100).optional(), status: z.enum(['open', 'closed']).optional() });
 export const cursor = z.tuple([date, id]);

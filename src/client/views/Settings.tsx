@@ -49,6 +49,7 @@ export function HistorySheet({ choose }: { choose: (id: string) => void }) {
   const api = client!.api;
   const [search, setSearch] = useState('');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [openSessions, setOpenSessions] = useState<SessionSummary[]>([]);
   const [error, setError] = useState('');
   const [before, setBefore] = useState<string | null>(null);
   useEffect(() => {
@@ -56,9 +57,27 @@ export function HistorySheet({ choose }: { choose: (id: string) => void }) {
     void api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}`).then(result => { if (active) { setSessions(result.sessions); setBefore(result.next); } }).catch(error => setError(error.message));
     return () => { active = false; };
   }, [search]);
+  useEffect(() => {
+    let active = true;
+    async function loadOpen() {
+      let cursor: string | null = null;
+      const all: SessionSummary[] = [];
+      do {
+        const result: { sessions: SessionSummary[]; next: string | null } = await api(`/api/sessions?status=open${cursor ? `&before=${encodeURIComponent(cursor)}` : ''}`);
+        if (!active) return;
+        all.push(...result.sessions); setOpenSessions([...all]); cursor = result.next;
+      } while (cursor);
+    }
+    void loadOpen().catch(problem => { if (active) setError(problem.message); });
+    return () => { active = false; };
+  }, []);
+  const known = new Map<string, SessionSummary>();
+  for (const session of [...sessions, ...openSessions, ...(state ? [{ ...state.session, revision: state.revision }] : [])]) {
+    const prior = known.get(session.id);
+    if (!prior || BigInt(session.revision) >= BigInt(prior.revision)) known.set(session.id, session);
+  }
   const current = state?.session;
-  const choices: SessionSummary[] = current && current.name.toLowerCase().includes(search.toLowerCase()) && !sessions.some(session => session.id === current.id)
-    ? [{ ...current, revision: state.revision }, ...sessions] : sessions;
+  const choices = [...known.values()].filter(session => session.name.toLowerCase().includes(search.toLowerCase()));
   const pinned = choices.filter(session => session.id === current?.id || session.status === 'open').sort((left, right) => Number(right.id === current?.id) - Number(left.id === current?.id));
   const historical = choices.filter(session => !pinned.some(item => item.id === session.id));
   const months = [...new Set(historical.map(session => session.played_on.slice(0, 7)))];
