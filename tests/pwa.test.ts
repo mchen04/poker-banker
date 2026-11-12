@@ -8,7 +8,7 @@ type Handler = (event: Record<string, unknown>) => void;
 type WorkerFetch = (request: Request | string, options?: RequestInit) => Promise<Response>;
 type WorkerClient = { id: string; release?: string; updateProtocol?: number | null; unresponsive?: boolean; replyId?: string; messages?: unknown[] };
 type WorkerReference = { postMessage?: (data: unknown, ports: { postMessage: (data: unknown) => void }[]) => void };
-type SharedWorkerState = { stores?: Map<string, Map<string, Response>>; database?: ReturnType<typeof updatePolicyDatabase>; release?: string; locks?: boolean };
+type SharedWorkerState = { stores?: Map<string, Map<string, Response>>; database?: ReturnType<typeof updatePolicyDatabase>; release?: string; precache?: string[]; locks?: boolean };
 
 function worker(fetcher: WorkerFetch = async () => new Response('asset', { headers: { 'cache-control': 'public, max-age=31536000, immutable' } }), stamp = true, clients: WorkerClient[] = [], shared: SharedWorkerState = {}) {
   const origin = 'https://poker.test';
@@ -36,6 +36,8 @@ function worker(fetcher: WorkerFetch = async () => new Response('asset', { heade
       return {
         put: async (request: Request | string, response: Response) => { contents.set(key(request), response.clone()); },
         match: async (request: Request | string) => contents.get(key(request))?.clone(),
+        keys: async () => [...contents.keys()].map(url => new Request(url)),
+        delete: async (request: Request | string) => contents.delete(key(request)),
       };
     },
     keys: async () => [...stores.keys()],
@@ -60,7 +62,7 @@ function worker(fetcher: WorkerFetch = async () => new Response('asset', { heade
     fetch: async (request: Request | string, options?: RequestInit) => { fetches++; return fetcher(request, options); },
     setTimeout: (handler: () => void, delay: number) => setTimeout(handler, Math.min(delay, 10)), clearTimeout,
   });
-  const source = stamp ? template.replace('__PB_RELEASE__', JSON.stringify(shared.release ?? 'test-release')).replace('__PB_PRECACHE__', '["/index.html","/assets/main-test.js"]') : template;
+  const source = stamp ? template.replace('__PB_RELEASE__', JSON.stringify(shared.release ?? 'test-release')).replace('__PB_PRECACHE__', JSON.stringify(shared.precache ?? ['/index.html', '/assets/main-test.js'])) : template;
   runInContext(source, context);
   return {
     stores, clients, database, update, registration, matchAll, background: () => Promise.all(background), fetches: () => fetches, claims: () => claims, activations: () => activations,
@@ -311,6 +313,134 @@ it('bounds fixed unknown-client pins across many waiting deployments and worker 
   expect(stores.has('poker-banker-B')).toBe(false);
   expect(stores.has('poker-banker-C')).toBe(false);
   expect(stores.has('poker-banker-D')).toBe(false);
+});
+
+it('bounds entries and bytes inside a pinned legacy cache while preserving original and live release assets', async () => {
+  const original = ['https://poker.test/index.html', 'https://poker.test/assets/main-legacy.js', 'https://poker.test/assets/lazy-legacy.js', 'https://poker.test/unknown-before-migration.bin'];
+  const legacy = new Map(original.map(url => [url, new Response('legacy bytes')]));
+  const stores = new Map([['poker-banker-legacy302', legacy]]);
+  const database = updatePolicyDatabase({ clients: {}, releases: { legacy302: 1 }, generation: 1 });
+  const clients: WorkerClient[] = [{ id: 'legacy', unresponsive: true }, { id: 'live-B', release: 'B' }];
+  let prior: string | null = null;
+  let latest!: ReturnType<typeof worker>;
+  let inventory: string[] | undefined;
+  for (const release of ['B', 'C', 'D', 'E', 'F', 'G', 'H']) {
+    const precache = ['/index.html', `/assets/main-${release}.js`, `/assets/lazy-${release}.js`];
+    latest = worker(undefined, true, clients, { stores, database, release, precache });
+    latest.registration.active = reference('legacy302');
+    latest.registration.waiting = prior ? reference(prior) : null;
+    await latest.lifecycle('install');
+    inventory ??= database.state().inventories?.['poker-banker-legacy302'];
+    expect(database.state().inventories?.['poker-banker-legacy302']).toEqual(inventory);
+    expect(inventory?.slice().sort()).toEqual(original.slice().sort());
+    for (const path of precache.filter(path => path.startsWith('/assets/'))) legacy.set(`https://poker.test${path}`, new Response('asset'));
+    for (const url of original) expect(await legacy.get(url)?.clone().text()).toBe('legacy bytes');
+    expect(legacy.has('https://poker.test/assets/lazy-B.js')).toBe(true);
+    expect(legacy.size).toBeLessThanOrEqual(original.length + 6);
+    const bytes = await Promise.all([...legacy.values()].map(async response => (await response.clone().arrayBuffer()).byteLength));
+    expect(bytes.reduce((sum, size) => sum + size, 0)).toBeLessThanOrEqual(original.length * 12 + 6 * 5);
+    prior = release;
+  }
+  expect([...legacy.keys()].sort()).toEqual([...original, ...['B', 'G', 'H'].flatMap(release => [`https://poker.test/assets/main-${release}.js`, `https://poker.test/assets/lazy-${release}.js`])].sort());
+  expect(Object.keys(database.state().manifests ?? {}).sort()).toEqual(['B', 'G', 'H']);
+  legacy.set('https://poker.test/assets/lazy-C.js', new Response('late obsolete write'));
+  await latest.lifecycle('message', { data: { type: 'CLIENT_RELEASE' }, source: { id: 'live-B' } });
+  expect(legacy.has('https://poker.test/assets/lazy-C.js')).toBe(false);
+  expect(database.state().inventories?.['poker-banker-legacy302']).toEqual(inventory);
+  expect(await (await latest.request('/assets/lazy-legacy.js'))!.text()).toBe('legacy bytes');
+  clients.splice(0, clients.length);
+  latest.registration.active = reference('H');
+  latest.registration.waiting = null;
+  await latest.lifecycle('activate');
+  expect([...stores.keys()]).toEqual(['poker-banker-H']);
+  expect(database.state().inventories).toEqual({});
+  expect(Object.keys(database.state().manifests ?? {})).toEqual(['H']);
+  expect(Object.keys(database.state().releases)).toEqual(['H']);
+});
+
+it('does not cache another release’s network assets or queried variants into its own cache', async () => {
+  const instance = worker();
+  await instance.lifecycle('install');
+  for (const path of ['/assets/main-next.js', '/assets/main-test.js?variant=1']) {
+    await instance.request(path);
+    await instance.request(path);
+  }
+  expect(instance.fetches()).toBe(6);
+  expect([...instance.stores.get('poker-banker-test-release')!.keys()].sort()).toEqual(['https://poker.test/assets/main-test.js', 'https://poker.test/index.html']);
+  instance.stores.get('poker-banker-test-release')!.delete('https://poker.test/assets/main-test.js');
+  await instance.request('/assets/main-test.js');
+  await instance.request('/assets/main-test.js');
+  expect(instance.fetches()).toBe(7);
+});
+
+it('clears fallback pins only after an identified document release has a cache', async () => {
+  const clients: WorkerClient[] = [{ id: 'initially-unknown', unresponsive: true }];
+  const first = worker(undefined, true, clients, { release: 'B' });
+  first.stores.set('poker-banker-legacy302', new Map([['https://poker.test/assets/lazy-legacy.js', new Response('legacy')]]));
+  first.registration.active = reference('legacy302');
+  await first.lifecycle('install');
+  expect(first.database.state().clients['initially-unknown']!.pins).toContain('poker-banker-legacy302');
+  clients[0]!.unresponsive = false;
+  clients[0]!.release = 'C';
+  await first.lifecycle('message', { data: { type: 'CLIENT_RELEASE' }, source: { id: 'initially-unknown' } });
+  expect(first.database.state().clients['initially-unknown']!.pins).toContain('poker-banker-legacy302');
+  const second = worker(undefined, true, clients, { stores: first.stores, database: first.database, release: 'C' });
+  second.registration.active = reference('B');
+  await second.lifecycle('install');
+  expect(first.database.state().clients['initially-unknown']!.pins).toBeUndefined();
+  expect(first.stores.has('poker-banker-legacy302')).toBe(false);
+  expect(first.database.state().inventories?.['poker-banker-legacy302']).toBeUndefined();
+});
+
+it('defers entry pruning for a live release without asset metadata and resumes after its manifest arrives', async () => {
+  const original = 'https://poker.test/assets/main-legacy.js';
+  const late = 'https://poker.test/assets/lazy-B.js';
+  const obsolete = 'https://poker.test/assets/obsolete-extra.js';
+  const legacy = new Map([[original, new Response('original')]]);
+  const clients: WorkerClient[] = [{ id: 'unknown-then-B', unresponsive: true }];
+  const first = worker(undefined, true, clients, { release: 'C' });
+  first.stores.set('poker-banker-legacy302', legacy);
+  first.registration.active = reference('legacy302');
+  await first.lifecycle('install');
+  expect(first.database.state().inventories?.['poker-banker-legacy302']).toEqual([original]);
+  clients[0]!.unresponsive = false;
+  clients[0]!.release = 'B';
+  legacy.set(late, new Response('live B lazy module'));
+  legacy.set(obsolete, new Response('unclassified asset'));
+  await first.lifecycle('message', { data: { type: 'CLIENT_RELEASE' }, source: { id: 'unknown-then-B' } });
+  expect(await legacy.get(late)?.clone().text()).toBe('live B lazy module');
+  expect(legacy.has(obsolete)).toBe(true);
+  expect(first.database.state().clients['unknown-then-B']!.pins).toContain('poker-banker-legacy302');
+  expect(first.database.state().inventories?.['poker-banker-legacy302']).toEqual([original]);
+  const second = worker(undefined, true, clients, { stores: first.stores, database: first.database, release: 'B', precache: ['/index.html', '/assets/lazy-B.js'] });
+  second.registration.active = reference('legacy302');
+  await second.lifecycle('install');
+  expect(second.database.state().clients['unknown-then-B']!.pins).toBeUndefined();
+  expect(await legacy.get(late)?.clone().text()).toBe('live B lazy module');
+  expect(legacy.has(obsolete)).toBe(false);
+  expect(second.database.state().inventories?.['poker-banker-legacy302']).toEqual([original]);
+});
+
+it('preserves a shared chunk from any retained manifest after its original release closes', async () => {
+  const stores = new Map([['poker-banker-legacy302', new Map([['https://poker.test/assets/main-legacy.js', new Response('legacy')]])]]);
+  const database = updatePolicyDatabase();
+  const clients: WorkerClient[] = [{ id: 'legacy', release: 'legacy302', updateProtocol: null }, { id: 'shared-reader', release: 'B' }];
+  const first = worker(undefined, true, clients, { stores, database, release: 'B', precache: ['/index.html', '/assets/shared-chunk.js'] });
+  first.registration.active = reference('legacy302');
+  await first.lifecycle('install');
+  stores.get('poker-banker-legacy302')!.set('https://poker.test/assets/shared-chunk.js', new Response('shared'));
+  clients[1]!.release = 'C';
+  const second = worker(undefined, true, clients, { stores, database, release: 'C', precache: ['/index.html', '/assets/shared-chunk.js'] });
+  second.registration.active = reference('legacy302');
+  await second.lifecycle('install');
+  expect(stores.has('poker-banker-B')).toBe(false);
+  expect(await stores.get('poker-banker-legacy302')!.get('https://poker.test/assets/shared-chunk.js')!.clone().text()).toBe('shared');
+  clients.splice(0, 1);
+  second.registration.active = reference('C');
+  await second.lifecycle('activate');
+  expect(stores.has('poker-banker-B')).toBe(false);
+  expect(await (await second.request('/assets/shared-chunk.js'))!.text()).toBe('asset');
+  expect(Object.keys(database.state().manifests ?? {})).toEqual(['C']);
 });
 
 it('preserves every known open document release and releases its cache and metadata after it closes', async () => {
