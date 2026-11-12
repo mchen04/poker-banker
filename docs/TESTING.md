@@ -4,11 +4,13 @@
 
 Run scoped files while iterating. Run the complete gate once before release:
 
+Before the mini E2E command, [prepare and copy the public update archives](../.claude/skills/verify-poker-banker/features/offline-and-app-updates.md) and set their printed hashes as `MANIFEST_SHA` and `LEGACY_MANIFEST_SHA`. The mirror has no `.git`, so the command passes those inputs explicitly.
+
 ```sh
 scripts/mini.sh pnpm typecheck
 scripts/mini.sh pnpm build
 scripts/mini.sh pnpm test
-scripts/mini.sh pnpm e2e
+scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/update-fixtures/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256="$MANIFEST_SHA" PB_UPDATE_LIVE_LEGACY_MANIFEST=.cache/update-fixtures/legacy/manifest.json PB_UPDATE_LIVE_LEGACY_MANIFEST_SHA256="$LEGACY_MANIFEST_SHA" pnpm e2e
 ```
 
 The runner checks shared-host capacity, installs the frozen lockfile under Node 22 and copies ignored `test-results/` and `evidence/` back. Vitest reports to `test-results/vitest.json`; Playwright retains its JSON/HTML report, failed traces and screenshots. No test uses a remote database. Keep builds, browser suites, update proofs and benchmarks serial because they share `dist/`.
