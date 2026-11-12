@@ -1,6 +1,6 @@
 # Poker banker architecture
 
-Decisions made by the orchestrator before implementation. The approved product specification is `docs/APPROVED-SPEC.md`. This file says how it is built. Change a decision here first, then in code.
+Binding implementation contract for [the approved product](APPROVED-SPEC.md). Change a decision here before changing its behavior.
 
 ## Stack
 
@@ -10,9 +10,9 @@ Decisions made by the orchestrator before implementation. The approved product s
 - Validation: `zod` at every HTTP boundary. Internal code trusts parsed types.
 - Passwords: Argon2id through `@node-rs/argon2`.
 - Tests: Vitest for domain and API, Playwright for browser journeys (WebKit iPhone-sized, WebKit standalone emulation, desktop WebKit as the Safari engine, Chromium desktop).
-- Node 22 everywhere (Vercel's default line).
+- Node 22 everywhere.
 
-Why not Next.js: the app is one authenticated workspace plus one viewer page. A static SPA with a hand-written service worker gives full control over update timing, which the spec treats as a correctness requirement. Pancake confirms that a static export with a hand-written worker works on Vercel.
+A static SPA and hand-written worker keep update timing under application control.
 
 ## Data model
 
@@ -28,21 +28,23 @@ players(id uuid pk, banker_id fk, display_name text, name_key text, created_at)
         index (banker_id, name_key)  -- not unique: two real people can share a name
 game_sessions(id uuid pk, banker_id fk, name text, played_on date, currency char(3),
               status 'open'|'closed', closed_balanced bool null, closed_at null,
-              share_token text unique null, revision bigint, created_at, updated_at)
+              share_token text unique null, revision bigint, created_at, updated_at,
+              location text null, game text null, big_blind_minor bigint null check > 0,
+              started_at timestamptz null, ended_at timestamptz null, check ended_at >= started_at)
 session_players(session_id fk, player_id fk, banker_id fk, added_at, pk(session_id, player_id))
 ledger_entries(id uuid pk, banker_id fk, session_id fk, player_id fk,
-               kind 'buy_in'|'cash_out'|'payment_in'|'payment_out',
+               kind 'buy_in'|'cash_out'|'payment_in'|'payment_out'|'expense',
                amount_minor bigint check (> 0, or = 0 for cash_out), note text null,
                voids_entry_id uuid null unique fk -> ledger_entries.id,
-               created_at, revision bigint)
-session_events(id uuid pk, session_id fk, banker_id fk, kind 'created'|'renamed'|'closed'|'reopened'|'share_enabled'|'share_rotated'|'share_disabled',
+               method 'cash'|'venmo'|'zelle' null, occurred_at timestamptz null, created_at, revision bigint)
+session_events(id uuid pk, session_id fk, banker_id fk, kind 'created'|'renamed'|'closed'|'reopened'|'share_enabled'|'share_rotated'|'share_disabled'|'timer_started'|'timing_corrected'|'details_changed',
                detail jsonb, created_at, revision bigint)
 idempotency_keys(banker_id fk, key uuid, request_hash bytea, response jsonb, status int, created_at,
                  pk(banker_id, key))
 schema_migrations(version text pk, applied_at)
 ```
 
-Every row carries `banker_id`, and every query filters by the signed-in banker. Composite foreign keys (`(session_id, banker_id)`, `(player_id, banker_id)`) make cross-account references impossible at the database level.
+Payment methods are required only for payment entries and null for other kinds. Every account-owned row carries `banker_id`, and every query filters by the signed-in banker. Composite foreign keys (`(session_id, banker_id)`, `(player_id, banker_id)`) make cross-account references impossible at the database level.
 
 ### Ledger semantics
 
@@ -51,7 +53,7 @@ Every row carries `banker_id`, and every query filters by the signed-in banker. 
 - A correction is a void: a new row of the same kind with `voids_entry_id` pointing at the original, written with the same amount. The unique index on `voids_entry_id` stops a double void under concurrency. Editing an amount is a void plus a new entry in one transaction, and the API returns both.
 - Live (effective) entries are the rows that are not voids and are not voided.
 - Chips: `buy_in` gives a player chips, `cash_out` records chips returned. Money: `payment_in` is cash the player handed the banker, `payment_out` is cash the banker handed the player. The app records these and never moves money.
-- A buy-in form has a "Paid now" switch, on by default. When on, the server writes `buy_in` and `payment_in` for the same amount in one transaction. A cash-out form has a "Paid out now" switch, off by default.
+- New buy-ins default paid with a reviewable method; the server writes `buy_in` and `payment_in` in one transaction. Choosing Unpaid suppresses the payment. Cash-outs default unpaid; a positive paid cash-out pairs `payment_out`.
 
 ### Derived values
 
@@ -74,7 +76,7 @@ Cumulative, per player and per currency: sum of `result` over closed sessions on
 
 ## Concurrency and idempotency
 
-- Every mutating request carries an `op_id` (UUID v4) chosen by the client when the draft is created. Once submitted, the request body is frozen with that `op_id`. If the reply is lost, the client replays the same request: a stored success completes the draft; a validation rejection returns the draft to editing with a fresh `op_id`; an uncertain write can be discarded only after the server shows it was never applied or the banker accepts that it may exist. The server stores `(banker_id, op_id)` with a hash of the canonical request body and the response, in the same transaction as the write. A replay with the same body returns the stored response. The same key with a different body returns `409 idempotency_mismatch`.
+- Every business mutation carries an `op_id` (UUID v4) chosen by the client when the draft is created. Once submitted, the request body is frozen with that `op_id`. If the reply is lost, the client replays the same request: a stored success completes the draft; a validation rejection returns the draft to editing with a fresh `op_id`; an uncertain write can be discarded only after the server shows it was never applied or the banker accepts that it may exist. The server stores `(banker_id, op_id)` with a hash of the canonical request body and the response, in the same transaction as the write. A replay with the same body returns the stored response. The same key with a different body returns `409 idempotency_mismatch`.
 - The client records each submitted operation's immutable method, path and body in the same IndexedDB transaction as freezing or enqueueing it, and keeps that binding after acknowledgement. Recovered editable work whose operation was already submitted receives a fresh `op_id` and a review notice before delivery. A verified `idempotency_mismatch` returns only the different body to fresh editable work; it cannot prove that the earlier request was not applied. Known original requests remain frozen and uncertain until confirmed, and replacements never send automatically.
 - An edit from another tab is stored beside the frozen request as a later draft. Confirmation or a proven rejection promotes that edit with a fresh `op_id` in the same local transaction. The form explains that it was submitted in another tab; the original request stays unchanged. A successful draft write always represents a committed local write.
 - Each open form keeps its own observation of the saved draft's editable value and any later edit. Draft writes, retries, discards, freezing, enqueueing, replay claims and success or rejection settlement compare that value fingerprint in the same IndexedDB transaction as the mutation. A newer value makes the operation leave storage unchanged, refresh the form and ask the banker to review it before submitting again. Background reads cannot advance an open form's observation. Frozen-request and replay-claim metadata have separate identity checks; freezing unchanged values does not prevent a later edit from being retained beside that request. Sign-out uses its existing atomic fingerprint of all local work.
@@ -117,12 +119,14 @@ POST /api/auth/recovery-codes    {password} -> {recovery_codes}
 POST /api/auth/password          {current_password, new_password}
 
 GET  /api/sessions               ?before=<played_on,id cursor>&q=&status=<open|closed optional> -> {sessions[], next}
-POST /api/sessions               {op_id, name, played_on, currency} -> SessionState
+POST /api/sessions               {op_id, name, played_on, currency, location?, game?, big_blind_minor?} -> SessionState
 GET  /api/sessions/:id           ?since=<revision> -> SessionState | 304
-PATCH /api/sessions/:id          {op_id, name?, played_on?} -> SessionState
+PATCH /api/sessions/:id          {op_id, name?, played_on?, location?, game?, big_blind_minor?} -> SessionState
+POST /api/sessions/:id/start     {op_id} -> SessionState
+PATCH /api/sessions/:id/timing   {op_id, started_at, ended_at|null} -> SessionState
 POST /api/sessions/:id/players   {op_id, player_id} | {op_id, new_player_name} -> SessionState
-POST /api/sessions/:id/entries   {op_id, player_id, kind, amount_minor, note?, paid_now?} -> SessionState
-POST /api/sessions/:id/entries/:entry_id/void  {op_id, replacement_amount_minor?} -> SessionState
+POST /api/sessions/:id/entries   {op_id, player_id, kind, amount_minor, note?, paid_now?, method?, occurred_at?} -> SessionState
+POST /api/sessions/:id/entries/:entry_id/void  {op_id, replacement_amount_minor?, replacement_method?, replacement_occurred_at?} -> SessionState
 POST /api/sessions/:id/entries/:entry_id/undo  {op_id, expected_revision} -> SessionState
 POST /api/sessions/:id/close     {op_id, expected_revision, accept_discrepancy_minor?} -> SessionState
 POST /api/sessions/:id/reopen    {op_id, reason} -> SessionState
@@ -131,7 +135,9 @@ POST /api/sessions/:id/share     {op_id, action: 'enable'|'rotate'|'disable'} ->
 GET  /api/players                ?q= -> {players[] with per-currency cumulative and outstanding}
 POST /api/players                {op_id, display_name}
 PATCH /api/players/:id           {op_id, display_name}
-GET  /api/players/:id            -> {player, cumulative[], sessions[]}
+GET  /api/players/:id            -> {player, cumulative[], outstanding[], sessions[]}
+GET  /api/players/:id/report     ?group=&location=&game=&weekday=&month=&from=&to= -> {groups[]}
+GET  /api/suggestions            -> {locations[], games[]}
 
 GET  /api/view/:token            ?since=<revision> -> ViewerState | 304 | 404
 ```
@@ -156,7 +162,7 @@ Polling, not sockets. Neon's pooled connections cannot `LISTEN`, and Vercel func
 
 ## Service worker and updates
 
-The hand-written `public/sw.js` is stamped with a release and complete precache list. The `dc2082b` audit found three gaps: its idle timer only activated an already-discovered worker; request activity outside form busy flags was untracked; activation deleted caches still needed by another editing tab. The guarded client adds discovery and request guards. The worker requires update protocol 1 before allowing a waiting release to replace a worker with open documents.
+The hand-written `public/sw.js` is stamped with a release and complete precache list. Guarded clients track discovery, requests and local work. The worker requires update protocol 1 before replacing a worker with open documents.
 
 - Discovery runs on registration/launch, every 60 seconds while visible, and immediately on visible `visibilitychange`, `pageshow`, focus and online. Concurrent checks coalesce. Hashed-asset access also asks the worker and page to check, including an old asset served from cache. Hidden/offline pages keep their cached release; checks resume when visible/online. A schedule tick does not share a second elapsed-time throttle, so asynchronous registration cannot skip the first idle check.
 - Installation precaches the shell and hashed assets, then waits. Automatic activation/reload requires a visible page, no sheet or child dialog, no visible editable field with input, no auth/recovery/account-change flow, no busy form/account operation, no unsent outbox item in any account, and no API request still fetching or consuming its body. Both activation and reload flush drafts, then repeat the storage, outbox, request and current-hold checks. Failed local writes keep the existing warning/retry state and block reload. A controller change caused by another guarded tab follows these same guards. Immediately before navigation, a document-lifetime latch is set synchronously; later timers and lifecycle events cannot initiate or cancel a second reload, even if the first navigation stalls.
@@ -172,7 +178,7 @@ The hand-written `public/sw.js` is stamped with a release and complete precache 
 
 The local browser proof covers idle adoption, typed/offline work, server-deleted lazy modules, one navigation during overlapping lifecycle signals and stalled responses, seven candidate deployments with per-cache keys/body bytes, a failed-install B document held open through seven later releases, and unknown-to-identified pin cleanup in focused worker tests. A genuine entry download held for 18 seconds must finish without recovery navigation; an actual missing entry recovers within the two-navigation budget. A committed Undo response held with no sheet or outbox still blocks activation, then restores the draft and adopts safely when released. Previous-source version-2 storage/API checks cover both reader directions. The shared recipe and its evidence paths are documented in `docs/TESTING.md`.
 
-The installed production baseline is tracked `30209c1`; `dc2082b` has the same legacy updater but is not the same UI build. A deployment cannot add a request guard or new discovery timer to an already-running legacy document. Its ACTIVATE message has no protocol marker and is ignored. A real browser observation installs the waiting worker before a genuine Start timer POST, then receives legacy ACTIVATE messages while that response body is held, with zero fetch events in the same waiting-worker instance. An active-worker fetch provides a positive control. A quiet counter in the waiting worker therefore cannot prove safety. Omitting `clients.claim()` does not help existing controlled windows: the [Service Workers Activate algorithm](https://www.w3.org/TR/service-workers/#activation-algorithm) changes their active worker and notifies controllerchange before the activate event. Activation is deferred while any legacy or never-identified window remains, including a hidden/resumed window, a held request or a typed sheet. A quiet timeout cannot safely lift this gate without cooperation from the already-running old worker/client. The legacy Update ready banner cannot be retrofitted with this explanation: all legacy documents must close or be replaced by navigation to guarded HTML. The recipe proves closure followed by cold adoption, not automatic adoption on legacy foreground return. Durable drafts/outbox replay through the unchanged API. Known protocol-1 windows retain their own guarded reload behavior even while suspended. The 60-second discovery guarantee begins after adoption.
+The pinned legacy baseline is tracked `30209c1`; `dc2082b` has the same legacy updater but is not the same UI build. A deployment cannot add a request guard or new discovery timer to an already-running legacy document. Its ACTIVATE message has no protocol marker and is ignored. A real browser observation installs the waiting worker before a genuine Start timer POST, then receives legacy ACTIVATE messages while that response body is held, with zero fetch events in the same waiting-worker instance. An active-worker fetch provides a positive control. A quiet counter in the waiting worker therefore cannot prove safety. Omitting `clients.claim()` does not help existing controlled windows: the [Service Workers Activate algorithm](https://www.w3.org/TR/service-workers/#activation-algorithm) changes their active worker and notifies controllerchange before the activate event. Activation is deferred while any legacy or never-identified window remains, including a hidden/resumed window, a held request or a typed sheet. A quiet timeout cannot safely lift this gate without cooperation from the already-running old worker/client. The legacy Update ready banner cannot be retrofitted with this explanation: all legacy documents must close or be replaced by navigation to guarded HTML. The recipe proves closure followed by cold adoption, not automatic adoption on legacy foreground return. Durable drafts/outbox replay through the unchanged API. Known protocol-1 windows retain their own guarded reload behavior even while suspended. The 60-second discovery guarantee begins after adoption.
 
 The inline guard protects newly delivered HTML even if its initial entry disappears during deployment skew; it cannot repair an already-delivered pre-guard blank page without a new navigation. Forcing navigation of an unidentified legacy page could destroy input or interrupt a transaction and is deliberately forbidden. Fresh HTML under an older controller may finish startup normally. Physical Home Screen worker lifetime and real iOS suspension remain device acceptance items, separate from the browser-engine proof in `docs/TESTING.md`.
 
@@ -184,7 +190,7 @@ One workspace, phone and installed-iOS first, readable vertical scrolling, no ho
 - The session title opens Sessions with current and open sessions pinned before searchable, month-grouped closed history. New session is directly beside the title, in the picker and in the empty table. The picker loads open sessions separately with the optional status filter and follows its cursors, so an old unfinished session is pinned even beyond the first history page. Existing session IDs remain the switch targets; changing sessions preserves each form's own draft.
 - The session header presents the game name, date, currency, timer and a plain open/closed state. Long names wrap or truncate without pushing controls outside the viewport.
 - Session priorities distinguish playing chips, payments still to collect and money still to pay. Buy-in and cash-out totals remain available at lower visual weight. A discrepancy is explained as the difference between chips bought and chips returned, without treating payments as profit.
-- Player rows use plain states such as Not bought in, Playing and Cashed out, and No payment due instead of Seated or Settled. State-aware buy-in, rebuy, cash-out and settlement actions open reviewable money sheets; none writes immediately. Player details retain cash-out, payment, tips/meals and complete correction history.
+- Player rows use plain states such as Not bought in, Playing and Cashed out, and Paid up instead of Seated or Settled. State-aware buy-in, rebuy, cash-out and settlement actions open reviewable money sheets; none writes immediately. Player details retain cash-out, payment, tips/meals and complete correction history.
 - Money entry has an integrated currency label, exact saved-amount feedback, and visible validation. Buy-ins default paid with the selected player’s last effective payment method or Cash. A single Unpaid/Cash/Venmo/Zelle control makes the choice visible; payment direction has its own segmented control. The chosen player is fixed text. Last buy-in repeats are explicit prefills and never replace an existing draft. Cash-out is not guessed from money in; a banker supplies the actual chips returned. Payment balances may be suggested explicitly.
 - Sheets share a leading Cancel, a scrollable body and a separated Save footer. Amount/field errors are linked beside the field and focused; request errors stay above Save. Saved money gets a descriptive toast with eight seconds of available time, paused during touch, hover, focus, open sheets and busy Undo. It offers append-only Undo targeting its exact receipt. Undo preserves recorded timing; when the automatic first buy-in is undone and no effective buy-in remains, the toast names the still-running start and offers Correct times with visible history. Undo requires that receipt to remain the latest session revision, appends the primary entry and any generated payment voids atomically under one lock/revision, and uses the normal idempotency transaction. A newer write disables the old Undo; a conflicting request writes nothing. Undo busy state is independent of sheet busy flags. Visual viewport changes keep the editor and save action above the software keyboard. Draft, submission, cancellation, correction, void, close and sign-out safeguards remain in force.
 - Close explains playing-player and pending-entry blockers in place. A discrepancy requires consent to its exact amount and revision. Reopen still requires a reason. Share rotation/disabling and financial corrections retain explicit confirmation.
@@ -201,25 +207,13 @@ Money input is normalized as a string, never a float. Currency-appropriate symbo
 2. Run `pnpm db:migrate` against the unpooled URL. Migrations are forward-only, numbered SQL files, each in a transaction, recorded in `schema_migrations`, and safe to rerun.
 3. Deploy the build that needs the new schema. Each migration must also work with the previous release, so a migration lands before its code.
 
-## Justin's feedback additions
+## Payments, timing and reports
 
-Added after the spec gained the "Justin's feedback" section. Nothing has been deployed yet, so these changes amend migration `0001` directly instead of adding a compatibility migration.
-
-### Schema changes
-
-```
-game_sessions  + location text null, game text null        -- free text with suggestions from past sessions, used for report groupings
-               + big_blind_minor bigint null check > 0      -- in the session currency
-               + started_at timestamptz null, ended_at timestamptz null, check ended_at >= started_at
-ledger_entries + kind 'expense'                             -- tips and meals, outside chips and settlement
-               + method 'cash'|'venmo'|'zelle' null         -- required for payment_in and payment_out, null otherwise (check constraint)
-               + occurred_at timestamptz null              -- null means the time is unknown
-session_events + kinds 'timer_started', 'timing_corrected', 'details_changed' with old and new values in detail
-```
+Location and game are optional free text with suggestions from the banker's past sessions. The optional big blind uses the session currency.
 
 ### Payment method
 
-- Paid now on a buy-in or rebuy shows a compact Cash, Venmo, Zelle selector. The default is the method last used by the selected player, else Cash. Round 37 replaces the former session-wide default so another player’s payment cannot silently select this method. The server writes `buy_in` plus `payment_in` with the method.
+- Paid now on a buy-in or rebuy shows a compact Cash, Venmo, Zelle selector. The default is the method last used by the selected player, else Cash. Another player’s payment never selects this method. The server writes `buy_in` plus `payment_in` with the method.
 - Recording a later payment (unpaid to paid) is a `payment_in` or `payment_out` with a required method. An unpaid buy-in has no payment row, so it is never shown as received.
 - Changing a method is a correction: void the payment and write a replacement with the new method. The void endpoint accepts `replacement_method` alongside `replacement_amount_minor`. Activity shows both rows.
 - The method is a label of how money arrived. Nothing initiates a transfer.
@@ -241,7 +235,7 @@ session_events + kinds 'timer_started', 'timing_corrected', 'details_changed' wi
 
 ### Result display
 
-- A per-device toggle with Total, Per hour and Big blinds, stored in `localStorage`. It changes display only.
+- A per-device toggle with Total, Per hour and BB, stored in `localStorage`. It changes display only.
 - Per hour is `result_minor * 3_600_000 / duration_ms`, computed with integers and rounded half-even at display. Without a positive duration it shows "No time recorded".
 - Big blinds is `result_minor / big_blind_minor` to two decimals. Without a blind it shows "No big blind set".
 - Labels keep net result, gross cash-out and outstanding payments distinct.

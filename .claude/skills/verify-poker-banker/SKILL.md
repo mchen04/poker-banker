@@ -5,7 +5,7 @@ description: Drive Justin's poker banker web PWA through its real phone and desk
 
 # Verify poker banker
 
-Read [features/README.md](features/README.md), then the feature being checked. The primary surface is the browser UI. Production HTTP endpoints provide a second, read-only view of saved data. Work only in this run's uniquely named test banker and its sessions.
+Read [features/README.md](features/README.md), then the feature being checked. The primary surface is the browser UI. Read-only public API requests independently confirm saved data. Work only in this run's uniquely named test banker and its sessions.
 
 For reproducible local performance baselines and matched experiments after functional verification, read [performance verification](features/performance.md). It uses the existing benchmark harness with its own isolated fixtures and cleanup; run it serially through the mini capacity runner.
 
@@ -38,7 +38,7 @@ The checked browser binaries and Node 22 are on the mini. From this Mac, prefix 
 ./scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh cleanup --run RUN_ID
 ```
 
-The runner checks capacity, synchronizes this checkout and copies evidence back. Alternatively, use `ssh mini`, then run `cd ~/worktrees/poker-banker` and `export PATH="$HOME/tools/node22/bin:$PATH"` before the direct commands. The local execution this round proves the mini setup; live mode remains unverified.
+The runner checks capacity, synchronizes this checkout and copies evidence back. Alternatively, use `ssh mini`, then run `cd ~/worktrees/poker-banker` and `export PATH="$HOME/tools/node22/bin:$PATH"` before the direct commands. Local execution proves the owned setup; only evidence from an explicitly executed live run proves its target.
 
 Only one local verification or build may run per checkout. Local servers share `dist/`; a concurrent build can invalidate another run. The helper refuses a second active local launch. Serialize Playwright builds, benchmark builds and update recipes too. Live targets do not use local `dist/`.
 
@@ -81,7 +81,7 @@ rsync -az .cache/verify-sessions.ts mini:worktrees/poker-banker/.cache/verify-se
 
 Alternatively write the shown recipe inside the mini checkout. Do not synchronize other cache content.
 
-A recipe exports an async default function receiving `RecipeContext` from `scripts/control.ts`. Its `page` is already signed into this run's banker. `step(name)` captures the primary page's action/result evidence. `checkState()` reads the selected session through the public API. Use `expect`, ARIA names and repository test IDs. Navigate through `tableReady`, `openNewSession` and `switchSession` from `e2e/helpers.ts`; session choices live in the History dialog opened by Switch session. Do not set application state, edit IndexedDB or call test-only endpoints to manufacture a pass. Fresh contexts created by a recipe must be closed in `finally`.
+A recipe exports an async default function receiving `RecipeContext` from `.claude/skills/verify-poker-banker/scripts/control.ts`. Its `page` is already signed into this run's banker. `step(name)` captures the primary page's action/result evidence. `checkState()` reads the selected session through the public API. Use `expect`, ARIA names and repository test IDs. Navigate through `workspaceReady`, `openNewSession` and `switchSession` from `e2e/helpers.ts`; session choices live in the History dialog opened by Switch session. Do not set application state, edit IndexedDB or call test-only endpoints to manufacture a pass. Fresh contexts created by a recipe must be closed in `finally`.
 
 Run each feature from its declared prerequisites. A missing fixture fails the recipe and belongs in its Gotchas. A convenient path does not prove the other listed entry points. These files are maintained recipes, not a claim that every feature was executed this round.
 
@@ -106,6 +106,6 @@ Cleanup verifies ownership and stops only the daemon, browser, application serve
 
 ## Helpers
 
-The executable entry point is `.claude/skills/verify-poker-banker/scripts/verify.sh`; `scripts/control.ts` implements its owned harness and `scripts/ledger.ts` supplies the recipe invoked by `drive ledger`. Launch, doctor, ledger drive, recipe, evidence and cleanup invocations are shown above. Do not start the TypeScript daemon manually or inspect authentication state. Authentication stays in daemon memory; run metadata contains only ownership and artifact paths.
+The executable entry point is `.claude/skills/verify-poker-banker/scripts/verify.sh`; `scripts/control.ts` and `scripts/ledger.ts` in that same skill directory implement the owned harness and supply the recipe invoked by `drive ledger`. Launch, doctor, ledger drive, recipe, evidence and cleanup invocations are shown above. Do not start the TypeScript daemon manually or inspect authentication state. Authentication stays in daemon memory; run metadata contains only ownership and artifact paths.
 
 Use `/maintain-verification-skill` when user paths or selectors change so the feature map remains accurate.

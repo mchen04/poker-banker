@@ -65,13 +65,13 @@ Prepare two fresh source copies with one application factor differing. Harness, 
 To replay the retained formatter experiment, use these pinned application revisions. The shared overlay puts the same current benchmark/seed/reporting code on both sides; it includes the later viewer-count reporting fix, which does not change timed work. Use fresh directories or labels rather than overwriting previous receipts. No environment or local-data files are archived:
 
 ```sh
-mkdir -p .cache/round43
-test ! -e .cache/round43/formatter-replay-A
-test ! -e .cache/round43/formatter-replay-B
-mkdir .cache/round43/formatter-replay-A .cache/round43/formatter-replay-B
-git archive ccec480 | tar -x -C .cache/round43/formatter-replay-A
-git archive 7c6c895 | tar -x -C .cache/round43/formatter-replay-B
-for PB_COMPARE_TREE in .cache/round43/formatter-replay-A .cache/round43/formatter-replay-B; do
+mkdir -p .cache/performance
+test ! -e .cache/performance/formatter-replay-A
+test ! -e .cache/performance/formatter-replay-B
+mkdir .cache/performance/formatter-replay-A .cache/performance/formatter-replay-B
+git archive ccec480 | tar -x -C .cache/performance/formatter-replay-A
+git archive 7c6c895 | tar -x -C .cache/performance/formatter-replay-B
+for PB_COMPARE_TREE in .cache/performance/formatter-replay-A .cache/performance/formatter-replay-B; do
   git archive HEAD scripts/bench scripts/bench.ts scripts/bench-compare.ts scripts/owned-process.ts tests/benchmark-stats.test.ts package.json pnpm-lock.yaml | tar -x -C "$PB_COMPARE_TREE"
 done
 ```
@@ -82,7 +82,7 @@ Retain the baseline source revision/diff, candidate patch and frozen harness/loc
 
 ```sh
 ./scripts/mini.sh true
-rsync -az --relative --exclude='.git/' --exclude='node_modules/' --exclude='dist/' --exclude='.env*' .cache/round43/formatter-replay-A .cache/round43/formatter-replay-B mini:worktrees/poker-banker/
+rsync -az --relative --exclude='.git/' --exclude='node_modules/' --exclude='dist/' --exclude='.env*' .cache/performance/formatter-replay-A .cache/performance/formatter-replay-B mini:worktrees/poker-banker/
 ```
 
 Build both copies serially under the same explicit release stamp, then use the existing five-pair comparator. This example remeasures the formatter experiment, targeting cash-out and guarding buy-in, installed table open and report open; change the ID, release stamp and metric list to the predeclared experiment, preserving matching values on both sides:
@@ -92,18 +92,18 @@ Build both copies serially under the same explicit release stamp, then use the e
 set -euo pipefail
 PB_BENCH_ROOT="$PWD"
 PB_COMPARE_ID="formatter-replay-$(date -u +%Y%m%d%H%M%S)"
-for PB_BENCH_TREE in .cache/round43/formatter-replay-A .cache/round43/formatter-replay-B; do
+for PB_BENCH_TREE in .cache/performance/formatter-replay-A .cache/performance/formatter-replay-B; do
   cd "$PB_BENCH_ROOT/$PB_BENCH_TREE"
   pnpm install --frozen-lockfile
   mkdir -p .cache
   RELEASE_VERSION=bench-turn3-formatter pnpm build
 done
 cd "$PB_BENCH_ROOT"
-pnpm exec tsx scripts/bench-compare.ts "$PB_COMPARE_ID" .cache/round43/formatter-replay-A .cache/round43/formatter-replay-B cash_out.confirm,entry.confirm,ui.open.cold,report.open --journeys --workload long --samples 2 --output "evidence/bench/turn3/${PB_COMPARE_ID}"
+pnpm exec tsx scripts/bench-compare.ts "$PB_COMPARE_ID" .cache/performance/formatter-replay-A .cache/performance/formatter-replay-B cash_out.confirm,entry.confirm,ui.open.cold,report.open --journeys --workload long --samples 2 --output "evidence/bench/turn3/${PB_COMPARE_ID}"
 '
 ```
 
-The command form is `pnpm exec tsx scripts/bench-compare.ts ID .cache/round43/formatter-replay-A .cache/round43/formatter-replay-B TARGET,GUARD --journeys --workload long --samples 2 --output evidence/bench/turn3/compare-ID`. It uses prebuilt assets (`--skip-build` internally), one fresh fixture per leg and five alternating A/B then B/A pairs. Keep `update.adoption` out of this identical-release comparison; its own recipe deliberately builds a second release. Each side has 10 observations per ordinary selected metric, so no p95 is justified. Compare the five paired leg medians, ranges, paired wins and noise floor in `comparison.json`. `clearsNoise` is a harness heuristic, not statistical significance or a correctness verdict.
+The command form is `pnpm exec tsx scripts/bench-compare.ts ID .cache/performance/formatter-replay-A .cache/performance/formatter-replay-B TARGET,GUARD --journeys --workload long --samples 2 --output evidence/bench/turn3/compare-ID`. It uses prebuilt assets (`--skip-build` internally), one fresh fixture per leg and five alternating A/B then B/A pairs. Keep `update.adoption` out of this identical-release comparison; its own recipe deliberately builds a second release. Each side has 10 observations per ordinary selected metric, so no p95 is justified. Compare the five paired leg medians, ranges, paired wins and noise floor in `comparison.json`. `clearsNoise` is a harness heuristic, not statistical significance or a correctness verdict.
 
 Retain a change only when its benefit survives matched repetitions and guard paths remain correct without a meaningful regression. Investigate noisy or saturated runs using their recorded host observations; retain the failed/noisy evidence and use a fresh label for a justified rerun. Reject or revert ineffective/harmful experiments and record that result. After a retained change, rerun the affected complete functional flows and the representative workloads before release; do not claim a universal speed target or stop because an arbitrary round count has been reached.
 

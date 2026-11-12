@@ -1,102 +1,51 @@
-# Poker banker verification map
+# Verification feature map
 
-This directory is the maintained source for checking user-facing poker banker behavior. Read this index and the matching feature before driving the app.
+Read [SKILL.md](../SKILL.md), launch from the repository root and require Doctor to identify the owned banker/build/base URL. Each ordinary recipe starts with `page.goto('/')` and `workspaceReady(page)`, creates uniquely named fixtures and closes extra contexts. The nine feature recipes can share one banker; repeat sessions alone on a fresh run for its welcome entry point. Update verification runs last because it changes `dist/`.
 
-## Baseline preconditions
+## Driver rules
 
-- Launch from the repository root with `.claude/skills/verify-poker-banker/scripts/verify.sh launch --local`, or the mini runner prefix shown in [SKILL.md](../SKILL.md).
-- Keep the returned run ID and evidence directory. Require `doctor --run RUN_ID` to identify this run's banker, build and base URL.
-- Use only the owned browser contexts. Each recipe operates on the run's unique banker; additional accounts must be newly created test accounts.
-- Every recipe returns its primary page to Table before setup. The ten recipes can share one run and banker; each creates its own fixture and closes its extra contexts. Run sessions alone on a fresh run as well to prove the welcome creation entry point.
-- In live mode, use only a supplied `PB_BASE_URL` and newly created test accounts. Never read credential files, use another account, deploy or delete remote records.
-
-## Driving conventions
-
-- Save the exact TypeScript recipe block at the named repository-relative `.cache/verify-*.ts` path before invoking it.
-- The mini runner excludes `.cache/`; copy only the newly written recipe with the explicit rsync command in SKILL.md, or write it inside the mini checkout.
-- Replace `RUN_ID` in commands with the run ID from launch. Select `iphone-webkit`, `iphone-standalone` or `desktop-webkit` explicitly.
-- Start each recipe with `page.goto('/')` and `workspaceReady(page)`. Use `openNewSession(page)` for creation and `switchSession(page, id)` for picker choices.
-- Secondary contexts use `newContextLike(page, browser, baseURL)` to retain the current viewport, touch profile and standalone emulation without copying cookies.
-- Import repository browser helpers from `../e2e/helpers`. They use real UI controls and public production endpoints.
-- API fixture setup is named as setup. It does not prove a UI mutation. Saved-state proof uses read-only production API responses.
-- Capture `step` evidence before and after meaningful actions. Additional pages need their own screenshots and ARIA snapshots because `step` captures the primary page.
-- Never weaken a recipe when a prerequisite or expected result is missing. Fail with its reason.
-
-## Proof and skip reporting
-
-- Record feature and entry point with every proof. Do not mark an unused entry point verified through a different one.
-- A mutation needs a visible outcome and an independent read-only saved-state check.
-- Keep account passwords, cookies and recovery codes out of artifacts. They belong only in the owned browser or daemon memory.
-- Run `evidence --run RUN_ID`, then `cleanup --run RUN_ID`, even after failure. Confirm the evidence survives cleanup.
-- Recipes are mapped until their own execution artifacts prove them. Keep the sequential run and each isolated run's actual command results; a successful ledger drive does not prove another recipe.
+- Save each exact recipe block at its named `.cache/verify-*.ts` path before invocation. The mini runner excludes `.cache/`; copy only that file explicitly, or write it inside the mini checkout.
+- Use `e2e/helpers.ts` for real navigation, `e2e/input.ts` for physical-key typing, and `newContextLike` for secondary owned contexts without copied cookies.
+- Run in `iphone-webkit`, `iphone-standalone` or `desktop-webkit`. Live mode requires a supplied, authorized `PB_BASE_URL` and new synthetic accounts only.
+- Fixture setup through public APIs is labelled setup; it does not prove a UI mutation. Require visible action/result evidence and independent saved-state checks. Do not edit IndexedDB or manufacture test-only endpoints to obtain a pass.
+- Capture the primary page with `step`. Extra pages need separate screenshots/ARIA. Keep passwords, cookies and recovery codes out of artifacts.
+- Seal evidence, clean up after success or failure, and confirm evidence survives. A successful ledger drive does not prove another recipe.
 
 ## Features
 
-- [Accounts and recovery](accounts-and-recovery.md) covers signup acknowledgement, signin, signout, recovery and revoked sessions.
-- [Sessions, picker and drafts](sessions-and-drafts.md) covers creation, settings, suggestions, the session picker, history entry points and scoped drafts.
-- [Ledger entries and corrections](ledger-and-corrections.md) covers both buy-in entry points, re-entry, expenses, correction and void history.
-- [Payments and methods](payments-and-methods.md) covers paid/unpaid entries, later settlement, directions and method correction.
-- [Timer](timer.md) covers manual and automatic start, reload, another context, corrections and close-stop.
-- [Close and reopen with cumulative results](close-reopen-and-cumulative.md) covers blockers, discrepancy consent and counting closed sessions once.
-- [Sharing and live viewer](sharing-and-live-viewer.md) covers enable, copy, live updates, rotate, disable and readonly access.
-- [Player reports](player-reports.md) covers roster, rename, five groupings, six filters and display-only rates.
-- [Offline and app updates](offline-and-app-updates.md) covers snapshots, queued/rejected writes, replay and real automatic A/B adoption via `drive updates` or its shared recipe, including pinned previous-client compatibility.
+| Feature | Proof |
+| --- | --- |
+| [Accounts and recovery](accounts-and-recovery.md) | Signup acknowledgement, signin/signout, one-use recovery, revocation and isolation. |
+| [Sessions and drafts](sessions-and-drafts.md) | Creation/settings, suggestions, picker/history/pagination, player reuse and scoped drafts. |
+| [Ledger and corrections](ledger-and-corrections.md) | Row/footer buy-ins, re-entry, expenses, full Activity, correction/void. |
+| [Payments and methods](payments-and-methods.md) | Paid/unpaid, late settlements, directions, methods and correction. |
+| [Timer](timer.md) | Auto/manual start, reload/another context, correction and close-stop. |
+| [Close/reopen/cumulative](close-reopen-and-cumulative.md) | Blockers, exact discrepancy consent and closed-session counting. |
+| [Sharing/live viewer](sharing-and-live-viewer.md) | Enable/copy, updates, rotate/disable and read-only access. |
+| [Player reports](player-reports.md) | Roster/rename, five groupings, six filters and display-only rates. |
+| [Offline and updates](offline-and-app-updates.md) | Snapshots, pending/rejected writes, replay, automatic adoption, pinned legacy compatibility, skew and storage bounds. |
+| [Performance](performance.md) | Isolated datasets, current transport, baseline, profiles and interleaved comparison. |
 
-## UX approval capture and action counts
+## Layout and control-count capture
 
-Run this recipe **first** after a fresh local launch. It measures first-session creation, so a banker with earlier sessions is rejected rather than silently skipping that journey. The shared helper also supplies `e2e/r37-ux.spec.ts`; it records all fourteen measured journeys, real ledger checks, latest-entry Undo, and exact required approval screens.
-
-Save this block as `.cache/r37-ux.ts`, copy only that file to the mini, then run `recipe .cache/r37-ux.ts --run RUN_ID --context iphone-standalone`. Use a separate fresh local launch for `desktop-webkit`. Evidence includes viewport and visual-viewport geometry alongside light/dark screenshots, eight-player complete-row counts, tap controls, live/revoked viewer and the saved ledger. The outer phone viewport stays 393×659 while a 380 px visual viewport emulates a keyboard; this cannot prove a physical iOS keyboard. The desktop captures use 1440×1000. Finish each run with evidence and cleanup.
-
-```ts
-import { uxApproval } from '../e2e/ux-approval';
-import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
-
-export default async function ({ page, browser, baseURL, evidence, runId }: RecipeContext) {
-  await uxApproval({ page, browser, baseURL, evidence, runId });
-}
-```
-
-The shared browser helpers retain explicit `r36-previous-` and `r38-legacy-302-` release-fixture branches for pinned `dc2082b` and `30209c1` update proofs. Those archived clients use their respective old navigation, picker and paid-checkbox controls. Current-release journeys require Table navigation and the current segmented controls; there is no generic old-label fallback.
-
-The recipe daemon uses `tsx`. Keep browser-evaluated callbacks self-contained; named local arrow helpers can serialize an unavailable `__name` helper. The shared capture helper uses inline callbacks and was executed through the skill in both contexts.
-
-## Footer and Undo follow-ups
-
-`e2e/ux-followups.ts` supplies `e2e/r39-ux.spec.ts` and the following local skill recipe. It creates its own session and can run after the approval capture on the same banker. It captures open/closed Table and Players footers, full-width cash-out blockers, debt/Paid up rows, two-line names, the paused Undo toast and retained-timer explanation in both themes. Desktop uses 1440×1000; phone uses 393×659. A logged-out viewer proves the same debt styling. Report setup uses two named public-API fixtures with hourly results of $0 and $2,000, so sample variation must show $1,414.21. Those fixtures prove display, not UI session creation.
-
-Save as `.cache/r39-ux.ts`, copy that single file explicitly, then run `recipe .cache/r39-ux.ts --run RUN_ID --context iphone-standalone` and repeat in a fresh local run with `desktop-webkit`. The ordinary approval helper must run first because it measures first-session creation. Evidence keeps both tap tables in separate directories.
+Run first on a fresh local banker because the approval helper measures first-session creation. Save as `.cache/verify-layout.ts`, copy only that file to the mini, then run `recipe .cache/verify-layout.ts --run RUN_ID --context iphone-standalone`; repeat on a fresh run with `desktop-webkit`.
 
 ```ts
 import { join } from 'node:path';
-import { uxApproval } from '../e2e/ux-approval';
-import { uxFollowups } from '../e2e/ux-followups';
+import { uxApproval } from '../e2e/table-experience';
+import { uxFollowups } from '../e2e/navigation-and-undo';
+import { uxCloseReadiness } from '../e2e/close-readiness';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function (context: RecipeContext) {
-  await uxApproval({ ...context, evidence: join(context.evidence, 'approval') });
-  await uxFollowups({ ...context, evidence: join(context.evidence, 'followups') });
+  await uxApproval({ ...context, evidence: join(context.evidence, 'layout') });
+  await uxFollowups({ ...context, evidence: join(context.evidence, 'navigation') });
+  await uxCloseReadiness({ ...context, evidence: join(context.evidence, 'close-readiness') });
 }
 ```
 
-Pointer hold, focus and an open sheet each keep Undo available for an observed 8.3 seconds without changing the clock. An idle toast remains at 4.8 seconds and disappears by 8.4. Undo remains restricted to the latest owned receipt. Undoing the automatic first buy-in keeps the separately recorded timer and offers Correct times; its visible history is never silently reset. Emulated pointer/viewport behavior does not prove a physical iOS touch or software keyboard. Seal evidence and clean up after every attempt.
+The helpers also drive `e2e/table-experience.spec.ts`. They retain fourteen control counts and light/dark captures: eight-player four/six-row visibility at 393×659/393×852, money sheets and focused validation above a 380px visual viewport, settings/picker, 1440×1000 desktop, live/revoked viewer, stable Table/Players footer, two-line names and Owes/Paid up contrast. Independent report fixtures require the grouped variation `$1,414.21`.
 
-## Ready-to-close and lasting timer follow-ups
+Undo keeps eight unpaused seconds; pointer/focus/sheets pause without resetting the remaining budget. Held-response/session-switch checks reject wrong-session feedback. Undo retains the timer; its lasting Correct times cue survives reload and clears only after timing correction or a new buy-in. Ready-close and create-another each take two controls; closed desktop has one New action and its 420px toast clears Activity and the last player row.
 
-`e2e/ux-close-readiness.ts` supplies `e2e/r41-ux.spec.ts` and this focused skill capture. It proves the ready card is absent while playing, includes the unsettled count after cash-out, and opens the unchanged confirmation flow in two controls. Desktop shows one New action after closing and a toast at most 420 px wide inside the table column, with the last player row scrollable above it. Undo's retained timer line survives reload, clears after timing correction, returns after another Undo and clears after a new buy-in. No worker or update behavior is changed.
-
-Save as `.cache/r41-ux.ts`, copy only that file explicitly to the mini, then run `recipe .cache/r41-ux.ts --run RUN_ID --context iphone-standalone`. Use a fresh local launch for `desktop-webkit`. Run it first because the approval helper measures first-session creation. Both helpers retain their own light/dark screenshots and actual control-tap receipts; close and create-another must each take two. The extra seats and rebuys used to extend Activity are explicitly named public-API fixture setup, not UI mutation proof.
-
-```ts
-import { join } from 'node:path';
-import { uxApproval } from '../e2e/ux-approval';
-import { uxCloseReadiness } from '../e2e/ux-close-readiness';
-import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
-
-export default async function (context: RecipeContext) {
-  await uxApproval({ ...context, evidence: join(context.evidence, 'approval') });
-  await uxCloseReadiness({ ...context, evidence: join(context.evidence, 'followups') });
-}
-```
-
-The footer keeps its existing Buy-in/New session meaning. Menu still offers Close and reason-required Reopen. The timer remains recorded; the lasting line is reconstructed from confirmed ledger/timing history and does not create local state or silently reset it. Seal evidence and clean up every run. Browser emulation does not prove physical iOS keyboard or suspension behavior.
+Pinned `dc2082b`/`30209c1` update builds keep explicit legacy branches in shared browser helpers; current recipes never fall back to old controls. Browser-evaluated callbacks must be self-contained so `tsx` does not serialize an unavailable function-name helper. Emulation does not prove physical keyboard/touch, Home Screen installation or iOS suspension; seal evidence and clean up every run.

@@ -161,36 +161,36 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
 Prepare the pinned previous-source fixture on this Mac because the mini checkout intentionally has no `.git`. The archive contains tracked project files only. The helper verifies both hashes and the pinned commit, and refuses credential/traversal paths before extracting into its own temporary directory.
 
 ```sh
-mkdir -p .cache/round36/previous
-git archive --format=tar --output .cache/round36/previous/previous.tar dc2082b09d7bf8ad124f0e21f8826ef75c0b4e1f
+mkdir -p .cache/update-fixtures/previous
+git archive --format=tar --output .cache/update-fixtures/previous/previous.tar dc2082b09d7bf8ad124f0e21f8826ef75c0b4e1f
 python3 - <<'PYTHON'
 from hashlib import sha256
 from pathlib import Path
 import json
-root = Path('.cache/round36/previous')
+root = Path('.cache/update-fixtures/previous')
 manifest = root / 'manifest.json'
 manifest.write_text(json.dumps({'sourceSha': 'dc2082b09d7bf8ad124f0e21f8826ef75c0b4e1f', 'archive': 'previous.tar', 'archiveSha256': sha256((root / 'previous.tar').read_bytes()).hexdigest()}, indent=2) + '\n')
 print(sha256(manifest.read_bytes()).hexdigest())
 PYTHON
-rsync -az .cache/round36/previous/ mini:worktrees/poker-banker/.cache/round36/previous/
-mkdir -p .cache/update-live-legacy
-git archive --format=tar --output .cache/update-live-legacy/previous.tar 30209c1bff774172c89e8dba1901a1e597e860b6
+rsync -az .cache/update-fixtures/previous/ mini:worktrees/poker-banker/.cache/update-fixtures/previous/
+mkdir -p .cache/update-fixtures/legacy
+git archive --format=tar --output .cache/update-fixtures/legacy/previous.tar 30209c1bff774172c89e8dba1901a1e597e860b6
 python3 - <<'PYTHON'
 from hashlib import sha256
 from pathlib import Path
 import json
-root = Path('.cache/update-live-legacy')
+root = Path('.cache/update-fixtures/legacy')
 manifest = root / 'manifest.json'
 manifest.write_text(json.dumps({'sourceSha': '30209c1bff774172c89e8dba1901a1e597e860b6', 'archive': 'previous.tar', 'archiveSha256': sha256((root / 'previous.tar').read_bytes()).hexdigest()}, indent=2) + '\n')
 print(sha256(manifest.read_bytes()).hexdigest())
 PYTHON
-rsync -az .cache/update-live-legacy/ mini:worktrees/poker-banker/.cache/update-live-legacy/
+rsync -az .cache/update-fixtures/legacy/ mini:worktrees/poker-banker/.cache/update-fixtures/legacy/
 ```
 
 Use the first printed manifest hash as `MANIFEST_SHA` and the second as `LEGACY_MANIFEST_SHA` below. The live-legacy source is pinned to the publicly observed production client from the update review; it is not a claim about future deployments. These public fixture metadata variables must be present at **launch**, because the existing daemon executes later recipes.
 
 ```sh
-scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/round36/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256=MANIFEST_SHA PB_UPDATE_LIVE_LEGACY_MANIFEST=.cache/update-live-legacy/manifest.json PB_UPDATE_LIVE_LEGACY_MANIFEST_SHA256=LEGACY_MANIFEST_SHA .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
+scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/update-fixtures/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256=MANIFEST_SHA PB_UPDATE_LIVE_LEGACY_MANIFEST=.cache/update-fixtures/legacy/manifest.json PB_UPDATE_LIVE_LEGACY_MANIFEST_SHA256=LEGACY_MANIFEST_SHA .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
 scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh doctor --run RUN_ID
 scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh drive updates --run RUN_ID --context iphone-standalone
 scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh evidence --run RUN_ID
@@ -227,6 +227,14 @@ Proofs in `automatic-updates-summary.json` and `review/review-cases-summary.json
 | Held Undo | With a sheet closed and outbox empty, withhold the real committed Undo response body. Independently verify one buy-in void and one generated-payment void. No reload until that response settles, then adopt B and restore the separate draft. |
 
 The original five cases plus seven review cases share one helper and exclusive build scope; allow the focused recipe to complete its real discovery and failure-observation windows. The two lazy modules and previous storage reader are test-build fixtures emitted before the shared production precache stamp. Normal builds contain neither. Normal builds contain no observer listener; opt-in diagnostic builds record the unchanged stamped-worker prefix and observation-source hashes. Cache body bytes are decoded response sizes, not physical disk usage. Every case has screenshots, ARIA/landmarks and explicit before/after release identities. The helper owns and closes its contexts, archive scratch and journey lock; the skill's cleanup then stops its existing owned browser/server/database and keeps evidence.
+
+For one focused review case, pass the same public archive paths/hashes as arguments (SSH does not inherit local exports), then run only the shared automatic-update entry:
+
+```sh
+scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/update-fixtures/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256=MANIFEST_SHA PB_UPDATE_LIVE_LEGACY_MANIFEST=.cache/update-fixtures/legacy/manifest.json PB_UPDATE_LIVE_LEGACY_MANIFEST_SHA256=LEGACY_MANIFEST_SHA PB_UPDATE_REVIEW_MODE=fixed PB_UPDATE_REVIEW_CASES=R7-failed-install-cache-bound pnpm e2e e2e/app-updates.spec.ts --grep "automatic release adoption" --project iphone-standalone
+```
+
+Do not combine this focused mode with the full shared journey.
 
 ## Gotchas
 
