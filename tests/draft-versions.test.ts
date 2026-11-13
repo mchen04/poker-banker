@@ -1036,7 +1036,7 @@ async function drainApplied(tab: Tab) {
   finally { stop(); }
 }
 
-it.each([false, true])('recovers a quota-retained value with a fresh operation before review after another tab saved its former operation (lostReply=%s)', async lostReply => {
+it.each([false, true].flatMap(lostReply => [false, true].map(flushFirst => [lostReply, flushFirst] as const)))('recovers a quota-retained value with a fresh operation before review after another tab saved its former operation (lostReply=%s, flushFirst=%s)', async (lostReply, flushFirst) => {
   outboxEvents();
   const storage = sharedStorage();
   const server = operationServer();
@@ -1057,6 +1057,14 @@ it.each([false, true])('recovers a quota-retained value with a fresh operation b
     finally { stop(); }
   } else await drainApplied(other);
   const originalItems = await other.listOutbox(owner);
+  if (flushFirst) {
+    storage.failNextGet();
+    await expect(editing.flushDraftWrites()).rejects.toThrow('Not saved on this device');
+    expect(editing.hasRetainedDraft(key, edited)).toBe(true);
+    expect(editing.hasPendingLocalWrites()).toBe(true);
+    expect(storage.draft(key)).toBeUndefined();
+    await editing.flushDraftWrites();
+  }
   const cursor: import('../src/client/data').DraftCursor = {};
   const recovered = await editing.readDraft<typeof edited>(key, cursor);
   expect(recovered?.amount).toBe('50');
