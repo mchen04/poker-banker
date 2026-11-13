@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { expect, type BrowserContext, type Page } from '@playwright/test';
-import { addPlayer, call, current, keepMoneyDraft, money, newContextLike, newSession, workerReady, workspaceReady } from '../e2e/helpers';
+import { addPlayer, call, captureContextProfile, current, keepMoneyDraft, money, newContextLike, newSession, workerReady, workspaceReady } from '../e2e/helpers';
 import { ownedMain } from './owned-command';
 import { buildArchivedUpdateRelease, buildUpdateRelease, type PreviousSourceInput, type ReleaseAsset, type WorkerObservationOptions } from './update-release';
 import { capture, controllerRelease, databaseSnapshot, draft, releaseIs, restoredDraft, visible, type UpdateJourneyOptions } from './verify-update-journey';
@@ -84,6 +84,7 @@ async function observeWorker(page: Page, queryType: string, target: 'waiting' | 
 
 export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { mode?: ReviewMode; cases?: string[]; lockHeld?: boolean }) {
   const { page, browser, baseURL } = options;
+  const profile = options.profile ?? await captureContextProfile(page);
   const mode = options.mode ?? (process.env.PB_UPDATE_REVIEW_MODE === 'baseline' ? 'baseline' : 'fixed');
   const selected = options.cases ?? process.env.PB_UPDATE_REVIEW_CASES?.split(',');
   const evidence = resolve(options.evidence);
@@ -103,7 +104,7 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
     const contexts = new Set<BrowserContext>();
     owner.addCleanup('Update review browser contexts', 'cleanup', async () => { await Promise.all([...contexts].map(context => context.close())); });
     const fresh = async () => {
-      const context = await newContextLike(page, browser, proxy.origin);
+      const context = await newContextLike(page, browser, proxy.origin, profile);
       await context.addCookies(cookies);
       contexts.add(context);
       return context;

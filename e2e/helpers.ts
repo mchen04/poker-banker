@@ -6,13 +6,19 @@ import { formatMoney, parseMoney } from '../src/domain/money';
 import { expect, screen } from './fixtures';
 
 export const password = randomUUID();
-export async function newContextLike(page: Page, browser: Browser, baseURL: string) {
-  const profile = await page.evaluate(() => ({
+export type ContextProfile = Readonly<{ userAgent: string; hasTouch: boolean; scale: number; standalone: boolean; dark: boolean; viewport?: Readonly<{ width: number; height: number }> }>;
+export async function captureContextProfile(page: Page): Promise<ContextProfile> {
+  const observed = await page.evaluate(() => ({
     userAgent: navigator.userAgent, hasTouch: navigator.maxTouchPoints > 0, scale: devicePixelRatio,
     standalone: !!(navigator as Navigator & { standalone?: boolean }).standalone,
     dark: matchMedia('(prefers-color-scheme: dark)').matches,
   }));
-  const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', viewport: page.viewportSize() ?? undefined, userAgent: profile.userAgent, hasTouch: profile.hasTouch, isMobile: profile.hasTouch && /iPhone|iPad|Android/.test(profile.userAgent), deviceScaleFactor: profile.scale, colorScheme: profile.dark ? 'dark' : 'light', locale: 'en-US', timezoneId: 'UTC' });
+  const viewport = page.viewportSize();
+  return Object.freeze({ ...observed, viewport: viewport ? Object.freeze({ ...viewport }) : undefined });
+}
+export async function newContextLike(page: Page, browser: Browser, baseURL: string, captured?: ContextProfile) {
+  const profile = captured ?? await captureContextProfile(page);
+  const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', viewport: profile.viewport ? { ...profile.viewport } : undefined, userAgent: profile.userAgent, hasTouch: profile.hasTouch, isMobile: profile.hasTouch && /iPhone|iPad|Android/.test(profile.userAgent), deviceScaleFactor: profile.scale, colorScheme: profile.dark ? 'dark' : 'light', locale: 'en-US', timezoneId: 'UTC' });
   if (profile.standalone) await context.addInitScript(() => {
     Object.defineProperty(navigator, 'standalone', { configurable: true, value: true });
     const native = window.matchMedia.bind(window);

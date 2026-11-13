@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { expect, type Browser, type BrowserContext, type Page, type Request } from '@playwright/test';
-import { addPlayer, call, current, keepMoneyDraft, newContextLike, newSession, openMoney, workerReady, workspaceReady } from '../e2e/helpers';
+import { addPlayer, call, captureContextProfile, current, keepMoneyDraft, newContextLike, newSession, openMoney, workerReady, workspaceReady, type ContextProfile } from '../e2e/helpers';
 import { typeInput } from '../e2e/input';
 import type { OutboxItem } from '../src/client/data';
 import { ownedMain } from './owned-command';
@@ -11,7 +11,7 @@ import { buildPreviousUpdateRelease, buildUpdateRelease } from './update-release
 type Draft = { key: string; banker_id: string; value: Record<string, unknown>; updated_at: number };
 type Snapshot = { version: number; drafts: Draft[]; outbox: OutboxItem[]; snapshots: unknown[] };
 type Seed = { context: BrowserContext; page: Page; session: string; name: string; player: string };
-export type UpdateJourneyOptions = { page: Page; browser: Browser; baseURL: string; evidence: string; tag?: string };
+export type UpdateJourneyOptions = { page: Page; browser: Browser; baseURL: string; evidence: string; tag?: string; profile?: ContextProfile };
 export type UpdateCase = { case: string; before: string; after: string; bankerId: string; sessionId: string; [key: string]: unknown };
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? 'undefined').digest('hex');
 
@@ -87,10 +87,11 @@ async function sameAccount(page: Page, banker: string) {
   return account.banker.id;
 }
 
-export async function verifyUpdateJourney({ page, browser, baseURL, evidence, tag }: UpdateJourneyOptions) {
+export async function verifyUpdateJourney({ page, browser, baseURL, evidence, tag, profile: capturedProfile }: UpdateJourneyOptions) {
   const target = new URL(baseURL);
   if (target.protocol !== 'https:' || !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname)) throw new Error('Update journey requires the owned loopback HTTPS server');
   if (new URL(page.url()).origin !== target.origin) throw new Error('The signed-in page must belong to the intended loopback server');
+  const profile = capturedProfile ?? await captureContextProfile(page);
   const artifactRoot = resolve(evidence);
   if (!['evidence', 'test-results', '.cache'].some(root => artifactRoot.startsWith(`${resolve(root)}/`))) throw new Error('Update proof evidence must stay in an ignored checkout directory');
   return ownedMain(async owner => {
@@ -111,7 +112,7 @@ export async function verifyUpdateJourney({ page, browser, baseURL, evidence, ta
     const cookies = (await page.context().cookies(baseURL)).filter(cookie => cookie.name === 'pb_session');
     expect(cookies).toHaveLength(1);
     const fresh = async () => {
-      const context = await newContextLike(page, browser, baseURL);
+      const context = await newContextLike(page, browser, baseURL, profile);
       contexts.push(context);
       await context.addCookies(cookies);
       return context;
@@ -210,14 +211,14 @@ export async function verifyUpdateJourney({ page, browser, baseURL, evidence, ta
         draftValue: previousRead.draft, draftBeforeSha256: hash(currentDraft.value), draftReadSha256: hash(previousRead.draft), outboxOpId: pending[0]!.op_id,
         outboxBeforeSha256: hash(pending), outboxReadSha256: hash(previousRead.outbox), idbBeforeSha256: hash(currentRecords), idbAfterSha256: hash(recordsAfterPreviousRead) };
       await capture(offline.page, artifactRoot, 'current-records-read-by-previous-client');
-      const multi = await seed('two-tabs', releaseA); await draft(multi.page, multi.player, '41.'); await visible(multi.page, true);
-      const other = await multi.context.newPage(); await other.goto(`/?session=${multi.session}`);
-      await releaseIs(other, releaseA); await visible(other, false);
       const cold = await seed('closed-client', releaseA); await draft(cold.page, cold.player, '53.', 'Zelle'); await keepMoneyDraft(cold.page);
       const coldBefore = (await databaseSnapshot(cold.page)).drafts.find(row => row.value.amount === '53.')!;
       await capture(cold.page, artifactRoot, 'closed-client-before'); await cold.page.close();
       await capture(typed.page, artifactRoot, 'typed-sheet-before');
       await capture(offline.page, artifactRoot, 'offline-queue-before');
+      const multi = await seed('two-tabs', releaseA); await draft(multi.page, multi.player, '41.'); await visible(multi.page, true);
+      const other = await multi.context.newPage(); await other.goto(`/?session=${multi.session}`);
+      await releaseIs(other, releaseA); await visible(other, false);
       await capture(multi.page, artifactRoot, 'two-tabs-held-before');
       await visible(idle.page, true);
       expect(await multi.page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration('/'))?.waiting)).toBe(false);
@@ -307,8 +308,8 @@ export async function verifyUpdateJourney({ page, browser, baseURL, evidence, ta
       await Promise.all(contexts.map(context => context.close()));
       contexts.length = 0;
       const { verifyUpdateReviewCases } = await import('./verify-update-review');
-      const review = await verifyUpdateReviewCases({ page, browser, baseURL, evidence: join(artifactRoot, 'review'), tag, lockHeld: true });
-      const result = { table, compatibility, review, releaseA, releaseB, environment: { origin: target.origin, realTls: true, database: 'owned local PostgreSQL', browser: browser.browserType().name(), profile: await page.evaluate(() => ({ userAgent: navigator.userAgent, standalone: !!(navigator as Navigator & { standalone?: boolean }).standalone })) },
+      const review = await verifyUpdateReviewCases({ page, browser, baseURL, evidence: join(artifactRoot, 'review'), tag, profile, lockHeld: true });
+      const result = { table, compatibility, review, releaseA, releaseB, environment: { origin: target.origin, realTls: true, database: 'owned local PostgreSQL', browser: browser.browserType().name(), profile: { userAgent: profile.userAgent, standalone: profile.standalone } },
         limitations: ['Headless browser profile and standalone emulation; no physical iOS Home Screen installation or suspension proof.', 'Foreground cases emulate document visibility signals. Network, service workers, caches, UI writes and PostgreSQL responses are real.', 'Two build-only hashed lazy modules use the production precache: one first imports under A to trigger discovery; the other first imports under B to prove retained A cache compatibility.'] };
       await writeFile(join(artifactRoot, 'automatic-updates-summary.json'), JSON.stringify(result, null, 2));
       return result;
