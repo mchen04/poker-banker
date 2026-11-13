@@ -78,7 +78,7 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
 
 ## Gotchas
 
-- A paid buy-in produces two rows. Correct `Payment received` to change its method; correcting the buy-in amount alone does not change a payment.
+- A paid buy-in produces two rows. Correct `Player paid bank` to change its method; correcting the buy-in amount alone does not change a payment.
 - The last method is a convenience default. Assert the selected button before Save rather than assuming Cash.
 - The final extra bank-to-player payment deliberately creates an overpayment in this disposable session. It proves direction and must not be copied into another account.
 - A method needs visible selected weight and outline as well as `aria-pressed`; see the repository polish journey for that appearance assertion.

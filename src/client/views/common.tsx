@@ -68,7 +68,7 @@ export function duration(value: string | null, showSeconds = false) {
 export function sessionLabel(session: { played_on: string; name: string }) {
   return `${new Date(`${session.played_on}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${session.name}`;
 }
-export const entryLabels: Record<LedgerEntry['kind'], string> = { buy_in: 'Buy-in', cash_out: 'Cash-out', payment_in: 'Payment received', payment_out: 'Payment paid', expense: 'Tips and meals' };
+export const entryLabels: Record<LedgerEntry['kind'], string> = { buy_in: 'Buy-in', cash_out: 'Cash-out', payment_in: 'Player paid bank', payment_out: 'Bank paid player', expense: 'Tips and meals' };
 export const entryNouns: Record<LedgerEntry['kind'], string> = { buy_in: 'buy-in', cash_out: 'cash-out', payment_in: 'payment', payment_out: 'payout', expense: 'tips and meals' };
 export function methodLabel(method: string | null) { return method ? method.charAt(0).toUpperCase() + method.slice(1) : ''; }
 export function useDraft<T extends object>(key: string, initial: T, options: { requireConflictReview?: boolean } = {}) {

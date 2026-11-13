@@ -65,25 +65,25 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
   const collect = state.totals.owed_to_banker_minor, pay = state.totals.owed_by_banker_minor;
   const stacked = money(collect, currency).length + money(pay, currency).length > 24;
   const playersRef = useRef<HTMLElement>(null);
-  const [actionsBelow, setActionsBelow] = useState('');
+  const [actionsBelow, setActionsBelow] = useState(false);
   useLayoutEffect(() => {
     const section = playersRef.current;
-    if (!section || !actions) { setActionsBelow(''); return; }
+    if (!section || !actions) { setActionsBelow(false); return; }
     const measure = () => {
       const cards = [...section.querySelectorAll<HTMLElement>('.player-card')];
       const was = cards.map(card => card.classList.contains('actions-below'));
       for (const card of cards) card.classList.remove('actions-below');
       section.classList.add('measuring');
-      const crowded = cards.filter(card => {
+      const crowded = cards.some(card => {
         const name = card.querySelector<HTMLElement>('.player-name strong');
         if (!name || !card.querySelector('.player-actions button')) return false;
         const line = Number.parseFloat(getComputedStyle(name).lineHeight);
         const status = card.querySelector<HTMLElement>('.player-state');
         return name.scrollWidth > name.clientWidth + 1 || name.getBoundingClientRect().height > line * 2 + 1 || (!!status && status.scrollWidth > status.clientWidth + 1);
-      }).map(card => card.dataset.player ?? '');
+      });
       section.classList.remove('measuring');
       cards.forEach((card, index) => card.classList.toggle('actions-below', was[index]!));
-      setActionsBelow(crowded.join(' '));
+      setActionsBelow(crowded);
     };
     measure();
     let last = -1;
@@ -112,7 +112,7 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
     <div className="session-table">{readyToClose && <button className="ready-to-close" data-testid="ready-to-close" onClick={() => open({ kind: 'close' })}><span>Everyone has cashed out · Close session{unsettled > 0 ? ` · ${unsettled} unsettled` : ''}</span><ChevronRightIcon /></button>}
       <div className="section-heading"><h2>Players <span className="count">{state.players.length}</span></h2>{actions && state.players.length > 0 && <button className="text-button" onClick={() => open({ kind: 'add' })}>Add player</button>}</div>
       {hasResults && <div className="segmented display-modes" role="group" aria-label="Result display"><button aria-pressed={mode === 'total'} onClick={() => display('total')}>Total</button><button aria-pressed={mode === 'hourly'} onClick={() => display('hourly')}>Per hour</button><button aria-pressed={mode === 'blinds'} onClick={() => display('blinds')}>BB</button></div>}
-      <section ref={playersRef} className={`players${actions ? ' with-actions' : ''}`} aria-label="Session players">{state.players.length === 0 && <div className="empty-row"><span>No players yet</span>{actions && <button className="primary" onClick={() => open({ kind: 'add' })}>Add player</button>}</div>}{state.players.map(player => {
+      <section ref={playersRef} className={`players${actions ? ' with-actions' : ''}`} aria-label="Session players">{state.players.length === 0 && <div className="empty-row"><span>No players yet</span></div>}{state.players.map(player => {
         const { lastBuy } = moneyOptions(state.entries, player.id);
         const balance = BigInt(player.balance_minor);
         const content = <>
@@ -122,7 +122,7 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
           </span>
         </>;
         const controls = actions && <div className="player-actions">{player.state === 'seated' ? <button data-testid={`buy-in-${player.id}`} aria-label={`Buy-in for ${player.display_name}`} onClick={() => open({ kind: 'money', player: player.id })}>Buy-in</button> : player.state === 'playing' ? <><button data-testid={`cash-out-${player.id}`} aria-label={`Cash out ${player.display_name}`} onClick={() => open({ kind: 'cash_out', player: player.id })}>Cash out</button>{lastBuy && <button data-testid={`repeat-buy-in-${player.id}`} aria-label={`Repeat last buy-in for ${player.display_name}`} title={`Rebuy ${money(lastBuy, currency)}`} onClick={() => open({ kind: 'money', player: player.id, amount: lastBuy })}>Rebuy</button>}</> : balance !== 0n ? <button data-testid={`settle-${player.id}`} aria-label={`Settle ${player.display_name}`} onClick={() => open({ kind: balance < 0n ? 'payment_out' : 'payment_in', player: player.id, amount: String(balance < 0n ? -balance : balance) })}>Settle</button> : null}</div>;
-        return viewer ? <div className="player-card" key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className={`player-card${actionsBelow.split(' ').includes(player.id) ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
+        return viewer ? <div className="player-card" key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className={`player-card${actionsBelow ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
       })}</section>
       {!viewer && <RemovedPlayers state={state} />}
     </div>
@@ -338,7 +338,8 @@ export function CorrectionSheet({ entryId }: { entryId: string }) {
   const deletePanel = useRef<HTMLElement>(null);
   useEffect(() => { if (confirmingDelete) deletePanel.current?.focus(); }, [confirmingDelete]);
   const key = draftKey(banker!.id, state!.session.id, 'correction', entryId);
-  const draft = useDraft(key, { op_id: crypto.randomUUID(), amount: decimal(entry.amount_minor, currency), method: entry.method ?? 'cash', time: '' });
+  const originalTime = entry.occurred_at ? new Date(new Date(entry.occurred_at).getTime() - new Date(entry.occurred_at).getTimezoneOffset() * 60000).toISOString().slice(0, 19) : '';
+  const draft = useDraft(key, { op_id: crypto.randomUUID(), amount: decimal(entry.amount_minor, currency), method: entry.method ?? 'cash', time: originalTime });
   const { amount, method, time } = draft.value;
   const setAmount = (amount: string) => draft.update({ ...draft.value, amount });
   const setMethod = (method: PaymentMethod) => draft.update({ ...draft.value, method });
@@ -362,7 +363,7 @@ export function CorrectionSheet({ entryId }: { entryId: string }) {
     try {
       const body: Record<string, unknown> = { op_id: draft.value.op_id, replacement_amount_minor: String(parsed) };
       if (payment) body.replacement_method = method;
-      if (time) body.replacement_occurred_at = new Date(time).toISOString();
+      if (time && time !== originalTime) body.replacement_occurred_at = new Date(time).toISOString();
       await draft.submit(`/api/sessions/${state!.session.id}/entries/${entryId}/void`, body, 'POST'); open(null);
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not correct entry'); setBusy(false); }
   }

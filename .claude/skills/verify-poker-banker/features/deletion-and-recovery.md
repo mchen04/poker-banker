@@ -4,7 +4,7 @@ The banker can delete a ledger entry, remove a player from a game, delete a sess
 
 ## Sub-features
 
-- `delete-entry` deletes one entry from Correct entry → Delete entry → Confirm delete. The row stays in Activity struck through as Deleted; its void row is hidden.
+- `delete-entry` deletes one entry from Edit entry → Delete entry → Confirm delete. The row stays in Activity struck through as Deleted; its void row is hidden.
 - `delete-entry-undo` restores it from the toast ("Deleted buy-in · Sam · $50.00" → Undo → "Restored …"). The restored copy is a new live row; the original disappears from Activity.
 - `delete-entry-restore` restores later by opening the Deleted row → Deleted entry sheet → Restore entry. Corrected (replaced) entries cannot be restored; the server's reason is shown.
 - `delete-entry-offline` queues the delete in the outbox: Not saved yet, row marked Delete pending, confirmed totals unchanged, survives reload, sends once on reconnect and then shows the Deleted toast with Undo.
