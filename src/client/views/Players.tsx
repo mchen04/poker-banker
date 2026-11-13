@@ -84,8 +84,6 @@ function DeletePlayer({ history, deleted, cancel }: { history: History; deleted:
   const [error, setError] = useState('');
   useFormBusy(busy);
   const games = history.sessions.length;
-  const panel = useRef<HTMLElement>(null);
-  useEffect(() => { panel.current?.focus(); }, []);
   const name = history.player.display_name;
   async function remove() {
     if (busy) return;
@@ -94,7 +92,7 @@ function DeletePlayer({ history, deleted, cancel }: { history: History; deleted:
     catch (problem) { setError((problem as { code?: string }).code === 'player_seated' ? 'Remove them from their games first.' : problem instanceof Error ? problem.message : 'Could not delete player'); setBusy(false); }
   }
   if (games) return <section className="confirmation-panel" role="alert"><h3>Remove them from their games first</h3><p>{name} is still in {games} {games === 1 ? 'game' : 'games'}. Remove them there, or delete those sessions, then delete the player.</p></section>;
-  return <section className="confirmation-panel" role="alertdialog" aria-label="Delete player" tabIndex={-1} ref={panel}><h3>Delete {name}?</h3><p>They leave the roster and player search.</p><ErrorText text={error} /><div className="confirm-actions"><button type="button" disabled={busy} onClick={cancel}>Keep player</button><button type="button" className="danger" disabled={busy || !online} onClick={() => { void remove(); }}>Confirm delete</button></div></section>;
+  return <section className="confirmation-panel" role="alertdialog" aria-label="Delete player" tabIndex={-1} data-initial-focus><h3>Delete {name}?</h3><p>They leave the roster and player search.</p><ErrorText text={error} /><div className="confirm-actions"><button type="button" disabled={busy} onClick={cancel}>Keep player</button><button type="button" className="danger" disabled={busy || !online} onClick={() => { void remove(); }}>Confirm delete</button></div></section>;
 }
 function OutstandingBalances({ value }: { value: Outstanding }) {
   const owes = BigInt(value.owed_to_banker_minor) > 0n, owed = BigInt(value.owed_by_banker_minor) > 0n;

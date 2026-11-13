@@ -466,6 +466,8 @@ export function Sheet({ title, children, close, closeLabel = 'Cancel', className
       const editor = editors.find(editor => editor.dataset.testid === 'money-amount') ?? editors[0];
       if (editor) { editor.focus(); focused = document.activeElement === editor; }
     }
+    const initial = panel?.querySelector<HTMLElement>('[data-initial-focus]');
+    if (initial) { initial.focus(); focused = document.activeElement === initial; }
     focusEditor();
     if (!focused) [...panel?.querySelectorAll<HTMLElement>('button,summary') ?? []].find(available)?.focus();
     const observer = new MutationObserver(() => { focusEditor(); if (focused) observer.disconnect(); });
