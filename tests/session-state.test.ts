@@ -4,7 +4,7 @@ import { deriveSession, type LedgerEntry, type SessionSettings } from '../src/do
 const settings: SessionSettings = {
   id: 'session', name: 'Friday', played_on: '2026-11-10', currency: 'USD', status: 'open',
   location: null, game: null, big_blind_minor: null, started_at: null, ended_at: null,
-  closed_balanced: null, closed_at: null, share_token: null, created_at: '', updated_at: '',
+  closed_balanced: null, closed_at: null, share_token: null, deleted_at: null, created_at: '', updated_at: '',
 };
 const entry = (kind: LedgerEntry['kind'], amount: string, revision: number, extra: Partial<LedgerEntry> = {}): LedgerEntry => ({
   id: String(revision), player_id: 'p', kind, amount_minor: amount, note: null, voids_entry_id: null,
@@ -41,7 +41,7 @@ describe('participation intervals and rates', () => {
   const settings: SessionSettings = {
     id: 's', name: 'Game', played_on: '2026-11-10', currency: 'USD', status: 'open',
     location: null, game: null, big_blind_minor: '200', started_at: '2026-11-10T00:00:00.000Z', ended_at: null,
-    closed_balanced: null, closed_at: null, share_token: null, created_at: '', updated_at: '',
+    closed_balanced: null, closed_at: null, share_token: null, deleted_at: null, created_at: '', updated_at: '',
   };
   const chip = (id: string, kind: LedgerEntry['kind'], revision: number, occurred_at: string, extra: Partial<LedgerEntry> = {}): LedgerEntry => ({
     id, kind, revision: String(revision), occurred_at, player_id: 'p', amount_minor: '1000', method: null, note: null,

@@ -24,18 +24,25 @@ bankers(id uuid pk, username text unique  -- stored lowercased, 3-32 chars [a-z0
 auth_sessions(id uuid pk, banker_id fk, token_hash bytea unique, created_at, last_seen_at, expires_at)
 recovery_codes(id uuid pk, banker_id fk, code_hash bytea, created_at, used_at null)
 login_throttle(key text pk, failures int, window_started_at, locked_until null)
-players(id uuid pk, banker_id fk, display_name text, name_key text, created_at)
+players(id uuid pk, banker_id fk, display_name text, name_key text, created_at, deleted_at timestamptz null)
         index (banker_id, name_key)  -- not unique: two real people can share a name
 game_sessions(id uuid pk, banker_id fk, name text, played_on date, currency char(3),
               status 'open'|'closed', closed_balanced bool null, closed_at null,
               share_token text unique null, revision bigint, created_at, updated_at,
               location text null, game text null, big_blind_minor bigint null check > 0,
-              started_at timestamptz null, ended_at timestamptz null, check ended_at >= started_at)
-session_players(session_id fk, player_id fk, banker_id fk, added_at, pk(session_id, player_id))
+              started_at timestamptz null, ended_at timestamptz null, check ended_at >= started_at,
+              deleted_at timestamptz null)
+session_players(session_id fk, player_id fk, banker_id fk, added_at, removed_at timestamptz null,
+                pk(session_id, player_id))
+session_player_removals(id uuid pk, session_id fk, player_id fk, banker_id fk,
+                        removed_at timestamptz, restored_at timestamptz null,
+                        unique active (session_id, player_id) where restored_at is null)
 ledger_entries(id uuid pk, banker_id fk, session_id fk, player_id fk,
                kind 'buy_in'|'cash_out'|'payment_in'|'payment_out'|'expense',
                amount_minor bigint check (> 0, or = 0 for cash_out), note text null,
                voids_entry_id uuid null unique fk -> ledger_entries.id,
+               restores_entry_id uuid null unique fk -> ledger_entries.id,
+               removal_id uuid null fk -> session_player_removals.id,
                method 'cash'|'venmo'|'zelle' null, occurred_at timestamptz null, created_at, revision bigint)
 session_events(id uuid pk, session_id fk, banker_id fk, kind 'created'|'renamed'|'closed'|'reopened'|'share_enabled'|'share_rotated'|'share_disabled'|'timer_started'|'timing_corrected'|'details_changed',
                detail jsonb, created_at, revision bigint)
@@ -51,7 +58,10 @@ Payment methods are required only for payment entries and null for other kinds. 
 - The ledger is append-only. Nothing is updated or deleted.
 - Every amount is positive except a `cash_out`, which may be zero when a player lost everything. A zero cash-out never creates a payment.
 - A correction is a void: a new row of the same kind with `voids_entry_id` pointing at the original, written with the same amount. The unique index on `voids_entry_id` stops a double void under concurrency. Editing an amount is a void plus a new entry in one transaction, and the API returns both.
+- A restore is a new row that copies the voided original's player, kind, amount, method, note and occurrence time and points `restores_entry_id` at that original. The unique index stops a double restore, and a trigger rejects restoring a row that is not voided. A void that wrote a replacement cannot be restored; correct the replacement instead.
 - Live (effective) entries are the rows that are not voids and are not voided.
+- Removing a player writes a `session_player_removals` row, sets `session_players.removed_at`, and voids every effective entry for that player in the same transaction with `removal_id` set. Restoring re-seats the player and appends restores for exactly the entries that removal voided. Removed players leave `players` and the viewer but their voided rows stay in `entries` and activity.
+- Session and roster deletion are soft: `game_sessions.deleted_at` and `players.deleted_at` are timestamps, and no ledger, session or player row is physically removed. Deleted sessions leave lists, suggestions, reports, roster aggregates and the viewer; deleted players leave the roster, search and suggestions. Restoring a session keeps its entries, players and events and leaves sharing disabled. A roster player can be deleted only while not seated in a non-deleted session.
 - Chips: `buy_in` gives a player chips, `cash_out` records chips returned. Money: `payment_in` is cash the player handed the banker, `payment_out` is cash the banker handed the player. The app records these and never moves money.
 - New buy-ins default paid with a reviewable method; the server writes `buy_in` and `payment_in` in one transaction. Choosing Unpaid suppresses the payment. Cash-outs default unpaid; a positive paid cash-out pairs `payment_out`.
 
@@ -119,14 +129,20 @@ POST /api/auth/recovery-codes    {password} -> {recovery_codes}
 POST /api/auth/password          {current_password, new_password}
 
 GET  /api/sessions               ?before=<played_on,id cursor>&q=&status=<open|closed optional> -> {sessions[], next}
+GET  /api/sessions/deleted       -> {sessions[] with deleted_at}
 POST /api/sessions               {op_id, name, played_on, currency, location?, game?, big_blind_minor?} -> SessionState
 GET  /api/sessions/:id           ?since=<revision> -> SessionState | 304
 PATCH /api/sessions/:id          {op_id, name?, played_on?, location?, game?, big_blind_minor?} -> SessionState
+POST /api/sessions/:id/delete    {op_id} -> SessionState with deleted_at
+POST /api/sessions/:id/restore   {op_id} -> SessionState
 POST /api/sessions/:id/start     {op_id} -> SessionState
 PATCH /api/sessions/:id/timing   {op_id, started_at, ended_at|null} -> SessionState
 POST /api/sessions/:id/players   {op_id, player_id} | {op_id, new_player_name} -> SessionState
+POST /api/sessions/:id/players/:player_id/remove   {op_id} -> SessionState
+POST /api/sessions/:id/players/:player_id/restore  {op_id} -> SessionState
 POST /api/sessions/:id/entries   {op_id, player_id, kind, amount_minor, note?, paid_now?, method?, occurred_at?} -> SessionState
 POST /api/sessions/:id/entries/:entry_id/void  {op_id, replacement_amount_minor?, replacement_method?, replacement_occurred_at?} -> SessionState
+POST /api/sessions/:id/entries/:entry_id/restore  {op_id} -> SessionState
 POST /api/sessions/:id/entries/:entry_id/undo  {op_id, expected_revision} -> SessionState
 POST /api/sessions/:id/close     {op_id, expected_revision, accept_discrepancy_minor?} -> SessionState
 POST /api/sessions/:id/reopen    {op_id, reason} -> SessionState
@@ -135,6 +151,8 @@ POST /api/sessions/:id/share     {op_id, action: 'enable'|'rotate'|'disable'} ->
 GET  /api/players                ?q= -> {players[] with per-currency cumulative and outstanding}
 POST /api/players                {op_id, display_name}
 PATCH /api/players/:id           {op_id, display_name}
+POST /api/players/:id/delete     {op_id} -> {player} | 409 player_seated
+POST /api/players/:id/restore    {op_id} -> {player}
 GET  /api/players/:id            -> {player, cumulative[], outstanding[], sessions[]}
 GET  /api/players/:id/report     ?group=&location=&game=&weekday=&month=&from=&to= -> {groups[]}
 GET  /api/suggestions            -> {locations[], games[]}
@@ -142,7 +160,7 @@ GET  /api/suggestions            -> {locations[], games[]}
 GET  /api/view/:token            ?since=<revision> -> ViewerState | 304 | 404
 ```
 
-`SessionState` is the whole session: settings, seated players with derived values, entries newest first, totals, events and `revision`. Mutations return it so the client never merges partial updates.
+`SessionState` is the whole session: settings, seated players with derived values, removed players with their removal time, entries newest first, totals, events and `revision`. Mutations return it so the client never merges partial updates. The viewer receives an empty `removed_players` list and no `share_token`.
 
 ## Live updates
 

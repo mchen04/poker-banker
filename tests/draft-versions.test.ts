@@ -3,6 +3,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DraftRequest } from '../src/client/data';
+import { deriveSession, type SessionSettings } from '../src/domain/session';
 
 type Row = { key?: string; op_id?: string; value?: unknown; [name: string]: unknown };
 type RequestDouble = { result?: unknown; error?: DOMException; onsuccess?: () => void; onerror?: () => void };
@@ -1035,6 +1036,37 @@ async function drainApplied(tab: Tab) {
   try { await vi.waitFor(async () => expect(await tab.listOutbox(owner)).toEqual([])); }
   finally { stop(); }
 }
+
+it('refreshes once per settled outbox item', async () => {
+  outboxEvents();
+  sharedStorage();
+  operationServer();
+  const tab = await freshTab();
+  await tab.enqueue(enqueueInput);
+  let changes = 0;
+  const stop = tab.syncOutbox(owner, () => {}, () => { changes++; });
+  try { await vi.waitFor(async () => expect(await tab.listOutbox(owner)).toEqual([])); }
+  finally { stop(); }
+  expect(changes).toBe(3);
+});
+
+it('hides deleted session snapshots from the offline picker', async () => {
+  outboxEvents();
+  sharedStorage();
+  const tab = await freshTab();
+  const settings: SessionSettings = {
+    id: 'session', name: 'Game', played_on: '2026-11-10', currency: 'USD', status: 'open',
+    location: null, game: null, big_blind_minor: null, started_at: null, ended_at: null,
+    closed_balanced: null, closed_at: null, share_token: null, deleted_at: null, created_at: '', updated_at: '',
+  };
+  const active = deriveSession(settings, '1', [], [], [], '2026-11-10T00:00:00.000Z');
+  await tab.storeSnapshot(owner, active);
+  expect((await tab.listSnapshots(owner)).map(state => state.session.id)).toEqual(['session']);
+  await tab.storeSnapshot(owner, { ...active, revision: '2', session: { ...active.session, deleted_at: '2026-11-10T01:00:00.000Z' } });
+  expect(await tab.listSnapshots(owner)).toEqual([]);
+  await tab.storeSnapshot(owner, { ...active, revision: '3' });
+  expect((await tab.listSnapshots(owner)).map(state => state.revision)).toEqual(['3']);
+});
 
 it.each([false, true].flatMap(lostReply => [false, true].map(flushFirst => [lostReply, flushFirst] as const)))('recovers a quota-retained value with a fresh operation before review after another tab saved its former operation (lostReply=%s, flushFirst=%s)', async (lostReply, flushFirst) => {
   outboxEvents();

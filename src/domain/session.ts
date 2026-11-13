@@ -11,6 +11,8 @@ export type LedgerEntry = {
   method: PaymentMethod | null;
   occurred_at: string | null;
   voids_entry_id: string | null;
+  restores_entry_id?: string | null;
+  removal_id?: string | null;
   created_at: string;
   revision: string;
 };
@@ -28,6 +30,7 @@ export type SessionSettings = {
   closed_balanced: boolean | null;
   closed_at: string | null;
   share_token: string | null;
+  deleted_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -63,12 +66,14 @@ export type PlayerState = PlayerAmounts & (
   | { state: 'playing' }
   | { state: 'cashed_out'; result_minor: string }
 );
+export type RemovedPlayer = { id: string; display_name: string; removed_at: string };
 export type SessionState = {
   session: SessionSettings;
   revision: string;
   server_now: string;
   timing: { started_at: string | null; ended_at: string | null; elapsed_ms: string | null };
   players: PlayerState[];
+  removed_players: RemovedPlayer[];
   entries: LedgerEntry[];
   events: SessionEvent[];
   totals: {
@@ -88,6 +93,7 @@ export function deriveSession(
   entries: LedgerEntry[],
   events: SessionEvent[] = [],
   serverNow = session.updated_at || '1970-01-01T00:00:00.000Z',
+  removedPlayers: RemovedPlayer[] = [],
 ): SessionState {
   const effective = effectiveEntries(entries);
   const amounts = new Map(players.map(player => [player.id, {
@@ -129,7 +135,7 @@ export function deriveSession(
   const playing = states.some(player => player.state === 'playing');
   const elapsed = session.started_at === null ? null : Date.parse(session.ended_at ?? serverNow) - Date.parse(session.started_at);
   return {
-    session, revision, players: states, server_now: serverNow,
+    session, revision, players: states, removed_players: removedPlayers, server_now: serverNow,
     timing: {
       started_at: session.started_at, ended_at: session.ended_at,
       elapsed_ms: elapsed !== null && Number.isSafeInteger(elapsed) && elapsed >= 0 ? String(BigInt(elapsed)) : null,
@@ -148,5 +154,5 @@ export function deriveSession(
 
 export function viewerState(state: SessionState) {
   const { share_token: _, ...session } = state.session;
-  return { ...state, session };
+  return { ...state, session, removed_players: [] };
 }
