@@ -1,8 +1,50 @@
-import { addPlayer, closeSession, createAccount, current, menu, newSession, openMoney, storedDraft, switchSession, keepMoneyDraft, money } from './helpers';
+import { addPlayer, call, closeSession, createAccount, current, menu, newSession, openMoney, storedDraft, switchSession, keepMoneyDraft, money } from './helpers';
 import { test, expect, screen } from './fixtures';
 import { typeInput } from './input';
+import { MAX_MINOR } from '../src/domain/money';
+import type { SessionState } from '../src/domain/session';
 
 test.describe("Money precision and reachable fields", () => {
+  test('headline totals and player amounts show every digit and cent of the largest valid amount at phone width', async ({ page }, info) => {
+    await page.setViewportSize({ width: 393, height: 852 });
+    await createAccount(page);
+    const session = await newSession(page, 'Complete large totals');
+    const unpaid = await addPlayer(page, 'Unpaid stack');
+    const cashingOut = await addPlayer(page, 'Unpaid cash-out');
+    const path = `/sessions/${session.session.id}/entries`;
+    const amount = String(MAX_MINOR);
+    await call(page, path, 'POST', { op_id: crypto.randomUUID(), player_id: unpaid.id, kind: 'buy_in', amount_minor: amount, paid_now: false, occurred_at: null });
+    await call(page, path, 'POST', { op_id: crypto.randomUUID(), player_id: cashingOut.id, kind: 'buy_in', amount_minor: amount, paid_now: true, method: 'cash', occurred_at: null });
+    const saved = await call<SessionState>(page, path, 'POST', { op_id: crypto.randomUUID(), player_id: cashingOut.id, kind: 'cash_out', amount_minor: amount, paid_now: false, occurred_at: null });
+    expect(saved.totals).toMatchObject({ on_table_minor: amount, owed_to_banker_minor: amount, owed_by_banker_minor: amount });
+    await page.reload();
+    const totals = page.getByTestId('totals');
+    await expect(totals.locator('strong')).toHaveText(['$92,233,720,368,547,758.07', '$92,233,720,368,547,758.07', '$92,233,720,368,547,758.07']);
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme });
+      const clipped = await page.locator('[data-testid="totals"] strong, .players .player-detail .money-value, .players .player-shortcuts .money-value').evaluateAll(elements => elements.flatMap(element => {
+        const box = element.getBoundingClientRect();
+        const card = element.closest('.totals,.player-card')!.getBoundingClientRect();
+        const glyphs: DOMRect[] = [];
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const text = walker.currentNode;
+          for (let index = 0; index < text.textContent!.length; index++) {
+            if (!text.textContent![index]!.trim()) continue;
+            const range = document.createRange(); range.setStart(text, index); range.setEnd(text, index + 1);
+            glyphs.push(range.getBoundingClientRect());
+          }
+        }
+        const visible = glyphs.length > 0 && element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight && glyphs.every(glyph => glyph.width > 0 && glyph.height > 0 && glyph.left >= Math.max(box.left, card.left, 0) - 1 && glyph.right <= Math.min(box.right, card.right, innerWidth) + 1 && glyph.top >= box.top - 1 && glyph.bottom <= box.bottom + 1);
+        return visible ? [] : [{ amount: element.textContent, available: box.width, rendered: element.scrollWidth }];
+      }));
+      expect(clipped, `All headline and player money glyphs are rendered without clipping in ${colorScheme}`).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await totals.screenshot({ path: info.outputPath(`largest-headline-${colorScheme}.png`) });
+      await page.locator('.players').screenshot({ path: info.outputPath(`largest-player-amounts-${colorScheme}.png`) });
+    }
+  });
+
   test('cents, invalid precision and zero cash-out agree across saved entries, totals and reports', async ({ page }, info) => {
     const account = await createAccount(page);
     const session = await newSession(page, 'Cents at the kitchen table');

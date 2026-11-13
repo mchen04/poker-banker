@@ -56,7 +56,7 @@ ul { padding-left: 1.25rem; }
 .totals { padding: .55rem .7rem; margin-bottom: .5rem; background: var(--surface); border: 1px solid var(--line); border-radius: .6rem; display: grid; grid-template-columns: 1fr 1.7fr; gap: .3rem .6rem; }
 .totals > div { min-width: 0; }
 .totals span { display: block; font-size: .8125rem; color: var(--muted); line-height: 1.35; }
-.totals strong { display: block; font-weight: 650; font-size: 1.125rem; line-height: 1.3; font-variant-numeric: tabular-nums; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.totals strong { display: block; font-weight: 650; font-size: 1.125rem; line-height: 1.3; font-variant-numeric: tabular-nums; letter-spacing: -.02em; white-space: normal; overflow-wrap: anywhere; }
 .totals .chips-total strong { font-size: 1.4rem; margin-top: .1rem; }
 .chips-total small { margin-top: 0; font-size: .75rem; line-height: 1.3; }
 .payment-totals { display: grid; grid-template-columns: 1fr 1fr; align-items: start; gap: .5rem; padding-left: .6rem; border-left: 1px solid var(--line); }
@@ -221,6 +221,7 @@ summary { cursor: pointer; min-height: 44px; padding: .6rem 0; font-size: .875re
 .payment-directions button[aria-pressed='true'] { font-weight: 700; outline: 2px solid var(--accent); outline-offset: -2px; background: var(--soft); }
 
 .money-value { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.player-detail .money-value, .player-shortcuts .money-value { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 
 .money-amount-error { margin: .2rem 0 .35rem; font-size: .8125rem; line-height: 1.35; padding: .35rem .5rem; }
 
