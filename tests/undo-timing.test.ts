@@ -6,7 +6,7 @@ const startedAt = '2026-11-12T20:02:00.000Z';
 const settings: SessionSettings = {
   id: 's', name: 'Game', played_on: '2026-11-12', currency: 'USD', status: 'open',
   location: null, game: null, big_blind_minor: null, started_at: startedAt, ended_at: null,
-  closed_balanced: null, closed_at: null, share_token: null, created_at: startedAt, updated_at: startedAt,
+  closed_balanced: null, closed_at: null, share_token: null, deleted_at: null, created_at: startedAt, updated_at: startedAt,
 };
 const buy: LedgerEntry = { id: 'buy', player_id: 'p', kind: 'buy_in', amount_minor: '1000', note: null, method: null, occurred_at: startedAt, voids_entry_id: null, created_at: startedAt, revision: '2' };
 const started = { id: 'timer', kind: 'timer_started', revision: '2', created_at: startedAt, detail: { old: { started_at: null, ended_at: null }, new: { started_at: startedAt, ended_at: null } } };

@@ -5,7 +5,7 @@ import { deriveSession, type SessionSettings } from '../src/domain/session';
 const settings: SessionSettings = {
   id: 's', name: 'Game', played_on: '2026-11-10', currency: 'USD', status: 'open', location: null, game: null,
   big_blind_minor: null, started_at: '2026-11-10T00:00:00.000Z', ended_at: null,
-  closed_balanced: null, closed_at: null, share_token: null, created_at: '', updated_at: '',
+  closed_balanced: null, closed_at: null, share_token: null, deleted_at: null, created_at: '', updated_at: '',
 };
 const client = bankerClient('client-owner');
 const snapshot = (revision: string, time: string) => deriveSession(settings, revision, [], [], [], time);
