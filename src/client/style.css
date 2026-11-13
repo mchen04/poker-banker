@@ -285,6 +285,7 @@ button.roster-row:active { background: var(--subtle); }
 .confirmation-panel { margin: 12px 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); }
 .confirmation-panel:focus, .confirmation-panel:focus-visible { outline: none; }
 .confirmation-panel p:not(.error) { color: var(--muted); font-size: .9375rem; line-height: 1.375rem; }
+.confirmation-panel p.warning { color: var(--warning); }
 .confirmation-panel p:last-child { margin-bottom: 0; }
 .confirmation-panel h3, .sheet .confirmation-panel > h3 { margin: 0 0 4px; overflow-wrap: break-word; color: var(--text); font-size: 1.0625rem; line-height: 1.5rem; font-weight: 600; }
 .confirmation-panel .confirm-actions { margin-top: 16px; }

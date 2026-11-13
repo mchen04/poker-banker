@@ -483,7 +483,7 @@ export function Sheet({ title, children, close, closeLabel = 'Cancel', className
     document.addEventListener('keydown', keyboard);
     const oldOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    return () => { observer.disconnect(); document.removeEventListener('keydown', keyboard); document.body.style.overflow = oldOverflow; previous?.focus(); };
+    return () => { observer.disconnect(); document.removeEventListener('keydown', keyboard); document.body.style.overflow = oldOverflow; const fallback = document.querySelector<HTMLElement>('.notice button') ?? document.querySelector<HTMLElement>('main'); if (previous?.isConnected) previous.focus(); else if (fallback) { if (fallback.tagName === 'MAIN') fallback.tabIndex = -1; fallback.focus(); } };
   }, []);
   useLayoutEffect(() => {
     const panel = ref.current;

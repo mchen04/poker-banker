@@ -1,7 +1,9 @@
 import type { Page } from '@playwright/test';
 import type { SessionState } from '../src/domain/session';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, call, createAccount, current, menu, money, newContextLike, newSession, share } from './helpers';
+import { randomUUID } from 'node:crypto';
+import { addPlayer, call, createAccount, current, menu, money, newContextLike, newSession, openMoney, share } from './helpers';
+import { typeInput } from './input';
 
 const longName = 'Alexandria Montgomery-Whitfield';
 
@@ -76,10 +78,12 @@ test('deleting an entry offers Undo, a later Restore and an offline delete that 
 
   const priyaBuy = state.entries.find(entry => entry.player_id === priya.id && entry.kind === 'buy_in')!;
   await page.context().setOffline(true);
-  await activityRow(page, priyaBuy.id).getByRole('button').click();
+  await activityRow(page, priyaBuy.id).getByRole('button').focus();
+  await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Delete entry', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(activityRow(page, priyaBuy.id).getByRole('button')).toBeFocused();
   await expect(page.getByLabel('Unsent entries', { exact: true })).toContainText('Delete buy-in · Priya · $100.00');
   await expect(activityRow(page, priyaBuy.id)).toContainText('Delete pending');
   await expect(page.getByTestId('totals')).toContainText('$150.00');
@@ -160,6 +164,7 @@ test('deleting a session moves to the next session, kills its viewer link and re
   const confirm = page.getByRole('alertdialog', { name: 'Delete session', exact: true });
   await expect(confirm).toContainText('Delete Friday home game?');
   await expect(confirm).toContainText('It disappears from history and reports, and its viewer link stops working.');
+  await expect(confirm).toContainText('Unsettled balances leave player balances until you restore it: $80.00 owed to you.');
   await screen(page, info, 'delete-session-confirm');
   await confirm.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Older game', exact: true })).toBeVisible();
@@ -200,6 +205,26 @@ test('deleting a session moves to the next session, kills its viewer link and re
   expect((await call<{ sessions: unknown[] }>(page, '/sessions/deleted')).sessions).toHaveLength(0);
 });
 
+test('an offline buy-in for a session deleted on another device stays listed until discarded', async ({ page }) => {
+  await createAccount(page);
+  await newSession(page, 'Older game');
+  const friday = await newSession(page, 'Friday home game');
+  const sam = await addPlayer(page, 'Sam');
+  await page.context().setOffline(true);
+  await openMoney(page, sam.id);
+  await typeInput(page.getByTestId('money-amount'), '40');
+  await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const unsent = page.getByLabel('Unsent entries', { exact: true });
+  await expect(unsent).toContainText('$40.00');
+  await call(page, `/sessions/${friday.session.id}/delete`, 'POST', { op_id: randomUUID() });
+  await page.context().setOffline(false);
+  await expect(unsent.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
+  await expect(unsent).toContainText('$40.00');
+  await unsent.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(unsent).toHaveCount(0);
+});
+
 test('a roster player can be deleted only once out of every game, with Undo and Recently deleted restore', async ({ page }, info) => {
   await createAccount(page);
   await newSession(page, 'Roster game');
@@ -225,9 +250,11 @@ test('a roster player can be deleted only once out of every game, with Undo and 
   await page.getByRole('button', { name: 'Delete player', exact: true }).click();
   const confirm = page.getByRole('alertdialog', { name: 'Delete player', exact: true });
   await expect(confirm).toContainText('Delete Jordan?');
+  await expect(confirm).toBeFocused();
   await screen(page, info, 'delete-player-confirm');
   await confirm.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(toast(page)).toContainText('Deleted Jordan');
+  await expect(page.getByRole('searchbox', { name: 'Find a player', exact: true })).toBeFocused();
   await expect(page.getByTestId(`roster-player-${jordan.id}`)).toHaveCount(0);
   expect((await call<{ players: { id: string }[] }>(page, '/players')).players.map(row => row.id)).not.toContain(jordan.id);
 
