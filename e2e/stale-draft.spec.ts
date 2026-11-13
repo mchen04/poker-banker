@@ -42,6 +42,7 @@ test('a stale money submission refreshes the newer draft from another page befor
     await expect(page.getByText(/edited in another tab/i).first()).toBeVisible();
     expect((await current(page)).entries).toHaveLength(0);
     expect(await storedAmount(other, key)).toBe('25');
+    await other.close();
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByTestId('saved-confirmation')).toContainText('25.00');
@@ -158,6 +159,7 @@ test('a mismatched entry and a newer saved draft both remain reviewable and pres
     await expect(recovery.locator('dl').nth(1)).toContainText('50');
     expect(await storedAmount(other, key)).toBe('25');
     expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor)).toEqual(['1000']);
+    await other.close();
     await recovery.getByRole('button', { name: 'Use recovered edit', exact: true }).click();
     await expect(recovery).toHaveCount(1);
     await recovery.getByText('Review recovered edit', { exact: true }).click();
