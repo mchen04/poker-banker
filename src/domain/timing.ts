@@ -9,12 +9,20 @@ export function effectiveEntries(entries: LedgerEntry[]): LedgerEntry[] {
     .map(entry => [`${entry.revision}/${entry.player_id}/${entry.kind}`, entry.voids_entry_id!]));
   const originalRevision = (entry: LedgerEntry): bigint => {
     let current = entry;
-    while (true) {
+    const seen = new Set<string>();
+    while (!seen.has(current.id)) {
+      seen.add(current.id);
+      const restored = current.restores_entry_id ? byId.get(current.restores_entry_id) : undefined;
+      if (restored && BigInt(restored.revision) < BigInt(current.revision)) {
+        current = restored;
+        continue;
+      }
       const originalId = corrected.get(`${current.revision}/${current.player_id}/${current.kind}`);
       const original = originalId ? byId.get(originalId) : undefined;
       if (!original || BigInt(original.revision) >= BigInt(current.revision)) return BigInt(current.revision);
       current = original;
     }
+    return BigInt(current.revision);
   };
   const live = entries.filter(entry => !entry.voids_entry_id && !voided.has(entry.id));
   const unknownPlayers = new Set(live.filter(entry => (entry.kind === 'buy_in' || entry.kind === 'cash_out') && entry.occurred_at === null).map(entry => entry.player_id));

@@ -97,3 +97,44 @@ describe('participation intervals and rates', () => {
     expect(result.players[0]!.duration_ms).toBeNull();
   });
 });
+
+describe('restored entries keep their original position', () => {
+  const chip = (id: string, kind: 'buy_in' | 'cash_out', revision: number, extra: Partial<LedgerEntry> = {}): LedgerEntry => ({
+    id, player_id: 'p', kind, amount_minor: '1000', note: null, method: null, occurred_at: null,
+    voids_entry_id: null, restores_entry_id: null, created_at: '', revision: String(revision), ...extra,
+  });
+  const state = (entries: LedgerEntry[]) => deriveSession(settings, '9', [{ id: 'p', display_name: 'Justin' }], entries);
+
+  it('puts a restored buy-in before a later cash-out', () => {
+    const entries = [
+      chip('a1', 'buy_in', 1), chip('a2', 'buy_in', 2),
+      chip('void-a1', 'buy_in', 3, { voids_entry_id: 'a1' }),
+      chip('cash', 'cash_out', 4),
+      chip('restore-a1', 'buy_in', 5, { restores_entry_id: 'a1' }),
+    ];
+    expect(state(entries).players[0]).toMatchObject({ state: 'cashed_out', result_minor: '-1000' });
+  });
+
+  it('follows a chain of restore, re-delete and restore back to the original', () => {
+    const entries = [
+      chip('a1', 'buy_in', 1), chip('a2', 'buy_in', 2),
+      chip('void-a1', 'buy_in', 3, { voids_entry_id: 'a1' }),
+      chip('cash', 'cash_out', 4),
+      chip('restore-1', 'buy_in', 5, { restores_entry_id: 'a1' }),
+      chip('void-restore-1', 'buy_in', 6, { voids_entry_id: 'restore-1' }),
+      chip('restore-2', 'buy_in', 7, { restores_entry_id: 'restore-1' }),
+    ];
+    expect(state(entries).players[0]).toMatchObject({ state: 'cashed_out', result_minor: '-1000' });
+  });
+
+  it('orders player-restore copies by their originals when inserted in one revision', () => {
+    const entries = [
+      chip('buy', 'buy_in', 1), chip('cash', 'cash_out', 2),
+      chip('void-buy', 'buy_in', 3, { voids_entry_id: 'buy' }),
+      chip('void-cash', 'cash_out', 3, { voids_entry_id: 'cash' }),
+      chip('z-copy-buy', 'buy_in', 4, { restores_entry_id: 'buy' }),
+      chip('a-copy-cash', 'cash_out', 4, { restores_entry_id: 'cash' }),
+    ];
+    expect(state(entries).players[0]).toMatchObject({ state: 'cashed_out', result_minor: '0' });
+  });
+});

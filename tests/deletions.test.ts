@@ -195,6 +195,84 @@ it('deletes a roster player only when not seated and restores them', async () =>
   await rejects(await request(other, `/players/${playerId}/restore`, 'POST', { op_id: randomUUID() }), 404);
 });
 
+it('restores a buy-in into its original position so a later cash-out stays last', async () => {
+  const owner = await account();
+  let state = await seat(owner, await createSession(owner));
+  const playerId = state.players[0]!.id;
+  state = await write(owner, state, '/entries', { player_id: playerId, kind: 'buy_in', amount_minor: '10000', paid_now: false });
+  const first = state.entries.find(entry => entry.kind === 'buy_in')!;
+  state = await write(owner, state, '/entries', { player_id: playerId, kind: 'buy_in', amount_minor: '5000', paid_now: false });
+  state = await write(owner, state, `/entries/${first.id}/void`, {});
+  state = await write(owner, state, '/entries', { player_id: playerId, kind: 'cash_out', amount_minor: '20000', paid_now: false });
+  expect(state.players[0]).toMatchObject({ state: 'cashed_out', result_minor: '15000' });
+  state = await ok<SessionState>(await request(owner, `/sessions/${state.session.id}/entries/${first.id}/restore`, 'POST', { op_id: randomUUID() }));
+  expect(state.players[0]).toMatchObject({ state: 'cashed_out', result_minor: '5000', bought_in_minor: '15000', cashed_out_minor: '20000' });
+  expect(state.totals).toMatchObject({ total_in_minor: '15000', total_out_minor: '20000', discrepancy_minor: '5000' });
+  const copy = state.entries.find(entry => entry.restores_entry_id === first.id)!;
+  state = await write(owner, state, `/entries/${copy.id}/void`, {});
+  state = await ok<SessionState>(await request(owner, `/sessions/${state.session.id}/entries/${copy.id}/restore`, 'POST', { op_id: randomUUID() }));
+  expect(state.players[0]).toMatchObject({ state: 'cashed_out', result_minor: '5000' });
+  state = await close(owner, state);
+  expect(state.session.status).toBe('closed');
+  const roster = await ok<{ players: { id: string; cumulative: { currency: string; result_minor: string }[] }[] }>(await request(owner, '/players'));
+  expect(roster.players.find(player => player.id === playerId)!.cumulative).toEqual([{ currency: 'USD', result_minor: '5000' }]);
+});
+
+it('restores a removed player with a buy-in and cash-out', async () => {
+  const owner = await account();
+  let state = await seat(owner, await createSession(owner));
+  const playerId = state.players[0]!.id;
+  state = await write(owner, state, '/entries', { player_id: playerId, kind: 'buy_in', amount_minor: '10000', paid_now: false });
+  state = await write(owner, state, '/entries', { player_id: playerId, kind: 'cash_out', amount_minor: '15000', paid_now: false });
+  state = await write(owner, state, `/players/${playerId}/remove`, {});
+  expect(state.players).toEqual([]);
+  state = await write(owner, state, `/players/${playerId}/restore`, {});
+  expect(state.players[0]).toMatchObject({ id: playerId, bought_in_minor: '10000', cashed_out_minor: '15000', balance_minor: '-5000' });
+  expect(state.entries.filter(entry => entry.restores_entry_id).map(entry => entry.kind).sort()).toEqual(['buy_in', 'cash_out']);
+});
+
+it('restoring a session brings back a deleted roster player and their debt', async () => {
+  const owner = await account();
+  let state = await seat(owner, await createSession(owner));
+  const playerId = state.players[0]!.id;
+  state = await write(owner, state, '/entries', { player_id: playerId, kind: 'buy_in', amount_minor: '10000', paid_now: false });
+  state = await write(owner, state, '/entries', { player_id: playerId, kind: 'cash_out', amount_minor: '15000', paid_now: false });
+  state = await close(owner, state);
+  await ok(await request(owner, `/sessions/${state.session.id}/delete`, 'POST', { op_id: randomUUID() }));
+  const deleted = await ok<{ player: { deleted_at: string | null } }>(await request(owner, `/players/${playerId}/delete`, 'POST', { op_id: randomUUID() }));
+  expect(deleted.player.deleted_at).not.toBeNull();
+  expect((await ok<{ players: { id: string }[] }>(await request(owner, '/players'))).players.map(row => row.id)).not.toContain(playerId);
+  await rejects(await request(owner, `/players/${playerId}/report`), 404);
+  const restored = await ok<SessionState>(await request(owner, `/sessions/${state.session.id}/restore`, 'POST', { op_id: randomUUID() }));
+  expect(restored.session.deleted_at).toBeNull();
+  expect(restored.players[0]).toMatchObject({ id: playerId, bought_in_minor: '10000', cashed_out_minor: '15000' });
+  const roster = await ok<{ players: { id: string; outstanding: { currency: string; owed_to_banker_minor: string; owed_by_banker_minor: string }[] }[] }>(await request(owner, '/players'));
+  expect(roster.players.find(row => row.id === playerId)).toMatchObject({
+    outstanding: [{ currency: 'USD', owed_to_banker_minor: '0', owed_by_banker_minor: '5000' }],
+  });
+  const report = await ok<{ groups: { metrics: { profit_loss_minor: { value: { numerator: string; denominator: string } | null } } }[] }>(await request(owner, `/players/${playerId}/report`));
+  expect(report.groups[0]!.metrics.profit_loss_minor.value).toEqual({ numerator: '5000', denominator: '1' });
+  expect((await ok<{ players: { id: string }[] }>(await request(owner, '/players/deleted'))).players).toEqual([]);
+});
+
+it('restoring a removed player brings back a deleted roster player and their debt', async () => {
+  const owner = await account();
+  let state = await seat(owner, await createSession(owner));
+  const playerId = state.players[0]!.id;
+  state = await write(owner, state, '/entries', { player_id: playerId, kind: 'buy_in', amount_minor: '10000', paid_now: false });
+  state = await write(owner, state, `/players/${playerId}/remove`, {});
+  const deleted = await ok<{ player: { deleted_at: string | null } }>(await request(owner, `/players/${playerId}/delete`, 'POST', { op_id: randomUUID() }));
+  expect(deleted.player.deleted_at).not.toBeNull();
+  expect((await ok<{ players: { id: string }[] }>(await request(owner, '/players'))).players.map(row => row.id)).not.toContain(playerId);
+  await rejects(await request(owner, `/players/${playerId}/report`), 404);
+  const restored = await ok<SessionState>(await request(owner, `/sessions/${state.session.id}/players/${playerId}/restore`, 'POST', { op_id: randomUUID() }));
+  expect(restored.players[0]).toMatchObject({ id: playerId, bought_in_minor: '10000', balance_minor: '10000' });
+  const roster = await ok<{ players: { id: string; outstanding: { currency: string; owed_to_banker_minor: string }[] }[] }>(await request(owner, '/players'));
+  expect(roster.players.find(row => row.id === playerId)).toMatchObject({ outstanding: [{ currency: 'USD', owed_to_banker_minor: '10000' }] });
+  expect((await ok<{ player: { deleted_at: string | null } }>(await request(owner, `/players/${playerId}`))).player.deleted_at).toBeNull();
+  expect((await request(owner, `/players/${playerId}/report`)).status).toBe(200);
+});
+
 describe('ledger integrity for restores', () => {
   it('rejects a direct insert that restores a live entry or double-restores a voided one', async () => {
     const owner = await account();

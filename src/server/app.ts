@@ -121,6 +121,8 @@ export function createApp(pool: Database, config: Config = {}) {
     const row = await sessionRow(db, banker, id, true, true);
     if (row.deleted_at == null) conflict('session_active', 'This session is not deleted');
     await db.query('UPDATE game_sessions SET deleted_at = NULL, share_token = NULL WHERE id = $1 AND banker_id = $2', [id, banker]);
+    await db.query(`UPDATE players SET deleted_at = NULL WHERE banker_id = $1 AND deleted_at IS NOT NULL
+      AND id IN (SELECT player_id FROM session_players WHERE session_id = $2 AND banker_id = $1 AND removed_at IS NULL)`, [banker, id]);
     await bump(db, banker, id);
     return loadSession(db, banker, id);
   }));
@@ -222,6 +224,7 @@ export function createApp(pool: Database, config: Config = {}) {
     const entries = await removalEntries(db, banker, id, removal.rows[0]!.id);
     await db.query('UPDATE session_players SET removed_at = NULL WHERE session_id = $1 AND player_id = $2 AND banker_id = $3', [id, playerId, banker]);
     await db.query('UPDATE session_player_removals SET restored_at = clock_timestamp() WHERE id = $1 AND banker_id = $2', [removal.rows[0]!.id, banker]);
+    await db.query('UPDATE players SET deleted_at = NULL WHERE id = $1 AND banker_id = $2 AND deleted_at IS NOT NULL', [playerId, banker]);
     const revision = await bump(db, banker, id);
     for (const entry of entries) await insertEntry(db, banker, id, revision, { ...entry, voids_entry_id: null, restores_entry_id: entry.id, removal_id: null });
     return loadSession(db, banker, id);

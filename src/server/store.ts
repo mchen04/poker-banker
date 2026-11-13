@@ -179,25 +179,39 @@ export async function playerRoster(db: Queryable, banker: string, search: string
     owed_to_banker_minor: string; owed_by_banker_minor: string;
   }>(`WITH RECURSIVE entries AS MATERIALIZED (
     SELECT id, session_id, player_id, kind, amount_minor::numeric AS amount_minor,
-      occurred_at, voids_entry_id, revision
+      occurred_at, voids_entry_id, restores_entry_id, revision, created_at
     FROM ledger_entries WHERE banker_id = $1 AND player_id = ANY($2::uuid[])
   ), live AS (
     SELECT e.* FROM entries e WHERE e.voids_entry_id IS NULL
       AND NOT EXISTS (SELECT 1 FROM entries v WHERE v.voids_entry_id = e.id)
+  ), restore_parent AS (
+    SELECT id, restores_entry_id AS parent_id FROM entries WHERE restores_entry_id IS NOT NULL
+  ), correction_parent AS (
+    SELECT DISTINCT ON (e.id) e.id, correction.voids_entry_id AS parent_id
+    FROM entries e JOIN entries correction ON correction.session_id = e.session_id
+      AND correction.player_id = e.player_id AND correction.kind = e.kind
+      AND correction.revision = e.revision AND correction.voids_entry_id IS NOT NULL
+    WHERE e.voids_entry_id IS NULL AND e.restores_entry_id IS NULL
+    ORDER BY e.id, correction.created_at DESC, correction.id DESC
+  ), parents AS (
+    SELECT id, parent_id FROM restore_parent
+    UNION ALL
+    SELECT id, parent_id FROM correction_parent
   ), ancestry AS (
-    SELECT id, session_id, player_id, kind, revision AS original_revision
+    SELECT id, id AS current_id, session_id, player_id, kind, revision AS original_revision
     FROM live WHERE kind IN ('buy_in', 'cash_out')
     UNION ALL
-    SELECT a.id, a.session_id, a.player_id, a.kind, original.revision
-    FROM ancestry a JOIN entries correction ON correction.session_id = a.session_id
-      AND correction.player_id = a.player_id AND correction.kind = a.kind
-      AND correction.revision = a.original_revision AND correction.voids_entry_id IS NOT NULL
-    JOIN entries original ON original.id = correction.voids_entry_id AND original.revision < a.original_revision
+    SELECT a.id, parent.id, a.session_id, a.player_id, a.kind, parent.revision
+    FROM ancestry a JOIN parents p ON p.id = a.current_id
+    JOIN entries parent ON parent.id = p.parent_id AND parent.session_id = a.session_id
+      AND parent.player_id = a.player_id AND parent.kind = a.kind
+      AND parent.revision < a.original_revision
   ), chip_order AS (
-    SELECT e.*, min(a.original_revision) AS original_revision,
+    SELECT e.id, e.session_id, e.player_id, e.kind, e.occurred_at, e.revision,
+      min(a.original_revision) AS original_revision,
       bool_or(e.occurred_at IS NULL) OVER (PARTITION BY e.session_id, e.player_id) AS unknown_time
     FROM live e JOIN ancestry a ON a.id = e.id
-    GROUP BY e.id, e.session_id, e.player_id, e.kind, e.amount_minor, e.occurred_at, e.voids_entry_id, e.revision
+    GROUP BY e.id, e.session_id, e.player_id, e.kind, e.occurred_at, e.revision
   ), last_chip AS (
     SELECT DISTINCT ON (session_id, player_id) session_id, player_id, kind
     FROM chip_order ORDER BY session_id, player_id,
