@@ -84,7 +84,7 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
     await page.waitForTimeout(3600); await expect(page.getByTestId('saved-confirmation')).toHaveCount(0);
     proofs.idleToast = { visibleAfterAvailableMs: 4800, pauseMs: 8300, absentAfterAvailableMs: 8400 };
     await money(page, paid.id, '50', { paid: true, method: 'cash' });
-    await expect(page.locator('.session-heading').getByRole('button', { name: 'New session', exact: true })).toContainText('New');
+    await expect(page.locator('.session-heading').getByRole('button', { name: 'New session', exact: true })).toBeVisible();
     await expect(primary).toHaveText('Buy-in');
     const colors: unknown[] = [];
     for (const colorScheme of ['light', 'dark'] as const) {
@@ -97,8 +97,8 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
       await capture(page, evidence, `open-footer-owes-paid-${colorScheme}`);
     }
     proofs.debt = colors;
-    const lines = await page.getByTestId(`player-${owing.id}`).locator('strong[title]').evaluate(element => ({ height: element.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(element).lineHeight), clamp: getComputedStyle(element).webkitLineClamp }));
-    expect(lines.clamp).toBe('2'); if (phone) expect(lines.height).toBeGreaterThan(lines.line * 1.8); expect(lines.height).toBeLessThanOrEqual(lines.line * 2 + 1);
+    const lines = await page.getByTestId(`player-${owing.id}`).locator('strong[title]').evaluate(element => ({ height: element.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(element).lineHeight), overflow: getComputedStyle(element).textOverflow, wrap: getComputedStyle(element).whiteSpace }));
+    expect(lines.overflow).toBe('ellipsis'); expect(lines.wrap).toBe('nowrap'); expect(lines.height).toBeLessThanOrEqual(lines.line + 1);
     proofs.name = lines;
     if (!phone) {
       const header = await page.locator('.app-bar').boundingBox(); const navigation = await nav.boundingBox();
@@ -120,7 +120,8 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
     } finally { await viewerContext.close(); }
     await nav.getByRole('button', { name: 'Players', exact: true }).click(); await expect(primary).toHaveText('Buy-in');
     const rosterDebt = await page.getByTestId(`roster-player-${owing.id}`).getByText('Owes bank $50.00', { exact: true }).evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight), background: getComputedStyle(element.closest('.roster-list')!).backgroundColor }));
-    const rosterZero = await page.getByTestId(`roster-player-${owing.id}`).getByText('Bank owes $0.00', { exact: true }).evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight) }));
+    await expect(page.getByTestId(`roster-player-${owing.id}`)).not.toContainText('Bank owes');
+    const rosterZero = await page.getByTestId(`roster-player-${owing.id}`).locator('.roster-name > strong').evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight) }));
     expect(rosterDebt.color).not.toBe(rosterZero.color); expect(rosterDebt.weight).toBeGreaterThan(rosterZero.weight); expect(contrast(rosterDebt.color, rosterDebt.background)).toBeGreaterThanOrEqual(4.5);
     proofs.rosterDebt = { ...rosterDebt, zero: rosterZero, contrast: contrast(rosterDebt.color, rosterDebt.background) };
     await both('players-open-session-footer');

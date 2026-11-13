@@ -196,7 +196,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
     await menu(page, 'Share'); await page.getByRole('button', { name: 'Rotate link', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm rotate', exact: true }).click();
     await viewer.reload(); await expect(viewer.getByText('This viewer link is unavailable', { exact: false })).toBeVisible();
-    await expect(viewer.getByText('View only, updated', { exact: false })).toHaveCount(0);
+    await expect(viewer.getByText('View only ·', { exact: false })).toHaveCount(0);
     await capture(viewer, evidence, 'viewer-revoked');
     await viewer.emulateMedia({ colorScheme: 'dark' }); await capture(viewer, evidence, 'viewer-revoked-dark');
     await page.getByRole('button', { name: 'Close sheet', exact: true }).click();

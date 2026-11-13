@@ -24,6 +24,7 @@ Read [SKILL.md](../SKILL.md), launch from the repository root and require Doctor
 | [Sharing/live viewer](sharing-and-live-viewer.md) | Enable/copy, updates, rotate/disable and read-only access. |
 | [Player reports](player-reports.md) | Roster/rename, five groupings, six filters and display-only rates. |
 | [Offline and updates](offline-and-app-updates.md) | Snapshots, pending/rejected writes, replay, automatic adoption, pinned legacy compatibility, skew and storage bounds. |
+| [Screen tour and layout](screen-tour-and-layout.md) | Every screen at 393 and 320 wide, automatic alignment/wrapping/target checks and load-flicker filmstrips. |
 | [Performance](performance.md) | Isolated datasets, current transport, baseline, profiles and interleaved comparison. |
 
 ## Layout and control-count capture

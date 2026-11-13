@@ -7,6 +7,7 @@ import { moneyOptions } from '../money-options';
 import { retainedTimerStart } from '../undo-timing';
 import { draftKey } from '../data';
 import { decimal, duration, entryLabels, DraftRecovery, ErrorText, methodLabel, money, resultCurrencyDecimal, resultMoney, resultNumber, Sheet, useClient, useDraft, useFormBusy } from './common';
+import { ChevronDownIcon, ChevronRightIcon, FitText, MoreIcon, PlusIcon } from './ui';
 
 type RosterPlayer = { id: string; display_name: string };
 export type DisplayMode = 'total' | 'hourly' | 'blinds';
@@ -19,22 +20,33 @@ function resultText(player: Extract<PlayerState, { state: 'cashed_out' }>, curre
   if (mode === 'blinds') {
     if (!player.performance.big_blinds) return 'No big blind set';
     const text = resultNumber(player.performance.big_blinds);
-    return text === 'Even' ? text : `${text} big blinds`;
+    return text === 'Even' ? text : `${text} BB`;
   }
-  const result = BigInt(player.result_minor);
-  return result === 0n ? 'Even' : `${resultMoney(player.result_minor, currency)} ${result > 0n ? 'up' : 'down'}`;
+  return resultMoney(player.result_minor, currency);
+}
+function resultTone(player: Extract<PlayerState, { state: 'cashed_out' }>, mode: DisplayMode) {
+  const value = mode === 'hourly' ? player.performance.per_hour?.numerator : mode === 'blinds' ? player.performance.big_blinds?.numerator : player.result_minor;
+  if (value === undefined) return 'unavailable';
+  const amount = BigInt(value);
+  return amount > 0n ? 'up' : amount < 0n ? 'down' : 'even';
 }
 function balanceText(player: PlayerState, currency: string) {
   const balance = BigInt(player.balance_minor);
   return balance === 0n ? 'Paid up' : balance > 0n ? `Owes ${money(player.balance_minor, currency)}` : `Owed ${money(String(-balance), currency)}`;
 }
+function clock(value: bigint) {
+  const seconds = value / 1000n;
+  return `${seconds / 3600n}:${String((seconds % 3600n) / 60n).padStart(2, '0')}:${String(seconds % 60n).padStart(2, '0')}`;
+}
 function Timer({ state, unknownStart }: { state: SessionState; unknownStart: boolean }) {
-  const [clock, setClock] = useState(0);
+  const [tick, setTick] = useState(0);
   const loaded = useRef(performance.now());
-  useEffect(() => { loaded.current = performance.now(); setClock(0); }, [state.server_now]);
-  useEffect(() => { const timer = window.setInterval(() => setClock(Math.max(0, Math.floor(performance.now() - loaded.current))), 1000); return () => clearInterval(timer); }, []);
-  const elapsed = state.timing.elapsed_ms === null ? null : String(BigInt(state.timing.elapsed_ms) + (state.session.ended_at === null ? BigInt(clock) : 0n));
-  return <span data-testid="session-timer" className="timer">{elapsed === null ? unknownStart ? 'Start time unknown' : 'Timer not started' : `${state.session.ended_at ? 'Finished · ' : 'Playing time · '}${duration(elapsed, state.session.ended_at === null)}`}</span>;
+  useEffect(() => { loaded.current = performance.now(); setTick(0); }, [state.server_now]);
+  useEffect(() => { const timer = window.setInterval(() => setTick(Math.max(0, Math.floor(performance.now() - loaded.current))), 1000); return () => clearInterval(timer); }, []);
+  if (state.timing.elapsed_ms === null) return unknownStart ? <span data-testid="session-timer" className="meta-item timer">Start time unknown</span> : null;
+  const running = state.session.ended_at === null;
+  const elapsed = BigInt(state.timing.elapsed_ms) + (running ? BigInt(tick) : 0n);
+  return <span data-testid="session-timer" className="meta-item timer"><span className="sr-only">{running ? 'Playing time ' : 'Finished, played '}</span>{running ? clock(elapsed) : duration(String(elapsed))}</span>;
 }
 export function SessionView({ state, viewer = false }: { state: SessionState; viewer?: boolean }) {
   const { open } = useClient();
@@ -43,27 +55,47 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
   const currency = settings.currency;
   const unknownStart = settings.started_at === null && state.players.some(player => player.buy_in_count > 0);
   const status = settings.status === 'open' ? 'In progress' : settings.closed_balanced ? 'Closed · chips balanced' : 'Closed · chip discrepancy';
-  const metadata = [new Date(`${settings.played_on}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), settings.location, settings.game, currency, settings.big_blind_minor ? `${money(settings.big_blind_minor, currency)} big blind` : null].filter(Boolean).join(' · ');
+  const info = [new Date(`${settings.played_on}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), settings.location, settings.game, currency, settings.big_blind_minor ? `${money(settings.big_blind_minor, currency)} BB` : null].filter(Boolean).join(' · ');
   const hasResults = state.players.some(player => player.state === 'cashed_out');
   const readyToClose = !viewer && settings.status === 'open' && hasResults && !state.players.some(player => player.state === 'playing');
   const unsettled = state.players.filter(player => BigInt(player.balance_minor) !== 0n).length;
   const retainedTimer = !viewer ? retainedTimerStart(state) : null;
+  const actions = !viewer && settings.status === 'open';
+  const chips = state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0';
+  const collect = state.totals.owed_to_banker_minor, pay = state.totals.owed_by_banker_minor;
+  const stacked = money(collect, currency).length + money(pay, currency).length > 24;
   function display(next: DisplayMode) { setMode(next); localStorage.setItem('pb-display', next); }
   return <div className="session-board">
     <div className="session-overview">
-      <header className="session-heading"><div><h1 aria-label={settings.name} title={settings.name}>{viewer ? settings.name : <button className="session-title" data-testid={`session-tab-${settings.id}`} aria-label="Switch session" aria-haspopup="dialog" onClick={() => open({ kind: 'history' })}><span>{settings.name}</span><span aria-hidden="true">⌄</span></button>}</h1><p className="session-meta" title={metadata}>{metadata}</p></div>{!viewer && <div className="session-heading-actions"><button className={settings.status === 'closed' ? 'closed-session-new' : undefined} aria-label="New session" onClick={() => open({ kind: 'new' })}>+ New</button><button aria-label="Session menu" onClick={() => open({ kind: 'menu' })}>Menu</button></div>}</header>
-      <div className="timer-row"><span className="status-line">{status}</span><Timer state={state} unknownStart={unknownStart} />{!viewer && (unknownStart ? <button className="text-button" onClick={() => open({ kind: 'timing' })}>Correct times</button> : settings.started_at === null && settings.status === 'open' && <StartTimer />)}{retainedTimer && <p className="retained-timer-notice" data-testid="retained-timer-notice">Timer started {new Date(retainedTimer).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · <button className="text-button" onClick={() => open({ kind: 'timing' })}>Correct times</button></p>}</div>
-      <section className="totals" aria-label="Session totals" data-testid="totals"><div className="chips-total"><span>{state.totals.on_table_minor !== null ? 'Chips in play' : 'Chip difference'}</span><strong className="money-value">{money(state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0', currency)}</strong></div><div className="payment-totals"><div><span>To collect</span><strong className="money-value">{money(state.totals.owed_to_banker_minor, currency)}</strong></div><div><span>To pay</span><strong className="money-value">{money(state.totals.owed_by_banker_minor, currency)}</strong></div></div><p className="chip-history">Chips bought <b className="money-value">{money(state.totals.total_in_minor, currency)}</b><span aria-hidden="true"> · </span>Returned <b className="money-value">{money(state.totals.total_out_minor, currency)}</b></p>{state.totals.on_table_minor === null && state.totals.discrepancy_minor !== '0' && <p className="hint discrepancy-note">Returned chips differ from bought chips. Payments are separate.</p>}</section>
+      <header className="session-heading">
+        <div className="session-heading-text">
+          <h1 aria-label={settings.name} title={settings.name}>{viewer ? <span className="session-title">{settings.name}</span> : <button className="session-title" data-testid={`session-tab-${settings.id}`} aria-label="Switch session" aria-haspopup="dialog" onClick={() => open({ kind: 'history' })}><span className="session-title-text">{settings.name}</span><ChevronDownIcon /></button>}</h1>
+        </div>
+        {!viewer && <div className="session-heading-actions"><button className={`icon-button${settings.status === 'closed' ? ' closed-session-new' : ''}`} aria-label="New session" title="New session" onClick={() => open({ kind: 'new' })}><PlusIcon /></button><button className="icon-button" aria-label="Session menu" title="Session menu" onClick={() => open({ kind: 'menu' })}><MoreIcon /></button></div>}
+        <p className="session-meta"><span className="meta-item meta-info" title={info}>{info}</span><span className="meta-item status-line">{status}</span><Timer state={state} unknownStart={unknownStart} />{!viewer && (unknownStart ? <button className="text-button meta-action" onClick={() => open({ kind: 'timing' })}>Correct times</button> : settings.started_at === null && settings.status === 'open' && <StartTimer />)}</p>
+        {retainedTimer && <p className="retained-timer-notice" data-testid="retained-timer-notice">Timer started {new Date(retainedTimer).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · <button className="text-button" onClick={() => open({ kind: 'timing' })}>Correct times</button></p>}
+      </header>
+      <section className={`totals${stacked ? ' totals-stacked' : ''}`} aria-label="Session totals" data-testid="totals">
+        <div className="totals-main"><span className="totals-label">{state.totals.on_table_minor !== null ? 'Chips in play' : 'Chip difference'}</span><FitText as="strong" className="money-value totals-hero" text={money(chips, currency)} /></div>
+        <div className="totals-split"><div><span className="totals-label">To collect</span><FitText as="strong" className={`money-value totals-amount${BigInt(collect) > 0n ? ' owed' : ''}`} text={money(collect, currency)} /></div><div><span className="totals-label">To pay</span><FitText as="strong" className={`money-value totals-amount${BigInt(pay) > 0n ? ' owe' : ''}`} text={money(pay, currency)} /></div></div>
+        <p className="chip-history"><span>Bought <b className="money-value">{money(state.totals.total_in_minor, currency)}</b></span><span>Returned <b className="money-value">{money(state.totals.total_out_minor, currency)}</b></span></p>
+        {state.totals.on_table_minor === null && state.totals.discrepancy_minor !== '0' && <p className="hint discrepancy-note">Returned chips differ from bought chips. Payments are separate.</p>}
+      </section>
     </div>
-    <div className="session-table">{readyToClose && <button className="ready-to-close" data-testid="ready-to-close" onClick={() => open({ kind: 'close' })}>Everyone has cashed out · Close session{unsettled > 0 ? ` · ${unsettled} unsettled` : ''}</button>}<div className="section-heading"><h2>Players <span className="muted">{state.players.length}</span></h2>{!viewer && settings.status === 'open' && state.players.length > 0 && <button className="text-button" onClick={() => open({ kind: 'add' })}>Add player</button>}{!viewer && hasResults && <div className="segments display-modes" aria-label="Result display"><button aria-pressed={mode === 'total'} onClick={() => display('total')}>Total</button><button aria-pressed={mode === 'hourly'} onClick={() => display('hourly')}>Per hour</button><button aria-pressed={mode === 'blinds'} onClick={() => display('blinds')}>BB</button></div>}</div>
-      <section className="players" aria-label="Session players">{state.players.length === 0 && <div className="empty"><h3>A seat for everyone</h3><p>Add your players, then record the first buy-in.</p>{!viewer && settings.status === 'open' && <button onClick={() => open({ kind: 'add' })}>Add player</button>}</div>}{state.players.map(player => {
+    <div className="session-table">{readyToClose && <button className="ready-to-close" data-testid="ready-to-close" onClick={() => open({ kind: 'close' })}><span>Everyone has cashed out · Close session{unsettled > 0 ? ` · ${unsettled} unsettled` : ''}</span><ChevronRightIcon /></button>}
+      <div className="section-heading"><h2>Players <span className="count">{state.players.length}</span></h2>{actions && state.players.length > 0 && <button className="text-button" onClick={() => open({ kind: 'add' })}>Add player</button>}</div>
+      {hasResults && <div className="segmented display-modes" role="group" aria-label="Result display"><button aria-pressed={mode === 'total'} onClick={() => display('total')}>Total</button><button aria-pressed={mode === 'hourly'} onClick={() => display('hourly')}>Per hour</button><button aria-pressed={mode === 'blinds'} onClick={() => display('blinds')}>BB</button></div>}
+      <section className={`players${actions ? ' with-actions' : ''}`} aria-label="Session players">{state.players.length === 0 && <div className="empty-row"><span>No players yet</span>{actions && <button className="primary" onClick={() => open({ kind: 'add' })}>Add player</button>}</div>}{state.players.map(player => {
         const { lastBuy } = moneyOptions(state.entries, player.id);
         const balance = BigInt(player.balance_minor);
-        const stateLabel = <span className="player-state" data-testid={player.state !== 'cashed_out' ? `result-${player.id}` : undefined}>{player.state === 'seated' ? 'Not bought in' : player.state === 'playing' ? 'Playing' : 'Cashed out'}</span>;
-        const stateInActions = !viewer && settings.status === 'open';
-        const content = <><span className="player-main"><strong title={player.display_name}>{player.display_name}</strong>{!stateInActions && stateLabel}</span>{(player.state !== 'seated' || balance !== 0n) && <span className="player-detail"><span className="player-position money-value">{player.state === 'cashed_out' ? <span data-testid={`result-${player.id}`}>{resultText(player, currency, mode)}</span> : player.state === 'playing' ? `Bought ${money(player.bought_in_minor, currency)}` : ''}</span><span className={balance === 0n ? 'muted' : 'player-balance money-value'}>{balanceText(player, currency)}</span></span>}</>;
-
-        const controls = settings.status === 'open' && <div className="player-shortcuts">{stateLabel}<div className="player-row-actions">{player.state === 'seated' ? <button data-testid={`buy-in-${player.id}`} aria-label={`Buy-in for ${player.display_name}`} onClick={() => open({ kind: 'money', player: player.id })}>Buy-in</button> : player.state === 'playing' ? <><button data-testid={`cash-out-${player.id}`} aria-label={`Cash out ${player.display_name}`} onClick={() => open({ kind: 'cash_out', player: player.id })}>Cash out</button>{lastBuy && <button data-testid={`repeat-buy-in-${player.id}`} aria-label={`Repeat last buy-in for ${player.display_name}`} onClick={() => open({ kind: 'money', player: player.id, amount: lastBuy })}>Rebuy <span className="money-value">{money(lastBuy, currency)}</span></button>}</> : balance !== 0n ? <button data-testid={`settle-${player.id}`} aria-label={`Settle ${player.display_name}`} onClick={() => open({ kind: balance < 0n ? 'payment_out' : 'payment_in', player: player.id, amount: String(balance < 0n ? -balance : balance) })}>Settle <span className="money-value">{money(String(balance < 0n ? -balance : balance), currency)}</span></button> : null}</div></div>;
+        const content = <>
+          <span className="player-name"><strong title={player.display_name}>{player.display_name}</strong><span className="player-state" data-testid={player.state !== 'cashed_out' ? `result-${player.id}` : undefined}>{player.state === 'seated' ? 'Not bought in' : player.state === 'playing' ? 'Playing' : 'Cashed out'}</span></span>
+          <span className="player-detail">
+            {player.state === 'cashed_out' ? <FitText className={`money-value player-position tone-${resultTone(player, mode)}`} testId={`result-${player.id}`} text={resultText(player, currency, mode)} /> : player.state === 'playing' ? <span className="player-position-wrap"><span className="sr-only">Bought </span><FitText className="money-value player-position" text={money(player.bought_in_minor, currency)} /></span> : null}
+            {(player.state !== 'seated' || balance !== 0n) && <FitText className={balance === 0n ? 'player-paid' : `money-value player-balance ${balance > 0n ? 'owe' : 'owed'}`} text={balanceText(player, currency)} />}
+          </span>
+        </>;
+        const controls = actions && <div className="player-actions">{player.state === 'seated' ? <button data-testid={`buy-in-${player.id}`} aria-label={`Buy-in for ${player.display_name}`} onClick={() => open({ kind: 'money', player: player.id })}>Buy-in</button> : player.state === 'playing' ? <><button data-testid={`cash-out-${player.id}`} aria-label={`Cash out ${player.display_name}`} onClick={() => open({ kind: 'cash_out', player: player.id })}>Cash out</button>{lastBuy && <button data-testid={`repeat-buy-in-${player.id}`} aria-label={`Repeat last buy-in for ${player.display_name}`} title={`Rebuy ${money(lastBuy, currency)}`} onClick={() => open({ kind: 'money', player: player.id, amount: lastBuy })}>Rebuy</button>}</> : balance !== 0n ? <button data-testid={`settle-${player.id}`} aria-label={`Settle ${player.display_name}`} onClick={() => open({ kind: balance < 0n ? 'payment_out' : 'payment_in', player: player.id, amount: String(balance < 0n ? -balance : balance) })}>Settle</button> : null}</div>;
         return viewer ? <div className="player-card" key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className="player-card" key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
       })}</section>
     </div>
@@ -72,23 +104,29 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
 }
 function StartTimer() {
   const { state, mutate, notify } = useClient();
-  return <button className="text-button" onClick={() => { void mutate(`/api/sessions/${state!.session.id}/start`, { op_id: crypto.randomUUID() }).catch(error => notify(error.message)); }}>Start timer</button>;
+  return <button className="text-button meta-action" onClick={() => { void mutate(`/api/sessions/${state!.session.id}/start`, { op_id: crypto.randomUUID() }).catch(error => notify(error.message)); }}>Start timer</button>;
 }
 export function Activity({ state, onlyPlayer }: { state: SessionState; onlyPlayer?: string }) {
   const { banker, open } = useClient();
   const voided = new Set(state.entries.flatMap(entry => entry.voids_entry_id ? [entry.voids_entry_id] : []));
   const rows = state.entries.filter(entry => !onlyPlayer || entry.player_id === onlyPlayer);
   const timeFormat = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
-  return <section className="activity" data-testid="activity"><h2>{onlyPlayer ? 'Player entries' : 'Activity'}</h2>{!rows.length && <p className="muted">No entries yet.</p>}<ul>{rows.map(entry => {
+  return <section className="activity" data-testid="activity"><h2>{onlyPlayer ? 'Entries' : 'Activity'}</h2>{!rows.length && <p className="muted empty-line">No entries yet</p>}<ul className="entry-list">{rows.map(entry => {
     const cancelled = voided.has(entry.id);
     const player = state.players.find(player => player.id === entry.player_id);
-    return <li key={entry.id} data-testid={`entry-${entry.id}`}><div><span className={cancelled ? 'voided' : ''}>{entry.voids_entry_id ? 'Void · ' : ''}{entryLabels[entry.kind]} · {player?.display_name} · <strong className="money-value">{money(entry.amount_minor, state.session.currency)}</strong>{entry.method && ` · ${methodLabel(entry.method)}`}</span>{cancelled && <span className="entry-status">Voided</span>}<small>{entry.occurred_at === null ? 'Time unavailable' : timeFormat.format(new Date(entry.occurred_at))}{entry.note ? ` · ${entry.note}` : ''}</small></div>{banker && state.session.status === 'open' && !cancelled && !entry.voids_entry_id && <button className="small-button" aria-label={`Correct ${entryLabels[entry.kind]} ${money(entry.amount_minor, state.session.currency)}`} onClick={() => open({ kind: 'correction', entry: entry.id, player: entry.player_id })}>Correct</button>}</li>;
+    const amount = money(entry.amount_minor, state.session.currency);
+    const label = [entry.voids_entry_id ? `Void · ${entryLabels[entry.kind]}` : entryLabels[entry.kind], entry.method ? methodLabel(entry.method) : null].filter(Boolean).join(' · ');
+    const body = <><span className="entry-main"><span className={`entry-title${cancelled ? ' voided' : ''}`}>{!onlyPlayer && player && <><strong className="entry-player">{player.display_name}</strong><span className="entry-separator"> · </span></>}<span className="entry-label">{label}</span></span><small>{entry.occurred_at === null ? 'Time unavailable' : timeFormat.format(new Date(entry.occurred_at))}{entry.note ? ` · ${entry.note}` : ''}</small></span><span className="entry-side"><FitText as="strong" className={`money-value entry-amount${cancelled ? ' voided' : ''}`} text={amount} />{cancelled && <span className="entry-status">Voided</span>}</span></>;
+    const editable = banker && state.session.status === 'open' && !cancelled && !entry.voids_entry_id;
+    return <li key={entry.id} data-testid={`entry-${entry.id}`} className={cancelled ? 'is-voided' : undefined}>{editable ? <button className="entry-row" aria-label={`Correct ${entryLabels[entry.kind]} ${amount}`} onClick={() => open({ kind: 'correction', entry: entry.id, player: entry.player_id })}>{body}</button> : <div className="entry-row">{body}</div>}</li>;
   })}</ul></section>;
 }
 export function PlayerSheet({ playerId }: { playerId: string }) {
   const { state, open } = useClient();
   const player = state!.players.find(player => player.id === playerId)!;
-  return <><p className="player-summary"><span className={player.balance_minor === '0' ? 'muted' : 'player-balance money-value'}>{balanceText(player, state!.session.currency)}</span> · {duration(player.duration_ms)}</p><p className="hint">Bought <span className="money-value">{money(player.bought_in_minor, state!.session.currency)}</span> · Returned <span className="money-value">{money(player.cashed_out_minor, state!.session.currency)}</span></p>{state!.session.status === 'open' && <div className="action-grid"><button className="primary" onClick={() => open({ kind: 'money', player: playerId })}>Buy-in</button><button onClick={() => open({ kind: 'cash_out', player: playerId })}>Cash out</button><button onClick={() => open({ kind: 'payment_in', player: playerId, amount: player.balance_minor === '0' ? undefined : String(BigInt(player.balance_minor) < 0n ? -BigInt(player.balance_minor) : BigInt(player.balance_minor)) })}>Record payment</button><button onClick={() => open({ kind: 'expense', player: playerId })}>Tips and meals</button></div>}<Activity state={state!} onlyPlayer={playerId} /></>;
+  const currency = state!.session.currency;
+  const balance = BigInt(player.balance_minor);
+  return <><dl className="player-stats"><div><dt>Balance</dt><dd><FitText className={balance === 0n ? undefined : `money-value player-balance ${balance > 0n ? 'owe' : 'owed'}`} text={balanceText(player, currency)} /></dd></div><div><dt>Bought</dt><dd><FitText className="money-value" text={money(player.bought_in_minor, currency)} /></dd></div><div><dt>Returned</dt><dd><FitText className="money-value" text={money(player.cashed_out_minor, currency)} /></dd></div><div><dt>Time</dt><dd>{duration(player.duration_ms)}</dd></div></dl>{state!.session.status === 'open' && <div className="action-grid"><button className="primary" onClick={() => open({ kind: 'money', player: playerId })}>Buy-in</button><button onClick={() => open({ kind: 'cash_out', player: playerId })}>Cash out</button><button onClick={() => open({ kind: 'payment_in', player: playerId, amount: balance === 0n ? undefined : String(balance < 0n ? -balance : balance) })}>Record payment</button><button onClick={() => open({ kind: 'expense', player: playerId })}>Tips and meals</button></div>}<Activity state={state!} onlyPlayer={playerId} /></>;
 }
 function PaymentMethods({ label = 'Payment method', value, change }: { label?: string; value: PaymentMethod; change: (value: PaymentMethod) => void }) {
   return <fieldset className="payment-methods"><legend>{label}</legend><div>{(['cash', 'venmo', 'zelle'] as const).map(method => <button key={method} type="button" aria-pressed={value === method} onClick={() => change(method)}>{methodLabel(method)}</button>)}</div></fieldset>;
@@ -123,7 +161,9 @@ export function MoneySheet({ title, playerId, kind: initialKind, initialAmount }
   if (draft.value.amount.trim()) {
     try {
       const amount = parseMoney(draft.value.amount, currency);
-      amountFeedback = `Will record ${money(String(amount), currency)}`;
+      let plain: bigint | null = null;
+      try { plain = parseMoney(draft.value.amount.replace(/,/g, ''), currency); } catch {}
+      if (plain !== amount) amountFeedback = `Will record ${money(String(amount), currency)}`;
     } catch {}
   }
   function quick(value: string) { draft.update({ ...draft.value, amount: decimal(value, currency) }); setAmountError(''); }

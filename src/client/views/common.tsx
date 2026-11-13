@@ -4,6 +4,7 @@ import { deleteDraft, dismissDraftConflict, DraftConflictError, draftConflict, d
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
+import { CloseIcon } from './ui';
 
 export type SheetState = { kind: string; player?: string; entry?: string; amount?: string } | null;
 export type ClientState = {
@@ -441,7 +442,7 @@ export function DraftSaveStatus() {
     <ErrorText text={recoveryError} />{failed && <div className="warning" role="status" aria-live="polite"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
 }
 export function ErrorText({ text, id }: { text: string; id?: string }) { return text ? <p id={id} role="alert" aria-live="polite" className="error" tabIndex={-1}>{text}</p> : null; }
-export function Sheet({ title, children, close, leadingClose = true, closeLabel = 'Cancel', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
+export function Sheet({ title, children, close, closeLabel = 'Cancel', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const client = useContext(ClientContext);
   const updateBanner = client?.updateBanner;
@@ -518,8 +519,8 @@ export function Sheet({ title, children, close, leadingClose = true, closeLabel 
       panel?.removeEventListener('focusin', keepVisible);
     };
   }, []);
-  const closeButton = <button type="button" aria-label={className.includes('money-sheet') ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
+  const closeButton = <button type="button" className="icon-button sheet-close" aria-label={className.includes('money-sheet') ? closeLabel : 'Close sheet'} title={closeLabel} disabled={busy} onClick={close}><CloseIcon /></button>;
   return <div className="sheet-backdrop"><div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
-    <div className="sheet-status">{updateBanner}<DraftSaveStatus /></div><div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><div className="sheet-fields"><fieldset className="sheet-controls" disabled={busy}>{children}</fieldset></div>
+    <div className="sheet-status">{updateBanner}<DraftSaveStatus /></div><header className="sheet-header"><h2 title={title}>{title}</h2>{closeButton}</header><div className="sheet-fields"><fieldset className="sheet-controls" disabled={busy}>{children}</fieldset></div>
   </div></div>;
 }

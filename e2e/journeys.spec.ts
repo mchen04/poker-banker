@@ -114,7 +114,7 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
   await expect(page.getByTestId(`result-${player.id}`)).toHaveText('Playing');
   await money(page, player.id, '180', { kind: 'Cash out', testInfo });
-  await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$30.00 up');
+  await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$30.00');
   await expect(page.getByTestId(`player-${player.id}`)).toContainText('Owed $180.00');
   await money(page, player.id, '20', { paid: false });
   await expect(page.getByTestId(`result-${player.id}`)).toHaveText('Playing');
@@ -125,7 +125,7 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   await screen(page, testInfo, 'correction');
   await page.getByRole('button', { name: 'Save correction', exact: true }).click();
   await expect(page.getByTestId(`entry-${original.id}`)).toContainText('Voided');
-  await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$15.00 up');
+  await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$15.00');
   await money(page, player.id, '2', { kind: 'Tips and meals', testInfo });
   await closeSession(page, true);
   await menu(page, 'Reopen session');
@@ -166,7 +166,7 @@ test('payment methods persist through reload, later settlement and visible corre
   try {
     const viewer = await viewerContext.newPage();
     await viewer.goto(viewerLink);
-    await expect(viewer.getByText(/View only, updated/)).toBeVisible();
+    await expect(viewer.getByText(/View only ·/)).toBeVisible();
     await expect(viewer.getByTestId('activity')).toContainText('Venmo');
     for (const name of ['Add player', 'Buy-in', 'Session menu', 'Players']) await expect(viewer.getByRole('button', { name, exact: true })).toHaveCount(0);
     await screen(viewer, testInfo, 'viewer');
@@ -209,7 +209,7 @@ test('server timer survives reload and another device, freezes at close, display
   const state = await current(page);
   const started = state.session.started_at;
   await expect(page.getByTestId('session-timer')).toContainText('Playing time');
-  await expect.poll(async () => (await page.getByTestId('session-timer').textContent())!).not.toContain('00:00:00');
+  await expect.poll(async () => (await page.getByTestId('session-timer').textContent())!).not.toMatch(/ 0:00:00$/);
   await page.reload();
   expect((await current(page)).session.started_at).toBe(started);
   const second = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
@@ -226,7 +226,7 @@ test('server timer survives reload and another device, freezes at close, display
     await page.getByRole('button', { name: 'BB', exact: true }).click();
     await expect(page.getByTestId(`result-${player.id}`)).toContainText('No big blind set');
     await page.getByRole('button', { name: 'Total', exact: true }).click();
-    await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$10.00 up');
+    await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$10.00');
     expect((await current(page)).entries).toEqual(before.entries);
     await menu(page, 'Session settings');
     await typeInput(page.getByLabel('Big blind', { exact: true }), '2');
@@ -234,7 +234,7 @@ test('server timer survives reload and another device, freezes at close, display
     await expect(page.getByLabel('Big blind', { exact: true })).toBeFocused();
     await page.getByRole('button', { name: 'Save settings', exact: true }).click();
     await page.getByRole('button', { name: 'BB', exact: true }).click();
-    await expect(page.getByTestId(`result-${player.id}`)).toContainText('5.00 big blinds');
+    await expect(page.getByTestId(`result-${player.id}`)).toContainText('5.00 BB');
     await menu(page, 'Correct times');
     await typeInput(page.getByLabel('Started at', { exact: true }), new Date(Date.parse(started!) - 3600000).toISOString().slice(0, 19));
     await page.getByRole('button', { name: 'Save timing', exact: true }).click();
