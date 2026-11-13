@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { parseMoney } from '../../domain/money';
-import { draftKey, listOutbox, listSnapshots } from '../data';
+import { draftKey, enqueue, listDeletedSessions, listOutbox, listSnapshots, type DeletedSession } from '../data';
 import type { SessionState } from '../../domain/session';
 import { decimal, DraftRecovery, ErrorText, money, sessionLabel, useClient, useDraft, useFormBusy } from './common';
 
@@ -44,7 +44,31 @@ export function SessionForm({ creating, created }: { creating: boolean; created:
   if (draft.submitted) return <DraftRecovery pending={busy} notice={draft.error} recover={() => draft.reconcile<SessionState>()} recovered={result => { created(result); open(null); }} />;
   return <form className="sheet-form" onSubmit={submit}><div className="form-body"><label>Session name<input value={draft.value.name} onChange={event => draft.update({ ...draft.value, name: event.target.value })} required maxLength={100} /></label><label>Session date<input type="date" value={draft.value.played_on} onChange={event => draft.update({ ...draft.value, played_on: event.target.value })} required /></label><label>Currency<select aria-label="Currency" value={draft.value.currency} disabled={!creating} onChange={event => draft.update({ ...draft.value, currency: event.target.value })}>{['USD', 'JPY', 'CAD', 'EUR', 'GBP', 'SGD', 'HKD', 'AUD'].map(currency => <option key={currency}>{currency}</option>)}</select>{!creating && <small>Currency is fixed after creation.</small>}</label><label>Location<input list="past-locations" value={draft.value.location} onChange={event => draft.update({ ...draft.value, location: event.target.value })} /></label><datalist id="past-locations">{suggestions.locations.map(location => <option key={location}>{location}</option>)}</datalist><label>Game<input list="past-games" value={draft.value.game} onChange={event => draft.update({ ...draft.value, game: event.target.value })} /></label><datalist id="past-games">{suggestions.games.map(game => <option key={game}>{game}</option>)}</datalist><label>Big blind<input ref={blindInput} aria-invalid={!!blindError} aria-describedby={blindError ? "big-blind-error" : undefined} inputMode="decimal" placeholder="Optional" value={draft.value.blind} onChange={event => { setBlindError(''); draft.update({ ...draft.value, blind: event.target.value }); }} /></label><ErrorText id="big-blind-error" text={blindError} /></div><footer className="form-actions"><ErrorText text={draft.error || error} /><button className="primary wide" disabled={busy || !draft.ready || (!creating && state!.session.status === 'closed')}>{creating ? 'Create session' : 'Save settings'}</button></footer></form>;
 }
-export function HistorySheet({ choose }: { choose: (id: string) => void }) {
+export function DeletedSessions({ choose }: { choose: (id: string | null, notice?: string) => void }) {
+  const { client, online, update } = useClient();
+  const [deleted, setDeleted] = useState<DeletedSession[]>([]);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  useFormBusy(restoring !== null);
+  useEffect(() => {
+    let active = true;
+    if (!online || !client) return;
+    void listDeletedSessions(client).then(result => { if (active && client.isCurrent()) setDeleted(result.sessions); }).catch(() => {});
+    return () => { active = false; };
+  }, [online, client]);
+  async function restore(session: DeletedSession) {
+    if (restoring) return;
+    setRestoring(session.id); setError('');
+    try {
+      const result = await client!.api<SessionState>(`/api/sessions/${session.id}/restore`, 'POST', { op_id: crypto.randomUUID() });
+      if (!client!.isCurrent()) return;
+      update(result); choose(session.id, `Restored ${session.name}`);
+    } catch (problem) { if (client!.isCurrent()) { setError(problem instanceof Error ? problem.message : 'Could not restore session'); setRestoring(null); } }
+  }
+  if (!deleted.length) return null;
+  return <details className="recover-list" data-testid="recently-deleted-sessions"><summary>Recently deleted ({deleted.length})</summary><ul>{deleted.map(session => <li key={session.id}><span className="recover-name" title={session.name}>{sessionLabel(session)}</span><button type="button" aria-label={`Restore ${session.name}`} disabled={restoring !== null || !online} onClick={() => { void restore(session); }}>{restoring === session.id ? 'Restoring…' : 'Restore'}</button></li>)}</ul><ErrorText text={error} /></details>;
+}
+export function HistorySheet({ choose }: { choose: (id: string | null, notice?: string) => void }) {
   const { banker, client, open, state, online } = useClient();
   const api = client!.api;
   const [search, setSearch] = useState('');
@@ -101,12 +125,29 @@ export function HistorySheet({ choose }: { choose: (id: string) => void }) {
   function choice(session: SessionSummary) {
     return <li key={session.id}><button data-testid={`session-tab-${session.id}`} aria-current={state?.session.id === session.id ? 'true' : undefined} onClick={() => choose(session.id)}><span>{sessionLabel(session)}</span><small>{state?.session.id === session.id ? 'Current · ' : ''}{session.status === 'closed' ? 'Closed' : 'Open'} · {session.currency}</small></button></li>;
   }
-  return <><button className="primary wide" onClick={() => open({ kind: 'new' })}>New session</button>{!online && <p className="hint" role="status">Offline · saved sessions on this device</p>}<label>Search sessions<input data-autofocus="false" value={search} onChange={event => setSearch(event.target.value)} /></label>{pinned.length > 0 && <section aria-label="Current and open sessions"><h3>Current and open sessions</h3><ul className="choice-list">{pinned.map(choice)}</ul></section>}{months.map(month => <section key={month}><h3>{new Date(`${month}-01T12:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h3><ul className="choice-list">{historical.filter(session => session.played_on.startsWith(month)).map(choice)}</ul></section>)}{!choices.length && <p>No matching sessions.</p>}{online && before && <button className="wide" onClick={() => { void more().catch(error => setError(error.message)); }}>Load more sessions</button>}<ErrorText text={error} /></>;
+  return <><button className="primary wide" onClick={() => open({ kind: 'new' })}>New session</button>{!online && <p className="hint" role="status">Offline · saved sessions on this device</p>}<label>Search sessions<input data-autofocus="false" value={search} onChange={event => setSearch(event.target.value)} /></label>{pinned.length > 0 && <section aria-label="Current and open sessions"><h3>Current and open sessions</h3><ul className="choice-list">{pinned.map(choice)}</ul></section>}{months.map(month => <section key={month}><h3>{new Date(`${month}-01T12:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h3><ul className="choice-list">{historical.filter(session => session.played_on.startsWith(month)).map(choice)}</ul></section>)}{!choices.length && <p>No matching sessions.</p>}{online && before && <button className="wide" onClick={() => { void more().catch(error => setError(error.message)); }}>Load more sessions</button>}<ErrorText text={error} /><DeletedSessions choose={choose} /></>;
 
 }
 export function MenuSheet() {
-  const { state, open } = useClient();
-  return <div className="menu-list"><button onClick={() => open({ kind: 'settings' })}>Session settings</button><button onClick={() => open({ kind: 'timing' })}>Correct times</button><button onClick={() => open({ kind: 'share' })}>Share session</button>{state!.session.status === 'open' ? <button data-testid="session-close" onClick={() => open({ kind: 'close' })}>Close session</button> : <button onClick={() => open({ kind: 'reopen' })}>Reopen session</button>}</div>;
+  const { banker, state, pending, open, notify } = useClient();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const panel = useRef<HTMLElement>(null);
+  useFormBusy(busy);
+  useEffect(() => { if (confirming) panel.current?.focus(); }, [confirming]);
+  const session = state!.session;
+  const path = `/api/sessions/${session.id}/delete`;
+  async function remove() {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      await enqueue({ banker_id: banker!.id, session_id: session.id, path, body: { op_id: crypto.randomUUID() }, label: `Delete session · ${session.name}` });
+      notify('Not saved yet'); open(null);
+    } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not delete session'); setBusy(false); }
+  }
+  if (confirming) return <section className="confirmation-panel" role="alertdialog" aria-label="Delete session" tabIndex={-1} ref={panel}><h3>Delete {session.name}?</h3><p>It disappears from history and reports, and its viewer link stops working.</p><ErrorText text={error} /><div className="confirm-actions"><button type="button" disabled={busy} onClick={() => setConfirming(false)}>Keep session</button><button type="button" className="danger" disabled={busy} onClick={() => { void remove(); }}>Confirm delete</button></div></section>;
+  return <><div className="menu-list"><button onClick={() => open({ kind: 'settings' })}>Session settings</button><button onClick={() => open({ kind: 'timing' })}>Correct times</button><button onClick={() => open({ kind: 'share' })}>Share session</button>{session.status === 'open' ? <button data-testid="session-close" onClick={() => open({ kind: 'close' })}>Close session</button> : <button onClick={() => open({ kind: 'reopen' })}>Reopen session</button>}</div><div className="menu-list menu-danger">{pending.some(item => item.path === path) ? <p className="hint">Delete not saved yet</p> : <button className="danger" onClick={() => setConfirming(true)}>Delete session</button>}</div></>;
 }
 export function CloseSheet() {
   const { banker, state, pending, mutate, open, notify } = useClient();

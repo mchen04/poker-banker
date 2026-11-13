@@ -1,12 +1,12 @@
 import { submittedAt } from '../clock';
 import { useDebouncedSearch } from '../search';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { EntryKind, PaymentMethod, PlayerState, SessionState } from '../../domain/session';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import type { EntryKind, LedgerEntry, PaymentMethod, PlayerState, SessionState } from '../../domain/session';
 import { MAX_MINOR, parseMoney } from '../../domain/money';
 import { moneyOptions } from '../money-options';
 import { retainedTimerStart } from '../undo-timing';
-import { draftKey } from '../data';
-import { decimal, duration, entryLabels, DraftRecovery, ErrorText, methodLabel, money, resultCurrencyDecimal, resultMoney, resultNumber, Sheet, useClient, useDraft, useFormBusy } from './common';
+import { draftKey, enqueue } from '../data';
+import { decimal, duration, entryLabels, entryNouns, DraftRecovery, ErrorText, methodLabel, money, resultCurrencyDecimal, resultMoney, resultNumber, Sheet, useClient, useDraft, useFormBusy } from './common';
 import { ChevronDownIcon, ChevronRightIcon, FitText, MoreIcon, PlusIcon } from './ui';
 
 type RosterPlayer = { id: string; display_name: string };
@@ -64,6 +64,33 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
   const chips = state.totals.on_table_minor ?? state.totals.discrepancy_minor ?? '0';
   const collect = state.totals.owed_to_banker_minor, pay = state.totals.owed_by_banker_minor;
   const stacked = money(collect, currency).length + money(pay, currency).length > 24;
+  const playersRef = useRef<HTMLElement>(null);
+  const [actionsBelow, setActionsBelow] = useState('');
+  useLayoutEffect(() => {
+    const section = playersRef.current;
+    if (!section || !actions) { setActionsBelow(''); return; }
+    const measure = () => {
+      const cards = [...section.querySelectorAll<HTMLElement>('.player-card')];
+      const was = cards.map(card => card.classList.contains('actions-below'));
+      for (const card of cards) card.classList.remove('actions-below');
+      section.classList.add('measuring');
+      const crowded = cards.filter(card => {
+        const name = card.querySelector<HTMLElement>('.player-name strong');
+        if (!name || !card.querySelector('.player-actions button')) return false;
+        const line = Number.parseFloat(getComputedStyle(name).lineHeight);
+        const status = card.querySelector<HTMLElement>('.player-state');
+        return name.scrollWidth > name.clientWidth + 1 || name.getBoundingClientRect().height > line * 2 + 1 || (!!status && status.scrollWidth > status.clientWidth + 1);
+      }).map(card => card.dataset.player ?? '');
+      section.classList.remove('measuring');
+      cards.forEach((card, index) => card.classList.toggle('actions-below', was[index]!));
+      setActionsBelow(crowded.join(' '));
+    };
+    measure();
+    let last = -1;
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(entries => { const width = Math.round(entries[0]!.contentRect.width); if (width !== last) { last = width; measure(); } });
+    observer?.observe(section);
+    return () => observer?.disconnect();
+  }, [state, mode, actions]);
   function display(next: DisplayMode) { setMode(next); localStorage.setItem('pb-display', next); }
   return <div className="session-board">
     <div className="session-overview">
@@ -85,19 +112,19 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
     <div className="session-table">{readyToClose && <button className="ready-to-close" data-testid="ready-to-close" onClick={() => open({ kind: 'close' })}><span>Everyone has cashed out · Close session{unsettled > 0 ? ` · ${unsettled} unsettled` : ''}</span><ChevronRightIcon /></button>}
       <div className="section-heading"><h2>Players <span className="count">{state.players.length}</span></h2>{actions && state.players.length > 0 && <button className="text-button" onClick={() => open({ kind: 'add' })}>Add player</button>}</div>
       {hasResults && <div className="segmented display-modes" role="group" aria-label="Result display"><button aria-pressed={mode === 'total'} onClick={() => display('total')}>Total</button><button aria-pressed={mode === 'hourly'} onClick={() => display('hourly')}>Per hour</button><button aria-pressed={mode === 'blinds'} onClick={() => display('blinds')}>BB</button></div>}
-      <section className={`players${actions ? ' with-actions' : ''}`} aria-label="Session players">{state.players.length === 0 && <div className="empty-row"><span>No players yet</span>{actions && <button className="primary" onClick={() => open({ kind: 'add' })}>Add player</button>}</div>}{state.players.map(player => {
+      <section ref={playersRef} className={`players${actions ? ' with-actions' : ''}`} aria-label="Session players">{state.players.length === 0 && <div className="empty-row"><span>No players yet</span>{actions && <button className="primary" onClick={() => open({ kind: 'add' })}>Add player</button>}</div>}{state.players.map(player => {
         const { lastBuy } = moneyOptions(state.entries, player.id);
         const balance = BigInt(player.balance_minor);
         const content = <>
-          <span className="player-name"><strong title={player.display_name}>{player.display_name}</strong><span className="player-state" data-testid={player.state !== 'cashed_out' ? `result-${player.id}` : undefined}>{player.state === 'seated' ? 'Not bought in' : player.state === 'playing' ? 'Playing' : 'Cashed out'}</span></span>
+          <span className="player-name"><strong title={player.display_name}>{player.display_name}</strong><span className="player-state"><span data-testid={player.state !== 'cashed_out' ? `result-${player.id}` : undefined}>{player.state === 'seated' ? 'Not bought in' : player.state === 'playing' ? 'Playing' : 'Cashed out'}</span>{(player.state !== 'seated' || balance !== 0n) && <><span className="state-separator"> · </span>{balance === 0n ? <span className="player-paid">Paid up</span> : <span className={`player-balance ${balance > 0n ? 'owe' : 'owed'}`}>{balance > 0n ? 'Owes' : 'Owed'} <span className="money-value">{money(String(balance > 0n ? balance : -balance), currency)}</span></span>}</>}</span></span>
           <span className="player-detail">
             {player.state === 'cashed_out' ? <FitText className={`money-value player-position tone-${resultTone(player, mode)}`} testId={`result-${player.id}`} text={resultText(player, currency, mode)} /> : player.state === 'playing' ? <span className="player-position-wrap"><span className="sr-only">Bought </span><FitText className="money-value player-position" text={money(player.bought_in_minor, currency)} /></span> : null}
-            {(player.state !== 'seated' || balance !== 0n) && <FitText className={balance === 0n ? 'player-paid' : `money-value player-balance ${balance > 0n ? 'owe' : 'owed'}`} text={balanceText(player, currency)} />}
           </span>
         </>;
         const controls = actions && <div className="player-actions">{player.state === 'seated' ? <button data-testid={`buy-in-${player.id}`} aria-label={`Buy-in for ${player.display_name}`} onClick={() => open({ kind: 'money', player: player.id })}>Buy-in</button> : player.state === 'playing' ? <><button data-testid={`cash-out-${player.id}`} aria-label={`Cash out ${player.display_name}`} onClick={() => open({ kind: 'cash_out', player: player.id })}>Cash out</button>{lastBuy && <button data-testid={`repeat-buy-in-${player.id}`} aria-label={`Repeat last buy-in for ${player.display_name}`} title={`Rebuy ${money(lastBuy, currency)}`} onClick={() => open({ kind: 'money', player: player.id, amount: lastBuy })}>Rebuy</button>}</> : balance !== 0n ? <button data-testid={`settle-${player.id}`} aria-label={`Settle ${player.display_name}`} onClick={() => open({ kind: balance < 0n ? 'payment_out' : 'payment_in', player: player.id, amount: String(balance < 0n ? -balance : balance) })}>Settle</button> : null}</div>;
-        return viewer ? <div className="player-card" key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className="player-card" key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
+        return viewer ? <div className="player-card" key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className={`player-card${actionsBelow.split(' ').includes(player.id) ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
       })}</section>
+      {!viewer && <RemovedPlayers state={state} />}
     </div>
     <Activity state={state} />
   </div>;
@@ -106,19 +133,44 @@ function StartTimer() {
   const { state, mutate, notify } = useClient();
   return <button className="text-button meta-action" onClick={() => { void mutate(`/api/sessions/${state!.session.id}/start`, { op_id: crypto.randomUUID() }).catch(error => notify(error.message)); }}>Start timer</button>;
 }
+type EntryMark = 'live' | 'void' | 'hidden' | 'deleted' | 'removed' | 'voided';
+export function entryMarks(entries: LedgerEntry[]) {
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const voids = new Map(entries.flatMap(entry => entry.voids_entry_id ? [[entry.voids_entry_id, entry] as const] : []));
+  const restored = new Set(entries.flatMap(entry => entry.restores_entry_id ? [entry.restores_entry_id] : []));
+  const replaced = (original: LedgerEntry, row: LedgerEntry) => entries.some(entry => entry.revision === row.revision && entry.player_id === original.player_id && entry.kind === original.kind && entry.voids_entry_id === null && entry.id !== row.id && entry.id !== original.id);
+  return (entry: LedgerEntry): EntryMark => {
+    if (entry.voids_entry_id) {
+      const original = byId.get(entry.voids_entry_id);
+      return original && !entry.removal_id && replaced(original, entry) ? 'void' : 'hidden';
+    }
+    const row = voids.get(entry.id);
+    if (!row) return 'live';
+    if (!row.removal_id && replaced(entry, row)) return 'voided';
+    if (restored.has(entry.id)) return 'hidden';
+    return row.removal_id ? 'removed' : 'deleted';
+  };
+}
+const markLabels: Partial<Record<EntryMark, string>> = { deleted: 'Deleted', removed: 'Removed', voided: 'Voided' };
 export function Activity({ state, onlyPlayer }: { state: SessionState; onlyPlayer?: string }) {
-  const { banker, open } = useClient();
-  const voided = new Set(state.entries.flatMap(entry => entry.voids_entry_id ? [entry.voids_entry_id] : []));
-  const rows = state.entries.filter(entry => !onlyPlayer || entry.player_id === onlyPlayer);
+  const { banker, open, pending } = useClient();
+  const mark = entryMarks(state.entries);
+  const deleting = new Set(pending.filter(item => item.session_id === state.session.id).flatMap(item => { const match = /\/entries\/([^/]+)\/void$/.exec(item.path); return match ? [match[1]!] : []; }));
+  const names = new Map([...state.players, ...(state.removed_players ?? [])].map(player => [player.id, player.display_name]));
+  const rows = state.entries.filter(entry => (!onlyPlayer || entry.player_id === onlyPlayer) && mark(entry) !== 'hidden');
   const timeFormat = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+  const writable = !!banker && state.session.status === 'open';
   return <section className="activity" data-testid="activity"><h2>{onlyPlayer ? 'Entries' : 'Activity'}</h2>{!rows.length && <p className="muted empty-line">No entries yet</p>}<ul className="entry-list">{rows.map(entry => {
-    const cancelled = voided.has(entry.id);
-    const player = state.players.find(player => player.id === entry.player_id);
+    const status = mark(entry);
+    const cancelled = !!markLabels[status];
+    const name = names.get(entry.player_id);
     const amount = money(entry.amount_minor, state.session.currency);
-    const label = [entry.voids_entry_id ? `Void · ${entryLabels[entry.kind]}` : entryLabels[entry.kind], entry.method ? methodLabel(entry.method) : null].filter(Boolean).join(' · ');
-    const body = <><span className="entry-main"><span className={`entry-title${cancelled ? ' voided' : ''}`}>{!onlyPlayer && player && <><strong className="entry-player">{player.display_name}</strong><span className="entry-separator"> · </span></>}<span className="entry-label">{label}</span></span><small>{entry.occurred_at === null ? 'Time unavailable' : timeFormat.format(new Date(entry.occurred_at))}{entry.note ? ` · ${entry.note}` : ''}</small></span><span className="entry-side"><FitText as="strong" className={`money-value entry-amount${cancelled ? ' voided' : ''}`} text={amount} />{cancelled && <span className="entry-status">Voided</span>}</span></>;
-    const editable = banker && state.session.status === 'open' && !cancelled && !entry.voids_entry_id;
-    return <li key={entry.id} data-testid={`entry-${entry.id}`} className={cancelled ? 'is-voided' : undefined}>{editable ? <button className="entry-row" aria-label={`Correct ${entryLabels[entry.kind]} ${amount}`} onClick={() => open({ kind: 'correction', entry: entry.id, player: entry.player_id })}>{body}</button> : <div className="entry-row">{body}</div>}</li>;
+    const label = [status === 'void' ? `Void · ${entryLabels[entry.kind]}` : entryLabels[entry.kind], entry.method ? methodLabel(entry.method) : null].filter(Boolean).join(' · ');
+    const statusText = markLabels[status] ?? (deleting.has(entry.id) ? 'Delete pending' : null);
+    const body = <><span className="entry-main"><span className={`entry-title${cancelled ? ' voided' : ''}`}>{!onlyPlayer && name && <><strong className="entry-player">{name}</strong><span className="entry-separator"> · </span></>}<span className="entry-label">{label}</span></span><small>{entry.occurred_at === null ? 'Time unavailable' : timeFormat.format(new Date(entry.occurred_at))}{entry.note ? ` · ${entry.note}` : ''}</small></span><span className="entry-side"><FitText as="strong" className={`money-value entry-amount${cancelled ? ' voided' : ''}`} text={amount} />{statusText && <span className="entry-status">{statusText}</span>}</span></>;
+    const editable = writable && status === 'live' && !deleting.has(entry.id);
+    const restorable = writable && status === 'deleted' && state.players.some(player => player.id === entry.player_id);
+    return <li key={entry.id} data-testid={`entry-${entry.id}`} className={cancelled ? 'is-voided' : undefined}>{editable ? <button className="entry-row" aria-label={`Correct ${entryLabels[entry.kind]} ${amount}`} onClick={() => open({ kind: 'correction', entry: entry.id, player: entry.player_id })}>{body}</button> : restorable ? <button className="entry-row" aria-label={`Deleted ${entryLabels[entry.kind]} ${amount}`} onClick={() => open({ kind: 'restore-entry', entry: entry.id, player: entry.player_id })}>{body}</button> : <div className="entry-row">{body}</div>}</li>;
   })}</ul></section>;
 }
 export function PlayerSheet({ playerId }: { playerId: string }) {
@@ -126,7 +178,46 @@ export function PlayerSheet({ playerId }: { playerId: string }) {
   const player = state!.players.find(player => player.id === playerId)!;
   const currency = state!.session.currency;
   const balance = BigInt(player.balance_minor);
-  return <><dl className="player-stats"><div><dt>Balance</dt><dd><FitText className={balance === 0n ? undefined : `money-value player-balance ${balance > 0n ? 'owe' : 'owed'}`} text={balanceText(player, currency)} /></dd></div><div><dt>Bought</dt><dd><FitText className="money-value" text={money(player.bought_in_minor, currency)} /></dd></div><div><dt>Returned</dt><dd><FitText className="money-value" text={money(player.cashed_out_minor, currency)} /></dd></div><div><dt>Time</dt><dd>{duration(player.duration_ms)}</dd></div></dl>{state!.session.status === 'open' && <div className="action-grid"><button className="primary" onClick={() => open({ kind: 'money', player: playerId })}>Buy-in</button><button onClick={() => open({ kind: 'cash_out', player: playerId })}>Cash out</button><button onClick={() => open({ kind: 'payment_in', player: playerId, amount: balance === 0n ? undefined : String(balance < 0n ? -balance : balance) })}>Record payment</button><button onClick={() => open({ kind: 'expense', player: playerId })}>Tips and meals</button></div>}<Activity state={state!} onlyPlayer={playerId} /></>;
+  return <><dl className="player-stats"><div><dt>Balance</dt><dd><FitText className={balance === 0n ? undefined : `money-value player-balance ${balance > 0n ? 'owe' : 'owed'}`} text={balanceText(player, currency)} /></dd></div><div><dt>Bought</dt><dd><FitText className="money-value" text={money(player.bought_in_minor, currency)} /></dd></div><div><dt>Returned</dt><dd><FitText className="money-value" text={money(player.cashed_out_minor, currency)} /></dd></div><div><dt>Time</dt><dd>{duration(player.duration_ms)}</dd></div></dl>{state!.session.status === 'open' && <div className="action-grid"><button className="primary" onClick={() => open({ kind: 'money', player: playerId })}>Buy-in</button><button onClick={() => open({ kind: 'cash_out', player: playerId })}>Cash out</button><button onClick={() => open({ kind: 'payment_in', player: playerId, amount: balance === 0n ? undefined : String(balance < 0n ? -balance : balance) })}>Record payment</button><button onClick={() => open({ kind: 'expense', player: playerId })}>Tips and meals</button></div>}<Activity state={state!} onlyPlayer={playerId} />{state!.session.status === 'open' && <RemovePlayer playerId={playerId} />}</>;
+}
+function RemovePlayer({ playerId }: { playerId: string }) {
+  const { banker, state, pending, open, notify } = useClient();
+  const player = state!.players.find(player => player.id === playerId)!;
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const panel = useRef<HTMLElement>(null);
+  useFormBusy(busy);
+  useEffect(() => { if (confirming) panel.current?.focus(); }, [confirming]);
+  const path = `/api/sessions/${state!.session.id}/players/${playerId}/remove`;
+  const voided = new Set(state!.entries.flatMap(entry => entry.voids_entry_id ? [entry.voids_entry_id] : []));
+  const count = state!.entries.filter(entry => entry.player_id === playerId && !entry.voids_entry_id && !voided.has(entry.id)).length;
+  if (pending.some(item => item.path === path)) return <p className="hint remove-pending">Removal not saved yet</p>;
+  async function remove() {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      await enqueue({ banker_id: banker!.id, session_id: state!.session.id, path, body: { op_id: crypto.randomUUID() }, label: `Remove ${player.display_name}` });
+      notify('Not saved yet'); open(null);
+    } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not remove player'); setBusy(false); }
+  }
+  return confirming ? <section className="confirmation-panel" role="alertdialog" aria-label="Remove player" tabIndex={-1} ref={panel}><h3>Remove {player.display_name} from this game?</h3><p>{count ? `Their ${count} ${count === 1 ? 'entry' : 'entries'} will be deleted.` : 'They have no entries.'} Totals update right away.</p><ErrorText text={error} /><div className="confirm-actions"><button type="button" disabled={busy} onClick={() => setConfirming(false)}>Keep player</button><button type="button" className="danger" disabled={busy} onClick={() => { void remove(); }}>Confirm remove</button></div></section> : <button type="button" className="quiet-danger" onClick={() => setConfirming(true)}>Remove from game</button>;
+}
+export function RemovedPlayers({ state }: { state: SessionState }) {
+  const { mutate, notify, online } = useClient();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  useFormBusy(busy !== null);
+  const removed = state.removed_players ?? [];
+  if (!removed.length) return null;
+  async function restore(id: string, name: string) {
+    if (busy) return;
+    setBusy(id); setError('');
+    try { await mutate(`/api/sessions/${state.session.id}/players/${id}/restore`, { op_id: crypto.randomUUID() }); notify(`Restored ${name}`); }
+    catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not restore player'); }
+    finally { setBusy(null); }
+  }
+  return <details className="recover-list" data-testid="removed-players"><summary>Removed ({removed.length})</summary><ul>{removed.map(player => <li key={player.id}><span className="recover-name" title={player.display_name}>{player.display_name}</span>{state.session.status === 'open' && <button type="button" aria-label={`Restore ${player.display_name}`} disabled={busy !== null || !online} onClick={() => { void restore(player.id, player.display_name); }}>{busy === player.id ? 'Restoring…' : 'Restore'}</button>}</li>)}</ul><ErrorText text={error} /></details>;
 }
 function PaymentMethods({ label = 'Payment method', value, change }: { label?: string; value: PaymentMethod; change: (value: PaymentMethod) => void }) {
   return <fieldset className="payment-methods"><legend>{label}</legend><div>{(['cash', 'venmo', 'zelle'] as const).map(method => <button key={method} type="button" aria-pressed={value === method} onClick={() => change(method)}>{methodLabel(method)}</button>)}</div></fieldset>;
@@ -233,16 +324,18 @@ export function AddPlayerSheet() {
   const [confirmed, setConfirmed] = useState(false);
   if (!savedSearch.ready) return savedSearch.error ? <ErrorText text={savedSearch.error} /> : <p>Restoring draft…</p>;
   if (savedSearch.submitted) return <DraftRecovery pending={busy} notice={savedSearch.error} recover={() => savedSearch.reconcile()} recovered={() => open(null)} />;
-  return <><label>Search players<input value={search} onChange={event => { setSearch(event.target.value); setConfirmed(false); }} placeholder="Name" /></label><p className="hint">Choose an existing player to keep their history together.</p>{searching && <p role="status">Searching players…</p>}<ul className="choice-list">{players.map(player => <li key={player.id}><button disabled={busy || searching || state!.players.some(seated => seated.id === player.id)} onClick={() => { void add({ player_id: player.id }); }}>{player.display_name}{state!.players.some(seated => seated.id === player.id) ? ' · Already in session' : ''}</button></li>)}</ul>{search.trim() && <>{exact && <><p className="warning">An exact name match already exists. Add the existing player unless this is a different person.</p><label className="check"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />This is a different person</label></>}<button className="primary wide" disabled={busy || searching || (exact && !confirmed)} onClick={() => { void add({ new_player_name: search.trim() }); }}>Add '{search.trim()}' as new</button></>}<ErrorText text={savedSearch.error || error} /></>;
+  return <><label>Search players<input value={search} onChange={event => { setSearch(event.target.value); setConfirmed(false); }} placeholder="Name" /></label><p className="hint">Choose an existing player to keep their history together.</p>{searching && <p role="status">Searching players…</p>}<ul className="choice-list">{players.map(player => { const seated = state!.players.some(seated => seated.id === player.id), removed = (state!.removed_players ?? []).some(removed => removed.id === player.id); return <li key={player.id}><button disabled={busy || searching || seated || removed} onClick={() => { void add({ player_id: player.id }); }}>{player.display_name}{seated ? ' · Already in session' : removed ? ' · Removed from this game' : ''}</button></li>; })}</ul>{search.trim() && <>{exact && <><p className="warning">An exact name match already exists. Add the existing player unless this is a different person.</p><label className="check"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />This is a different person</label></>}<button className="primary wide" disabled={busy || searching || (exact && !confirmed)} onClick={() => { void add({ new_player_name: search.trim() }); }}>Add '{search.trim()}' as new</button></>}<ErrorText text={savedSearch.error || error} /></>;
 }
 export function CorrectionSheet({ entryId }: { entryId: string }) {
-  const { banker, state, open } = useClient();
+  const { banker, state, open, notify } = useClient();
   const entry = state!.entries.find(row => row.id === entryId)!;
   const player = state!.players.find(row => row.id === entry.player_id);
-  const [confirmingVoid, setConfirmingVoid] = useState(false);
-  const voidPanel = useRef<HTMLElement>(null);
-  useEffect(() => { if (confirmingVoid) voidPanel.current?.focus(); }, [confirmingVoid]);
-  const draft = useDraft(draftKey(banker!.id, state!.session.id, 'correction', entryId), { op_id: crypto.randomUUID(), amount: decimal(entry.amount_minor, state!.session.currency), method: entry.method ?? 'cash', time: '' });
+  const currency = state!.session.currency;
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const deletePanel = useRef<HTMLElement>(null);
+  useEffect(() => { if (confirmingDelete) deletePanel.current?.focus(); }, [confirmingDelete]);
+  const key = draftKey(banker!.id, state!.session.id, 'correction', entryId);
+  const draft = useDraft(key, { op_id: crypto.randomUUID(), amount: decimal(entry.amount_minor, currency), method: entry.method ?? 'cash', time: '' });
   const { amount, method, time } = draft.value;
   const setAmount = (amount: string) => draft.update({ ...draft.value, amount });
   const setMethod = (method: PaymentMethod) => draft.update({ ...draft.value, method });
@@ -253,27 +346,50 @@ export function CorrectionSheet({ entryId }: { entryId: string }) {
   const [busy, setBusy] = useState(false);
   useFormBusy(busy);
   const payment = entry.kind === 'payment_in' || entry.kind === 'payment_out';
-  async function save(replacement: boolean) {
+  const name = player?.display_name ?? 'Player';
+  const shown = money(entry.amount_minor, currency);
+  async function save() {
     if (busy) return;
-    let parsed: bigint | undefined;
-    if (replacement) {
-      try {
-        parsed = parseMoney(amount, state!.session.currency);
-        if (parsed === 0n && entry.kind !== 'cash_out') throw new Error('Enter an amount above zero');
-      } catch (problem) { setAmountError(problem instanceof Error ? problem.message : 'Enter an exact amount'); amountInput.current?.focus(); return; }
-    }
+    let parsed: bigint;
+    try {
+      parsed = parseMoney(amount, currency);
+      if (parsed === 0n && entry.kind !== 'cash_out') throw new Error('Enter an amount above zero');
+    } catch (problem) { setAmountError(problem instanceof Error ? problem.message : 'Enter an exact amount'); amountInput.current?.focus(); return; }
     setBusy(true); setError(''); setAmountError('');
     try {
-      const body: Record<string, unknown> = { op_id: draft.value.op_id };
-      if (replacement) {
-        body.replacement_amount_minor = String(parsed);
-        if (payment) body.replacement_method = method;
-        if (time) body.replacement_occurred_at = new Date(time).toISOString();
-      }
+      const body: Record<string, unknown> = { op_id: draft.value.op_id, replacement_amount_minor: String(parsed) };
+      if (payment) body.replacement_method = method;
+      if (time) body.replacement_occurred_at = new Date(time).toISOString();
       await draft.submit(`/api/sessions/${state!.session.id}/entries/${entryId}/void`, body, 'POST'); open(null);
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not correct entry'); setBusy(false); }
   }
+  async function remove() {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      await draft.queue({ banker_id: banker!.id, session_id: state!.session.id, path: `/api/sessions/${state!.session.id}/entries/${entryId}/void`, body: { op_id: draft.value.op_id }, label: `Delete ${entryNouns[entry.kind]} · ${name} · ${shown}`, draft_key: key });
+      notify('Not saved yet'); open(null);
+    } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not delete entry'); setBusy(false); }
+  }
   if (!draft.ready) return draft.error ? <ErrorText text={draft.error} /> : <p>Restoring draft…</p>;
   if (draft.submitted) return <DraftRecovery pending={busy} notice={draft.error} recover={() => draft.reconcile()} recovered={() => open(null)} />;
-  return <form className="sheet-form" noValidate onSubmit={event => { event.preventDefault(); if (!confirmingVoid) void save(true); }}><div className="form-body"><p className="correction-summary">{entryLabels[entry.kind]} · {player?.display_name ?? 'Player'} · <strong className="money-value">{money(entry.amount_minor, state!.session.currency)}</strong>{entry.method ? ` · ${methodLabel(entry.method)}` : ''}</p>{confirmingVoid ? <section className="confirmation-panel" role="alertdialog" aria-label="Void ledger entry" tabIndex={-1} ref={voidPanel}><h3>Void this entry?</h3><p>The original stays in the ledger, marked Voided. Its amount stops counting toward totals. No replacement is added.</p></section> : <><p>The original stays in the ledger, marked Voided, with a replacement alongside it.</p><label>Replacement amount<input ref={amountInput} inputMode="decimal" aria-invalid={!!amountError} aria-describedby={amountError ? 'replacement-amount-error' : undefined} value={amount} onChange={event => { setAmount(event.target.value); setAmountError(''); }} required /></label>{amountError && <p id="replacement-amount-error" className="error field-error" role="alert">{amountError}</p>}{payment && <PaymentMethods label="Replacement method" value={method} change={setMethod} />}<label>Entry time<input type="datetime-local" step="1" value={time} onChange={event => setTime(event.target.value)} /></label></>}</div><footer className="form-actions"><ErrorText text={draft.error || error} />{confirmingVoid ? <><button key="keep-entry" className="wide" type="button" disabled={busy} onClick={event => { event.preventDefault(); setConfirmingVoid(false); }}>Keep entry</button><button key="confirm-void" className="danger wide" type="button" disabled={busy} onClick={event => { event.preventDefault(); void save(false); }}>Confirm void</button></> : <><button key="save-correction" type="submit" className="primary wide" disabled={busy}>Save correction</button><button key="request-void" className="danger wide" type="button" disabled={busy} onClick={event => { event.preventDefault(); setConfirmingVoid(true); }}>Void entry</button></>}</footer></form>;
+  return <form className="sheet-form" noValidate onSubmit={event => { event.preventDefault(); if (!confirmingDelete) void save(); }}><div className="form-body"><p className="correction-summary">{entryLabels[entry.kind]} · {name} · <strong className="money-value">{shown}</strong>{entry.method ? ` · ${methodLabel(entry.method)}` : ''}</p>{confirmingDelete ? <section className="confirmation-panel" role="alertdialog" aria-label="Delete entry" tabIndex={-1} ref={deletePanel}><h3>Delete {name}'s <span className="money-value">{shown}</span> {entryNouns[entry.kind]}?</h3><p>Totals update right away.</p></section> : <><p className="hint">The original stays in the ledger, marked Voided, with a replacement alongside it.</p><label>Replacement amount<input ref={amountInput} inputMode="decimal" aria-invalid={!!amountError} aria-describedby={amountError ? 'replacement-amount-error' : undefined} value={amount} onChange={event => { setAmount(event.target.value); setAmountError(''); }} required /></label>{amountError && <p id="replacement-amount-error" className="error field-error" role="alert">{amountError}</p>}{payment && <PaymentMethods label="Replacement method" value={method} change={setMethod} />}<label>Entry time<input type="datetime-local" step="1" value={time} onChange={event => setTime(event.target.value)} /></label></>}</div><footer className="form-actions"><ErrorText text={draft.error || error} />{confirmingDelete ? <div className="confirm-actions"><button key="keep-entry" type="button" disabled={busy} onClick={event => { event.preventDefault(); setConfirmingDelete(false); }}>Keep entry</button><button key="confirm-delete" className="danger" type="button" disabled={busy} onClick={event => { event.preventDefault(); void remove(); }}>Confirm delete</button></div> : <><button key="save-correction" type="submit" className="primary wide" disabled={busy}>Save correction</button><button key="request-delete" className="danger wide" type="button" disabled={busy} onClick={event => { event.preventDefault(); setConfirmingDelete(true); }}>Delete entry</button></>}</footer></form>;
+}
+export function RestoreEntrySheet({ entryId }: { entryId: string }) {
+  const { state, mutate, open, notify, online } = useClient();
+  const entry = state!.entries.find(row => row.id === entryId);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useFormBusy(busy);
+  if (!entry) return <p>This entry is no longer available.</p>;
+  const name = state!.players.find(row => row.id === entry.player_id)?.display_name ?? 'Player';
+  const shown = money(entry.amount_minor, state!.session.currency);
+  const deletion = state!.entries.find(row => row.voids_entry_id === entry.id);
+  async function restore() {
+    if (busy) return;
+    setBusy(true); setError('');
+    try { await mutate(`/api/sessions/${state!.session.id}/entries/${entryId}/restore`, { op_id: crypto.randomUUID() }); notify(`Restored ${entryNouns[entry!.kind]} · ${name} · ${shown}`); open(null); }
+    catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not restore entry'); setBusy(false); }
+  }
+  return <><p className="correction-summary">{entryLabels[entry.kind]} · {name} · <strong className="money-value">{shown}</strong>{entry.method ? ` · ${methodLabel(entry.method)}` : ''}</p><p className="hint">Deleted{deletion ? ` at ${new Date(deletion.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}. It doesn’t count toward totals.</p><ErrorText text={error} /><button className="primary wide" disabled={busy || !online} onClick={() => { void restore(); }}>{busy ? 'Restoring…' : 'Restore entry'}</button>{!online && <p className="hint">Reconnect to restore.</p>}</>;
 }

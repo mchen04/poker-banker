@@ -6,7 +6,7 @@ import type { PlayerState, SessionSettings } from '../../domain/session';
 import { draftKey } from '../data';
 import { useDebouncedSearch } from '../search';
 import { currencyDecimal, duration, DraftRecovery, ErrorText, money, resultMoney, resultCurrencyDecimal, resultNumber, sessionLabel, Sheet, useClient, useDraft, useFormBusy } from './common';
-import { ChevronLeftIcon, ChevronRightIcon, FitText, RowsSkeleton } from './ui';
+import { ChevronLeftIcon, ChevronRightIcon, FitText, RowsSkeleton, TrashIcon } from './ui';
 
 type CurrencyResult = { currency: string; result_minor: string };
 type Outstanding = { currency: string; owed_to_banker_minor: string; owed_by_banker_minor: string };
@@ -14,27 +14,50 @@ type Roster = { id: string; display_name: string; cumulative: CurrencyResult[]; 
 type History = { player: { id: string; display_name: string }; cumulative: CurrencyResult[]; outstanding: Outstanding[]; sessions: { session: SessionSettings; player: PlayerState }[] };
 type Report = ReturnType<typeof playerReport>;
 export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: (id: string) => void; dialogChange: (open: boolean) => void }) {
-  const { notify, client } = useClient();
+  const { notify, client, offerUndo, online } = useClient();
   const api = client!.api;
+  const [refresh, setRefresh] = useState(0);
+  const [deleted, setDeleted] = useState<{ id: string; display_name: string }[]>([]);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  useFormBusy(restoring !== null);
+  useEffect(() => {
+    const changed = () => setRefresh(value => value + 1);
+    window.addEventListener('pb-roster', changed);
+    return () => window.removeEventListener('pb-roster', changed);
+  }, []);
+
+  async function restore(player: { id: string; display_name: string }) {
+    if (restoring) return;
+    setRestoring(player.id); setError('');
+    try { await api(`/api/players/${player.id}/restore`, 'POST', { op_id: crypto.randomUUID() }); setRefresh(value => value + 1); notify(`Restored ${player.display_name}`); }
+    catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not restore player'); }
+    finally { setRestoring(null); }
+  }
   const [players, setPlayers] = useState<Roster[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [search, setSearch] = useState('');
   const settledSearch = useDebouncedSearch(search);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedName, setSelectedName] = useState('');
   const [history, setHistory] = useState<History | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   const [group, setGroup] = useState<ReportGrouping>('overall');
   const [filters, setFilters] = useState<ReportFilters>({});
   const [error, setError] = useState('');
-  const [dialog, setDialog] = useState<'rename' | 'filter' | null>(null);
-  const [refresh, setRefresh] = useState(0);
-  function showDialog(next: 'rename' | 'filter' | null) { setDialog(next); dialogChange(next !== null); }
+  const [dialog, setDialog] = useState<'rename' | 'filter' | 'delete' | null>(null);
+  function showDialog(next: 'rename' | 'filter' | 'delete' | null) { setDialog(next); dialogChange(next !== null); }
   useEffect(() => () => dialogChange(false), [dialogChange]);
   useEffect(() => {
     let active = true;
     void api<{ players: Roster[] }>(`/api/players?q=${encodeURIComponent(settledSearch)}`).then(result => { if (active) { setPlayers(result.players); setLoaded(true); } }).catch(problem => setError(problem.message));
     return () => { active = false; };
   }, [settledSearch, refresh]);
+  useEffect(() => {
+    let active = true;
+    if (!online || !loaded) return;
+    void api<{ players: { id: string; display_name: string }[] }>('/api/players/deleted').then(result => { if (active) setDeleted(result.players); }).catch(() => {});
+    return () => { active = false; };
+  }, [refresh, online, loaded]);
   useEffect(() => {
     if (!selected) return;
     let active = true;
@@ -45,12 +68,28 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
   }, [selected, group, filters, refresh]);
   if (!selected) return <><header className="page-heading"><h1>Players</h1></header><input className="search-field" type="search" aria-label="Find a player" placeholder="Find a player" value={search} onChange={event => setSearch(event.target.value)} /><ErrorText text={error} />{!loaded && !error ? <RowsSkeleton /> : players.length > 0 && <ul className="roster-list">{players.map(player => {
     const debts = player.outstanding.filter(value => value.owed_to_banker_minor !== '0' || value.owed_by_banker_minor !== '0');
-    return <li key={player.id}><button className="roster-row" data-testid={`roster-player-${player.id}`} onClick={() => { setSelected(player.id); setHistory(null); setReport(null); }}><span className="roster-name"><strong title={player.display_name}>{player.display_name}</strong>{debts.map(value => <small className="outstanding-balances" key={value.currency}><OutstandingBalances value={value} /></small>)}</span><span className="roster-results">{player.cumulative.map(value => <FitText key={value.currency} className={`money-value tone-${BigInt(value.result_minor) > 0n ? 'up' : BigInt(value.result_minor) < 0n ? 'down' : 'even'}`} text={player.cumulative.length > 1 ? `${resultMoney(value.result_minor, value.currency)} ${value.currency}` : resultMoney(value.result_minor, value.currency)} />)}</span><ChevronRightIcon /></button></li>;
-  })}</ul>}{loaded && !players.length && <div className="empty-row"><span>{search ? 'No matching players' : 'Players you add at the table appear here'}</span></div>}</>;
-  return <><header className="report-heading"><button className="icon-button" aria-label="Back to players" title="Back to players" onClick={() => { setSelected(null); setError(''); }}><ChevronLeftIcon /></button><h1 title={history?.player.display_name}>{history?.player.display_name ?? ''}</h1>{history && <button className="secondary-small" aria-label="Rename player" onClick={() => showDialog('rename')}>Rename</button>}</header><ErrorText text={error} />{!history ? <RowsSkeleton rows={3} /> : <><section className="report-summary">{history.cumulative.length ? history.cumulative.map(value => <FitText as="strong" className={`summary-value money-value tone-${BigInt(value.result_minor) > 0n ? 'up' : BigInt(value.result_minor) < 0n ? 'down' : 'even'}`} key={value.currency} text={history.cumulative.length > 1 ? `${resultMoney(value.result_minor, value.currency)} ${value.currency}` : resultMoney(value.result_minor, value.currency)} />) : <p className="muted">No finalized results yet</p>}{history.outstanding.filter(value => value.owed_to_banker_minor !== '0' || value.owed_by_banker_minor !== '0').map(value => <p className="outstanding-balances" key={value.currency}><OutstandingBalances value={value} /></p>)}</section>
+    return <li key={player.id}><button className="roster-row" data-testid={`roster-player-${player.id}`} onClick={() => { setSelected(player.id); setSelectedName(player.display_name); setHistory(null); setReport(null); }}><span className="roster-name"><strong title={player.display_name}>{player.display_name}</strong>{debts.map(value => <small className="outstanding-balances" key={value.currency}><OutstandingBalances value={value} /></small>)}</span><span className="roster-results">{player.cumulative.map(value => <FitText key={value.currency} className={`money-value tone-${BigInt(value.result_minor) > 0n ? 'up' : BigInt(value.result_minor) < 0n ? 'down' : 'even'}`} text={player.cumulative.length > 1 ? `${resultMoney(value.result_minor, value.currency)} ${value.currency}` : resultMoney(value.result_minor, value.currency)} />)}</span><ChevronRightIcon /></button></li>;
+  })}</ul>}{loaded && !players.length && <div className="empty-row"><span>{search ? 'No matching players' : 'Players you add at the table appear here'}</span></div>}{deleted.length > 0 && <details className="recover-list" data-testid="recently-deleted-players"><summary>Recently deleted ({deleted.length})</summary><ul>{deleted.map(player => <li key={player.id}><span className="recover-name" title={player.display_name}>{player.display_name}</span><button type="button" aria-label={`Restore ${player.display_name}`} disabled={restoring !== null || !online} onClick={() => { void restore(player); }}>{restoring === player.id ? 'Restoring…' : 'Restore'}</button></li>)}</ul></details>}</>;
+  return <><header className="report-heading" data-testid="player-report" aria-busy={!history || !report}><button className="icon-button" aria-label="Back to players" title="Back to players" onClick={() => { setSelected(null); setError(''); }}><ChevronLeftIcon /></button><div className="report-title"><h1 title={history?.player.display_name ?? selectedName}>{history?.player.display_name ?? selectedName}</h1><div className="report-actions"><button className="secondary-small" aria-label="Rename player" disabled={!history} onClick={() => showDialog('rename')}>Rename</button><button className="icon-button quiet-icon" aria-label="Delete player" title="Delete player" disabled={!history} onClick={() => showDialog('delete')}><TrashIcon /></button></div></div></header><ErrorText text={error} />{!history ? <RowsSkeleton rows={3} /> : <><section className="report-summary">{history.cumulative.length ? history.cumulative.map(value => <FitText as="strong" className={`summary-value money-value tone-${BigInt(value.result_minor) > 0n ? 'up' : BigInt(value.result_minor) < 0n ? 'down' : 'even'}`} key={value.currency} text={history.cumulative.length > 1 ? `${resultMoney(value.result_minor, value.currency)} ${value.currency}` : resultMoney(value.result_minor, value.currency)} />) : <p className="muted">No finalized results yet</p>}{history.outstanding.filter(value => value.owed_to_banker_minor !== '0' || value.owed_by_banker_minor !== '0').map(value => <p className="outstanding-balances" key={value.currency}><OutstandingBalances value={value} /></p>)}</section>
     <section className="report"><h2>Cash game report</h2><div className="segmented report-groups" aria-label="Report grouping">{(['overall', 'location', 'game', 'weekday', 'month'] as const).map(value => <button key={value} aria-pressed={group === value} onClick={() => setGroup(value)}>{value.charAt(0).toUpperCase() + value.slice(1)}</button>)}</div><button className="text-button" onClick={() => showDialog('filter')}>Filter: {Object.entries(filters).filter(([, value]) => value).length ? Object.entries(filters).filter(([, value]) => value).map(([key, value]) => `${key} ${key === 'weekday' ? groupTitle('weekday', value!) : key === 'month' ? groupTitle('month', value!) : value}`).join(', ') : 'Off'}</button><p className="hint">Rates use results before tips and meals. Variation describes session rates, not a forecast.</p>{report?.groups.map(bucket => <section className="report-bucket" key={`${bucket.key}/${bucket.currency}`}><h3>{groupTitle(group, bucket.key)} · {bucket.currency}</h3><p className="hint">{bucket.sessions_count} finalized session{bucket.sessions_count === 1 ? '' : 's'}</p><MetricList metrics={bucket.metrics} currency={bucket.currency} /></section>)}{report && !report.groups.length && <p>No finalized sessions match these filters.</p>}</section>
     <section><h2>Past sessions</h2><ul className="choice-list">{history.sessions.map(item => <li key={item.session.id}><button onClick={() => chooseSession(item.session.id)}>{sessionLabel(item.session)}<small>{item.session.status === 'closed' ? 'Closed' : 'Open'} · {item.player.state === 'cashed_out' ? resultMoney(item.player.result_minor, item.session.currency) : item.player.state === 'playing' ? 'Playing' : 'Not bought in'}</small></button></li>)}</ul></section>
-  </>}{dialog === 'rename' && history && <Sheet title="Rename player" close={() => showDialog(null)}><RenameForm player={history.player} saved={() => { showDialog(null); setRefresh(value => value + 1); notify('Player renamed. History stays with the same player.'); }} /></Sheet>}{dialog === 'filter' && <Sheet title="Report filters" close={() => showDialog(null)}><FilterForm value={filters} apply={value => { setFilters(value); showDialog(null); }} /></Sheet>}</>;
+  </>}{dialog === 'rename' && history && <Sheet title="Rename player" close={() => showDialog(null)}><RenameForm player={history.player} saved={() => { showDialog(null); setRefresh(value => value + 1); notify('Player renamed. History stays with the same player.'); }} /></Sheet>}{dialog === 'delete' && history && <Sheet title="Delete player" close={() => showDialog(null)}><DeletePlayer history={history} cancel={() => showDialog(null)} deleted={() => { const player = history.player; showDialog(null); setSelected(null); setHistory(null); setReport(null); setRefresh(value => value + 1); offerUndo(`Deleted ${player.display_name}`, { path: `/api/players/${player.id}/restore`, done: `Restored ${player.display_name}`, sessionId: null }); }} /></Sheet>}{dialog === 'filter' && <Sheet title="Report filters" close={() => showDialog(null)}><FilterForm value={filters} apply={value => { setFilters(value); showDialog(null); }} /></Sheet>}</>;
+}
+function DeletePlayer({ history, deleted, cancel }: { history: History; deleted: () => void; cancel: () => void }) {
+  const { client, online } = useClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useFormBusy(busy);
+  const games = history.sessions.length;
+  const name = history.player.display_name;
+  async function remove() {
+    if (busy) return;
+    setBusy(true); setError('');
+    try { await client!.api(`/api/players/${history.player.id}/delete`, 'POST', { op_id: crypto.randomUUID() }); deleted(); }
+    catch (problem) { setError((problem as { code?: string }).code === 'player_seated' ? 'Remove them from their games first.' : problem instanceof Error ? problem.message : 'Could not delete player'); setBusy(false); }
+  }
+  if (games) return <section className="confirmation-panel" role="alert"><h3>Remove them from their games first</h3><p>{name} is still in {games} {games === 1 ? 'game' : 'games'}. Remove them there, or delete those sessions, then delete the player.</p></section>;
+  return <section className="confirmation-panel" role="alertdialog" aria-label="Delete player"><h3>Delete {name}?</h3><p>They leave the roster and player search.</p><ErrorText text={error} /><div className="confirm-actions"><button type="button" disabled={busy} onClick={cancel}>Keep player</button><button type="button" className="danger" disabled={busy || !online} onClick={() => { void remove(); }}>Confirm delete</button></div></section>;
 }
 function OutstandingBalances({ value }: { value: Outstanding }) {
   const owes = BigInt(value.owed_to_banker_minor) > 0n, owed = BigInt(value.owed_by_banker_minor) > 0n;
