@@ -5,7 +5,7 @@ import type { EntryKind, PaymentMethod, PlayerState, SessionState } from '../../
 import { MAX_MINOR, parseMoney } from '../../domain/money';
 import { moneyOptions } from '../money-options';
 import { retainedTimerStart } from '../undo-timing';
-import { draftKey, writeDraft } from '../data';
+import { draftKey } from '../data';
 import { decimal, duration, entryLabels, DraftRecovery, ErrorText, methodLabel, money, resultCurrencyDecimal, resultMoney, resultNumber, Sheet, useClient, useDraft, useFormBusy } from './common';
 
 type RosterPlayer = { id: string; display_name: string };
@@ -135,7 +135,7 @@ export function MoneySheet({ title, playerId, kind: initialKind, initialAmount }
   async function keep() {
     if (saving || submitting.current || !draft.ready) return;
     submitting.current = true; setSaving(true); setError('');
-    try { await draft.withSnapshot((value, cursor) => writeDraft(key, value, cursor)); open(null); }
+    try { await draft.keep(); open(null); }
     catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not keep the draft'); submitting.current = false; setSaving(false); }
   }
   async function discard() {

@@ -582,6 +582,10 @@ export function hasPendingLocalWrites(): boolean { return draftIntents.size > 0 
 export function draftSaveFailed(key?: string): boolean {
   return key ? draftIntents.get(key)?.error !== undefined : [...draftIntents.values()].some(intent => intent.error !== undefined);
 }
+export function hasRetainedDraft(key: string, value: unknown): boolean {
+  const intent = draftIntents.get(key);
+  return intent?.error !== undefined && JSON.stringify(intent.value) === JSON.stringify(value);
+}
 export function draftConflict(key: string, cursor: DraftCursor, value?: unknown): DraftConflictError | undefined {
   const notice = draftConflicts.get(cursor);
   return notice?.key === key && (value === undefined || JSON.stringify(notice.value) === JSON.stringify(value)) ? notice.error : undefined;

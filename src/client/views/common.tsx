@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Banker, BankerClient, OutboxItem } from '../data';
-import { deleteDraft, dismissDraftConflict, DraftConflictError, draftConflict, draftConflictNotice, draftConflictNotices, draftSaveFailed, enqueue, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftCursor, type DraftRequest, type RecoveredDraft, listRecoveredDrafts, resolveRecoveredDraft, editRecoveredDraft } from '../data';
+import { deleteDraft, dismissDraftConflict, DraftConflictError, draftConflict, draftConflictNotice, draftConflictNotices, draftSaveFailed, hasRetainedDraft, enqueue, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftCursor, type DraftRequest, type RecoveredDraft, listRecoveredDrafts, resolveRecoveredDraft, editRecoveredDraft } from '../data';
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
@@ -311,7 +311,17 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
       throw problem;
     } finally { if (inFlight.current === flight) inFlight.current = undefined; }
   }
-  return { value, update, ready, clear, error, submit, reconcile, queue, withSnapshot, reviewRequired, acknowledgeReview, submitted: !!value.__submitted };
+  async function keep() {
+    const previous = latestValue.current;
+    const isCurrent = capture();
+    const canRetain = () => isCurrent() && ready && cursor.current.version !== undefined && !retainedEdit.current && !inFlight.current && !reviewBlocked.current && latestValue.current === previous;
+    if (canRetain() && hasRetainedDraft(key, previous)) return;
+    try { await withSnapshot((value, observation) => writeDraft(key, value, observation)); }
+    catch (problem) {
+      if (problem instanceof DraftConflictError || !canRetain() || !hasRetainedDraft(key, previous)) throw problem;
+    }
+  }
+  return { value, update, ready, clear, keep, error, submit, reconcile, queue, withSnapshot, reviewRequired, acknowledgeReview, submitted: !!value.__submitted };
 }
 export function DraftRecovery<T>({ recover, recovered, pending = false, notice = '' }: { recover: () => Promise<T>; recovered: (value: T) => void; pending?: boolean; notice?: string }) {
   const [busy, setBusy] = useState(false);

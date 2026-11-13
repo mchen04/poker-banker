@@ -436,8 +436,15 @@ it.each([false, true])('reviews an absent draft before retry without approving a
   const storage = sharedStorage();
   const a = await freshTab();
   await a.writeDraft(key, original);
+  expect(a.hasRetainedDraft(key, original)).toBe(false);
   storage.quota(true);
   await expect(a.writeDraft(key, edited)).rejects.toMatchObject({ name: 'QuotaExceededError' });
+  expect(a.hasRetainedDraft(key, { ...edited })).toBe(true);
+  expect(a.hasRetainedDraft(`${key}-other`, edited)).toBe(false);
+  expect(a.hasRetainedDraft(key, newer)).toBe(false);
+  expect(a.hasRetainedDraft(key, { ...edited, op_id: 'different-operation' })).toBe(false);
+  expect(storage.draft(key)).toEqual(original);
+  expect(a.hasPendingLocalWrites()).toBe(true);
   storage.quota(false);
   const b = await freshTab();
   await b.readDraft(key);
@@ -446,6 +453,8 @@ it.each([false, true])('reviews an absent draft before retry without approving a
   const recovered = await a.readDraft<typeof edited>(key, cursor);
   expect(recovered?.amount).toBe('50');
   expect(recovered?.op_id).not.toBe(original.op_id);
+  expect(storage.draft(key)).toEqual(recovered);
+  expect(a.hasRetainedDraft(key, recovered)).toBe(false);
   if (inserted) {
     await expect(b.writeDraft(key, newer)).rejects.toBeInstanceOf(b.DraftConflictError);
     expect(storage.draft(key)).toEqual(recovered);
