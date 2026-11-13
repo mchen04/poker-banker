@@ -288,3 +288,31 @@ describe('ledger integrity for restores', () => {
     await expect(insert(randomUUID(), original.id)).rejects.toMatchObject({ code: '23505' });
   });
 });
+
+it('never leaves a player seated in a live session and deleted at the same time', async () => {
+  const owner = await account();
+  const state = await createSession(owner);
+  const sessionId = state.session.id;
+  const created = await ok<{ player: { id: string } }>(await request(owner, '/players', 'POST', { op_id: randomUUID(), display_name: 'Race' }));
+  const playerId = created.player.id;
+  const reset = async () => {
+    await request(owner, `/sessions/${sessionId}/players/${playerId}/remove`, 'POST', { op_id: randomUUID() });
+    await request(owner, `/players/${playerId}/delete`, 'POST', { op_id: randomUUID() });
+    await request(owner, `/players/${playerId}/restore`, 'POST', { op_id: randomUUID() });
+  };
+  for (let round = 0; round < 20; round++) {
+    await reset();
+    const [deleted, seated] = await Promise.all([
+      request(owner, `/players/${playerId}/delete`, 'POST', { op_id: randomUUID() }),
+      request(owner, `/sessions/${sessionId}/players`, 'POST', { op_id: randomUUID(), player_id: playerId }),
+    ]);
+    expect([200, 404, 409]).toContain(deleted.status);
+    expect([200, 404, 409]).toContain(seated.status);
+    expect(deleted.status === 200 || seated.status === 200).toBe(true);
+    const row = await database.pool.query<{ deleted_at: string | null; seated: boolean }>(
+      `SELECT p.deleted_at::text, EXISTS (SELECT 1 FROM session_players sp JOIN game_sessions s ON s.id = sp.session_id AND s.banker_id = sp.banker_id
+        WHERE sp.player_id = p.id AND sp.banker_id = p.banker_id AND sp.removed_at IS NULL AND s.deleted_at IS NULL) AS seated
+       FROM players p WHERE p.id = $1 AND p.banker_id = $2`, [playerId, owner.id]);
+    expect(row.rows[0]!.seated && row.rows[0]!.deleted_at !== null).toBe(false);
+  }
+});

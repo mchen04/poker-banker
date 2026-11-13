@@ -24,6 +24,12 @@ export async function sessionRow(db: Queryable, banker: string, session: string,
   return result.rows[0] ?? notFound();
 }
 
+export async function lockPlayers(db: Queryable, banker: string, players: string[]) {
+  for (const player of [...new Set(players)].sort()) {
+    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`player:${banker}/${player}`]);
+  }
+}
+
 export async function loadSession(db: Queryable, banker: string, session: string, includeDeleted = false) {
   const row = await sessionRow(db, banker, session, false, includeDeleted);
   const players = await db.query<{ id: string; display_name: string }>(

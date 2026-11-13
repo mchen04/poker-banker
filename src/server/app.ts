@@ -9,7 +9,7 @@ import type { AppContext, AppEnv } from './context.js';
 import { authRoutes, authenticate } from './auth.js';
 import { ApiError, conflict, notFound } from './errors.js';
 import * as v from './validation.js';
-import { assertOpen, bump, command, effectivePlayerEntries, event, insertEntry, loadSession, playerHistory, playerRecord, playerRoster, playerSessions, readSnapshot, removalEntries, serverTime, sessionRow } from './store.js';
+import { assertOpen, bump, command, effectivePlayerEntries, event, insertEntry, loadSession, lockPlayers, playerHistory, playerRecord, playerRoster, playerSessions, readSnapshot, removalEntries, serverTime, sessionRow } from './store.js';
 import { playerReport } from '../domain/report.js';
 import { viewerState, type SessionSettings } from '../domain/session.js';
 
@@ -118,8 +118,11 @@ export function createApp(pool: Database, config: Config = {}) {
   }));
   app.post('/api/sessions/:id/restore', c => mutate(c, pool, v.commandOnly, async (db, banker) => {
     const id = v.id.parse(c.req.param('id'));
+    const seated = () => db.query<{ player_id: string }>('SELECT player_id FROM session_players WHERE session_id = $1 AND banker_id = $2 AND removed_at IS NULL', [id, banker]);
+    await lockPlayers(db, banker, (await seated()).rows.map(row => row.player_id));
     const row = await sessionRow(db, banker, id, true, true);
     if (row.deleted_at == null) conflict('session_active', 'This session is not deleted');
+    await lockPlayers(db, banker, (await seated()).rows.map(row => row.player_id));
     await db.query('UPDATE game_sessions SET deleted_at = NULL, share_token = NULL WHERE id = $1 AND banker_id = $2', [id, banker]);
     await db.query(`UPDATE players SET deleted_at = NULL WHERE banker_id = $1 AND deleted_at IS NOT NULL
       AND id IN (SELECT player_id FROM session_players WHERE session_id = $2 AND banker_id = $1 AND removed_at IS NULL)`, [banker, id]);
@@ -178,7 +181,7 @@ export function createApp(pool: Database, config: Config = {}) {
   }));
   app.post('/api/sessions/:id/players', c => mutate(c, pool, v.seatPlayer, async (db, banker, input) => {
     const id = v.id.parse(c.req.param('id'));
-    if ('player_id' in input) await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`player:${banker}/${input.player_id}`]);
+    if ('player_id' in input) await lockPlayers(db, banker, [input.player_id]);
     assertOpen(await sessionRow(db, banker, id, true));
     let player: string;
     if ('player_id' in input) {
@@ -215,6 +218,7 @@ export function createApp(pool: Database, config: Config = {}) {
   app.post('/api/sessions/:id/players/:player_id/restore', c => mutate(c, pool, v.commandOnly, async (db, banker) => {
     const id = v.id.parse(c.req.param('id'));
     const playerId = v.id.parse(c.req.param('player_id'));
+    await lockPlayers(db, banker, [playerId]);
     assertOpen(await sessionRow(db, banker, id, true));
     const seated = await db.query<{ removed_at: string | null }>('SELECT removed_at::text FROM session_players WHERE session_id = $1 AND player_id = $2 AND banker_id = $3', [id, playerId, banker]);
     if (!seated.rowCount) notFound();
@@ -412,6 +416,7 @@ export function createApp(pool: Database, config: Config = {}) {
   }));
   app.post('/api/players/:id/delete', c => mutate(c, pool, v.commandOnly, async (db, banker) => {
     const id = v.id.parse(c.req.param('id'));
+    await lockPlayers(db, banker, [id]);
     const player = await playerRecord(db, banker, id, true);
     if (player.deleted_at != null) conflict('already_deleted', 'This player is already deleted');
     const seated = await db.query(`SELECT 1 FROM session_players sp JOIN game_sessions s ON s.id = sp.session_id AND s.banker_id = sp.banker_id
@@ -422,6 +427,7 @@ export function createApp(pool: Database, config: Config = {}) {
   }));
   app.post('/api/players/:id/restore', c => mutate(c, pool, v.commandOnly, async (db, banker) => {
     const id = v.id.parse(c.req.param('id'));
+    await lockPlayers(db, banker, [id]);
     const player = await playerRecord(db, banker, id, true);
     if (player.deleted_at == null) conflict('player_active', 'This player is already active');
     await db.query('UPDATE players SET deleted_at = NULL WHERE id = $1 AND banker_id = $2', [id, banker]);
