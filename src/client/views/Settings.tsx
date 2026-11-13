@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { parseMoney } from '../../domain/money';
-import { draftKey, listOutbox } from '../data';
+import { draftKey, listOutbox, listSnapshots } from '../data';
 import type { SessionState } from '../../domain/session';
 import { decimal, DraftRecovery, ErrorText, money, sessionLabel, useClient, useDraft, useFormBusy } from './common';
 
@@ -45,34 +45,50 @@ export function SessionForm({ creating, created }: { creating: boolean; created:
   return <form className="sheet-form" onSubmit={submit}><div className="form-body"><label>Session name<input value={draft.value.name} onChange={event => draft.update({ ...draft.value, name: event.target.value })} required maxLength={100} /></label><label>Session date<input type="date" value={draft.value.played_on} onChange={event => draft.update({ ...draft.value, played_on: event.target.value })} required /></label><label>Currency<select aria-label="Currency" value={draft.value.currency} disabled={!creating} onChange={event => draft.update({ ...draft.value, currency: event.target.value })}>{['USD', 'JPY', 'CAD', 'EUR', 'GBP', 'SGD', 'HKD', 'AUD'].map(currency => <option key={currency}>{currency}</option>)}</select>{!creating && <small>Currency is fixed after creation.</small>}</label><label>Location<input list="past-locations" value={draft.value.location} onChange={event => draft.update({ ...draft.value, location: event.target.value })} /></label><datalist id="past-locations">{suggestions.locations.map(location => <option key={location}>{location}</option>)}</datalist><label>Game<input list="past-games" value={draft.value.game} onChange={event => draft.update({ ...draft.value, game: event.target.value })} /></label><datalist id="past-games">{suggestions.games.map(game => <option key={game}>{game}</option>)}</datalist><label>Big blind<input ref={blindInput} aria-invalid={!!blindError} aria-describedby={blindError ? "big-blind-error" : undefined} inputMode="decimal" placeholder="Optional" value={draft.value.blind} onChange={event => { setBlindError(''); draft.update({ ...draft.value, blind: event.target.value }); }} /></label><ErrorText id="big-blind-error" text={blindError} /></div><footer className="form-actions"><ErrorText text={draft.error || error} /><button className="primary wide" disabled={busy || !draft.ready || (!creating && state!.session.status === 'closed')}>{creating ? 'Create session' : 'Save settings'}</button></footer></form>;
 }
 export function HistorySheet({ choose }: { choose: (id: string) => void }) {
-  const { client, open, state } = useClient();
+  const { banker, client, open, state, online } = useClient();
   const api = client!.api;
   const [search, setSearch] = useState('');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [openSessions, setOpenSessions] = useState<SessionSummary[]>([]);
+  const [cache, setCache] = useState<{ bankerId: string; sessions: SessionSummary[] } | null>(null);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [openLoaded, setOpenLoaded] = useState(false);
   const [error, setError] = useState('');
   const [before, setBefore] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    void api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}`).then(result => { if (active) { setSessions(result.sessions); setBefore(result.next); } }).catch(error => setError(error.message));
+    void listSnapshots(banker!.id).then(saved => {
+      if (active && client!.isCurrent()) setCache({ bankerId: banker!.id, sessions: saved.map(value => ({ ...value.session, revision: value.revision })).sort((left, right) => right.played_on.localeCompare(left.played_on) || right.id.localeCompare(left.id)) });
+    }).catch(problem => { if (active && client!.isCurrent()) setError(problem.message); });
     return () => { active = false; };
-  }, [search]);
+  }, [banker!.id, client, online]);
   useEffect(() => {
     let active = true;
+    setHistoryLoaded(false); setBefore(null); setError('');
+    if (!online) return;
+    void api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}`).then(result => { if (active && client!.isCurrent()) { setSessions(result.sessions); setBefore(result.next); setHistoryLoaded(true); } }).catch(error => { if (active && client!.isCurrent()) setError(error.message); });
+    return () => { active = false; };
+  }, [search, online, client]);
+  useEffect(() => {
+    let active = true;
+    setOpenLoaded(false);
+    if (!online) return;
     async function loadOpen() {
       let cursor: string | null = null;
       const all: SessionSummary[] = [];
       do {
         const result: { sessions: SessionSummary[]; next: string | null } = await api(`/api/sessions?status=open${cursor ? `&before=${encodeURIComponent(cursor)}` : ''}`);
-        if (!active) return;
+        if (!active || !client!.isCurrent()) return;
         all.push(...result.sessions); setOpenSessions([...all]); cursor = result.next;
       } while (cursor);
+      setOpenLoaded(true);
     }
-    void loadOpen().catch(problem => { if (active) setError(problem.message); });
+    void loadOpen().catch(problem => { if (active && client!.isCurrent()) setError(problem.message); });
     return () => { active = false; };
-  }, []);
+  }, [online, client]);
   const known = new Map<string, SessionSummary>();
-  for (const session of [...sessions, ...openSessions, ...(state ? [{ ...state.session, revision: state.revision }] : [])]) {
+  const cached = (cache?.bankerId === banker!.id ? cache.sessions : []).filter(session => !online || (session.status === 'open' ? !openLoaded : !historyLoaded));
+  for (const session of [...cached, ...(online ? [...sessions, ...openSessions] : []), ...(state ? [{ ...state.session, revision: state.revision }] : [])]) {
     const prior = known.get(session.id);
     if (!prior || BigInt(session.revision) >= BigInt(prior.revision)) known.set(session.id, session);
   }
@@ -81,11 +97,11 @@ export function HistorySheet({ choose }: { choose: (id: string) => void }) {
   const pinned = choices.filter(session => session.id === current?.id || session.status === 'open').sort((left, right) => Number(right.id === current?.id) - Number(left.id === current?.id));
   const historical = choices.filter(session => !pinned.some(item => item.id === session.id));
   const months = [...new Set(historical.map(session => session.played_on.slice(0, 7)))];
-  async function more() { const result = await api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}&before=${encodeURIComponent(before!)}`); setSessions(current => [...current, ...result.sessions]); setBefore(result.next); }
+  async function more() { const result = await api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}&before=${encodeURIComponent(before!)}`); if (client!.isCurrent()) { setSessions(current => [...current, ...result.sessions]); setBefore(result.next); } }
   function choice(session: SessionSummary) {
     return <li key={session.id}><button data-testid={`session-tab-${session.id}`} aria-current={state?.session.id === session.id ? 'true' : undefined} onClick={() => choose(session.id)}><span>{sessionLabel(session)}</span><small>{state?.session.id === session.id ? 'Current · ' : ''}{session.status === 'closed' ? 'Closed' : 'Open'} · {session.currency}</small></button></li>;
   }
-  return <><button className="primary wide" onClick={() => open({ kind: 'new' })}>New session</button><label>Search sessions<input data-autofocus="false" value={search} onChange={event => setSearch(event.target.value)} /></label>{pinned.length > 0 && <section aria-label="Current and open sessions"><h3>Current and open sessions</h3><ul className="choice-list">{pinned.map(choice)}</ul></section>}{months.map(month => <section key={month}><h3>{new Date(`${month}-01T12:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h3><ul className="choice-list">{historical.filter(session => session.played_on.startsWith(month)).map(choice)}</ul></section>)}{!choices.length && <p>No matching sessions.</p>}{before && <button className="wide" onClick={() => { void more().catch(error => setError(error.message)); }}>Load more sessions</button>}<ErrorText text={error} /></>;
+  return <><button className="primary wide" onClick={() => open({ kind: 'new' })}>New session</button>{!online && <p className="hint" role="status">Offline · saved sessions on this device</p>}<label>Search sessions<input data-autofocus="false" value={search} onChange={event => setSearch(event.target.value)} /></label>{pinned.length > 0 && <section aria-label="Current and open sessions"><h3>Current and open sessions</h3><ul className="choice-list">{pinned.map(choice)}</ul></section>}{months.map(month => <section key={month}><h3>{new Date(`${month}-01T12:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h3><ul className="choice-list">{historical.filter(session => session.played_on.startsWith(month)).map(choice)}</ul></section>)}{!choices.length && <p>No matching sessions.</p>}{online && before && <button className="wide" onClick={() => { void more().catch(error => setError(error.message)); }}>Load more sessions</button>}<ErrorText text={error} /></>;
 
 }
 export function MenuSheet() {

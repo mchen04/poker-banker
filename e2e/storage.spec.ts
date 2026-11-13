@@ -118,6 +118,28 @@ test('the offline picker opens owned cached sessions with their separate drafts 
   } finally { await context.setOffline(false); }
 });
 
+test('the online picker keeps old open sessions pinned and paginates closed history', async ({ page }) => {
+  await createAccount(page);
+  const currentSession = await newSession(page, 'Current cached session');
+  const oldOpen = await call<SessionState>(page, '/sessions', 'POST', { op_id: randomUUID(), name: 'Old open outside the history page', played_on: '2024-01-01', currency: 'USD' });
+  for (let index = 0; index < 31; index++) {
+    const state = await call<SessionState>(page, '/sessions', 'POST', { op_id: randomUUID(), name: `Closed fixture ${index}`, played_on: '2026-11-11', currency: 'USD' });
+    await call(page, `/sessions/${state.session.id}/close`, 'POST', { op_id: randomUUID(), expected_revision: state.revision });
+  }
+  await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: 'Sessions', exact: true });
+  const pinned = picker.getByRole('region', { name: 'Current and open sessions', exact: true });
+  await expect(pinned.getByTestId(`session-tab-${oldOpen.session.id}`)).toBeVisible();
+  await expect(pinned.getByTestId(`session-tab-${currentSession.session.id}`)).toHaveAttribute('aria-current', 'true');
+  await expect(picker.locator('[data-testid^="session-tab-"]')).toHaveCount(32);
+  await picker.getByRole('button', { name: 'Load more sessions', exact: true }).click();
+  await expect(picker.locator('[data-testid^="session-tab-"]')).toHaveCount(33);
+  await expect(picker.getByRole('button', { name: 'Load more sessions', exact: true })).toHaveCount(0);
+  await typeInput(picker.getByLabel('Search sessions', { exact: true }), 'Closed fixture 30');
+  await expect(picker.locator('[data-testid^="session-tab-"]')).toHaveCount(1);
+  await expect(picker.getByRole('button', { name: /Closed fixture 30/ })).toBeVisible();
+});
+
 test('rejected writes stay visible, block the session in order, and support retry or discard', async ({ page }, testInfo) => {
   await createAccount(page);
   await newSession(page, 'Rejected queue');
