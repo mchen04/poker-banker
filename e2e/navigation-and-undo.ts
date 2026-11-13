@@ -43,11 +43,10 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
     await page.goto('/'); await workspaceReady(page);
     const name = `Footer and Undo ${runId.slice(-8)}-${randomUUID().slice(0, 4)}`;
     const session = await newSession(page, name);
-    await expect(primary).toHaveText('Buy-in');
-    await primary.click(); await expect(page.getByRole('dialog', { name: 'Choose player' })).toBeVisible();
-    await expect(page.getByRole('dialog').getByRole('button', { name: 'Add player', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
+    await expect(primary).toHaveText('Add player');
+    await expect(page.locator('.empty-row button')).toHaveCount(0);
     const owing = await addPlayer(page, 'Alexandra Montgomery with a recognisable full name');
+    await expect(primary).toHaveText('Buy-in');
     const paid = await addPlayer(page, 'Riley Chen');
     await money(page, owing.id, '50', { paid: false });
     const first = await current(page);

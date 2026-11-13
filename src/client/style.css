@@ -61,7 +61,7 @@ ul { padding-left: 20px; }
 .session-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: 8px; margin-bottom: 12px; }
 .session-heading-text { min-width: 0; }
 .session-heading h1 { margin: 0; min-width: 0; font-size: 1.5rem; line-height: 2rem; }
-.session-title { display: inline-block; max-width: 100%; min-height: 44px; padding: 6px 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text); font: inherit; letter-spacing: inherit; text-align: left; overflow-wrap: normal; }
+.session-title { display: inline-flex; align-items: center; max-width: 100%; min-height: 44px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text); font: inherit; letter-spacing: inherit; text-align: left; overflow-wrap: normal; }
 .session-title-text, span.session-title { min-width: 0; overflow-wrap: break-word; }
 span.session-title { display: block; padding-block: 6px; }
 .session-title .icon { display: inline-block; width: 20px; height: 20px; margin-left: 4px; vertical-align: -3px; color: var(--muted); }
@@ -347,11 +347,13 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
 @media (max-width: 699px) {
   .app-bar { display: none; }
 }
-.with-actions .player-card.actions-below .player-row { padding-right: 16px; }
-.player-card.actions-below .player-actions { grid-area: 2 / 1; width: auto; padding: 0 10px 12px 16px; }
-.player-card.actions-below .player-actions:empty { display: none; }
-.player-card.actions-below .player-actions button { width: 76px; }
-.player-card.actions-below .player-actions button + button { width: 56px; }
+@media (min-width: 375px) {
+  .with-actions .player-card.actions-below .player-row { grid-template-rows: auto minmax(44px, auto); row-gap: 2px; padding-right: 16px; }
+  .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; }
+  .player-card.actions-below .player-state { grid-area: 2 / 1; }
+  .player-card.actions-below .player-detail { grid-area: 2 / 2; margin-right: var(--actions-w); }
+  .player-card.actions-below .player-actions { align-self: end; padding-bottom: 8px; }
+}
 @media (max-width: 374px) {
   .with-actions .player-row { padding-right: 16px; }
   .player-actions { grid-area: 2 / 1; width: auto; padding: 0 16px 12px; }

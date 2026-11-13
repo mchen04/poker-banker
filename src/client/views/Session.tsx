@@ -65,25 +65,24 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
   const collect = state.totals.owed_to_banker_minor, pay = state.totals.owed_by_banker_minor;
   const stacked = money(collect, currency).length + money(pay, currency).length > 24;
   const playersRef = useRef<HTMLElement>(null);
-  const [actionsBelow, setActionsBelow] = useState(false);
+  const [actionsBelow, setActionsBelow] = useState('');
   useLayoutEffect(() => {
     const section = playersRef.current;
-    if (!section || !actions) { setActionsBelow(false); return; }
+    if (!section || !actions) { setActionsBelow(''); return; }
     const measure = () => {
       const cards = [...section.querySelectorAll<HTMLElement>('.player-card')];
       const was = cards.map(card => card.classList.contains('actions-below'));
       for (const card of cards) card.classList.remove('actions-below');
       section.classList.add('measuring');
-      const crowded = cards.some(card => {
+      const crowded = cards.filter(card => {
         const name = card.querySelector<HTMLElement>('.player-name strong');
         if (!name || !card.querySelector('.player-actions button')) return false;
         const line = Number.parseFloat(getComputedStyle(name).lineHeight);
-        const status = card.querySelector<HTMLElement>('.player-state');
-        return name.scrollWidth > name.clientWidth + 1 || name.getBoundingClientRect().height > line * 2 + 1 || (!!status && status.scrollWidth > status.clientWidth + 1);
-      });
+        return name.scrollWidth > name.clientWidth + 1 || name.getBoundingClientRect().height > line * 2 + 1;
+      }).map(card => card.dataset.player ?? '');
       section.classList.remove('measuring');
       cards.forEach((card, index) => card.classList.toggle('actions-below', was[index]!));
-      setActionsBelow(crowded);
+      setActionsBelow(crowded.join(' '));
     };
     measure();
     let last = -1;
@@ -96,7 +95,7 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
     <div className="session-overview">
       <header className="session-heading">
         <div className="session-heading-text">
-          <h1 aria-label={settings.name} title={settings.name}>{viewer ? <span className="session-title">{settings.name}</span> : <button className="session-title" data-testid={`session-tab-${settings.id}`} aria-label="Switch session" aria-haspopup="dialog" onClick={() => open({ kind: 'history' })}><span className="session-title-text">{settings.name}</span><ChevronDownIcon /></button>}</h1>
+          <h1 aria-label={settings.name} title={settings.name}>{viewer ? <span className="session-title">{settings.name}</span> : <button className="session-title" data-testid={`session-tab-${settings.id}`} aria-label="Switch session" aria-haspopup="dialog" onClick={() => open({ kind: 'history' })}><span className="session-title-text">{settings.name}<ChevronDownIcon /></span></button>}</h1>
         </div>
         {!viewer && <div className="session-heading-actions"><button className={`icon-button${settings.status === 'closed' ? ' closed-session-new' : ''}`} aria-label="New session" title="New session" onClick={() => open({ kind: 'new' })}><PlusIcon /></button><button className="icon-button" aria-label="Session menu" title="Session menu" onClick={() => open({ kind: 'menu' })}><MoreIcon /></button></div>}
         <p className="session-meta"><span className="meta-item meta-info" title={info}>{info}</span><span className="meta-item status-line">{status}</span><Timer state={state} unknownStart={unknownStart} />{!viewer && (unknownStart ? <button className="text-button meta-action" onClick={() => open({ kind: 'timing' })}>Correct times</button> : settings.started_at === null && settings.status === 'open' && <StartTimer />)}</p>
@@ -122,7 +121,7 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
           </span>
         </>;
         const controls = actions && <div className="player-actions">{player.state === 'seated' ? <button data-testid={`buy-in-${player.id}`} aria-label={`Buy-in for ${player.display_name}`} onClick={() => open({ kind: 'money', player: player.id })}>Buy-in</button> : player.state === 'playing' ? <><button data-testid={`cash-out-${player.id}`} aria-label={`Cash out ${player.display_name}`} onClick={() => open({ kind: 'cash_out', player: player.id })}>Cash out</button>{lastBuy && <button data-testid={`repeat-buy-in-${player.id}`} aria-label={`Repeat last buy-in for ${player.display_name}`} title={`Rebuy ${money(lastBuy, currency)}`} onClick={() => open({ kind: 'money', player: player.id, amount: lastBuy })}>Rebuy</button>}</> : balance !== 0n ? <button data-testid={`settle-${player.id}`} aria-label={`Settle ${player.display_name}`} onClick={() => open({ kind: balance < 0n ? 'payment_out' : 'payment_in', player: player.id, amount: String(balance < 0n ? -balance : balance) })}>Settle</button> : null}</div>;
-        return viewer ? <div className="player-card" key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className={`player-card${actionsBelow ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
+        return viewer ? <div className="player-card" key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className={`player-card${actionsBelow.split(' ').includes(player.id) ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
       })}</section>
       {!viewer && <RemovedPlayers state={state} />}
     </div>
