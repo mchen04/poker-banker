@@ -62,7 +62,7 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   await step('workspace-correction-action');
   await page.getByRole('button', { name: 'Save correction', exact: true }).click();
   await expect(page.getByTestId(`entry-${original.id}`)).toContainText('Voided');
-  await expect(page.getByTestId(`entry-${original.id}`).locator('.voided')).toHaveCSS('text-decoration-line', 'line-through');
+  for (const part of ['.entry-title.voided', '.entry-amount.voided']) await expect(page.getByTestId(`entry-${original.id}`).locator(part)).toHaveCSS('text-decoration-line', 'line-through');
   await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$6.00');
   await step('workspace-correction-result');
   state = await record('2', 'tips-and-meals', 'Tips and meals');

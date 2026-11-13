@@ -43,7 +43,7 @@ test('deleting an entry offers Undo, a later Restore and an offline delete that 
   await expect(toast(page)).toContainText('Deleted buy-in · Sam · $50.00');
   await expect(toast(page).getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
   await expect(activityRow(page, samBuy.id)).toContainText('Deleted');
-  await expect(activityRow(page, samBuy.id).locator('.voided').first()).toHaveCSS('text-decoration-line', 'line-through');
+  for (const part of ['.entry-title.voided', '.entry-amount.voided']) await expect(activityRow(page, samBuy.id).locator(part)).toHaveCSS('text-decoration-line', 'line-through');
   state = await current(page);
   expect(state.totals.total_in_minor).toBe('10000');
   expect(bought(state, sam.id)).toBe('0');
