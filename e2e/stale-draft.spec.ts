@@ -90,6 +90,7 @@ test('a failed edit recovered after another page saves reviews a fresh operation
     await other.getByRole('button', { name: 'Save entry', exact: true }).click();
     await expect(other.getByTestId('saved-confirmation')).toContainText('10.00');
     expect((await current(other)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor)).toEqual(['1000']);
+    await other.close();
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.getByRole('button', { name: 'Keep draft and close', exact: true }).click();
     await page.evaluate(() => window.dispatchEvent(new Event('recovered-operation-storage')));
