@@ -529,7 +529,7 @@ export function writeDraft(key: string, value: unknown, observation?: DraftCurso
   draftIntents.set(key, intent);
   return saveDraftIntent(key, intent);
 }
-function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
+function saveDraftIntent(key: string, intent: DraftIntent, restoreAbsent = false): Promise<void> {
   const banker = key.split('/')[0]!;
   activeClears.get(banker)?.abort();
   queuedDraftIntents.add(intent);
@@ -542,6 +542,14 @@ function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
       completion = done;
       const store = transaction.objectStore('drafts');
       const existing = await req(store.get(key)) as DraftRecord | undefined;
+      if (restoreAbsent && !existing && intent.error !== undefined && draftIntents.get(key) === intent) {
+        const previous = intent.expectedVersion;
+        const fresh = editableOperation(intent.value, true);
+        if (fresh) { intent.value = fresh; intent.revision = ++draftRevision; }
+        advanceDraftCursor(intent.cursor, previous, null, intent.revision);
+        intent.expectedVersion = null;
+        if (fresh) operationNotice(key, fresh, null, intent.cursor);
+      }
       if (intent.expectedVersion === undefined || (intent.expectedVersion === unknownDraftVersion && !existing)) {
         const observed = draftVersion(existing);
         advanceDraftCursor(intent.cursor, intent.expectedVersion, observed, intent.revision);
@@ -900,7 +908,7 @@ export async function replaySubmittedDraft<T>(key: string, isCurrent = () => tru
 }
 async function flushOnlyDrafts(): Promise<void> {
   while (draftWrites.size) await Promise.allSettled([...draftWrites.values()]);
-  await Promise.allSettled([...draftIntents].map(([key, intent]) => saveDraftIntent(key, intent)));
+  await Promise.allSettled([...draftIntents].map(([key, intent]) => saveDraftIntent(key, intent, true)));
   if (draftIntents.size) throw new Error('Not saved on this device. Retry saving draft before continuing.');
 }
 export async function flushDraftWrites(): Promise<void> {
