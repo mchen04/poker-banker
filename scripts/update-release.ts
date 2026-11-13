@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { buildProduction } from './build';
 import { runOwned } from './owned-command';
@@ -62,6 +62,7 @@ export async function buildPreviousUpdateRelease(owner: ProcessOwner, release: s
 export async function buildArchivedUpdateRelease(owner: ProcessOwner, release: string, sourceSha: string, input?: PreviousSourceInput, options?: WorkerObservationOptions) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha)) throw new Error('Archived update source requires a complete commit SHA');
   if (!/^[a-zA-Z0-9._-]{1,100}$/.test(release)) throw new Error('Archived update release stamp is invalid');
+  if (!input) await access(resolve('.git')).catch(() => { throw new Error(`Archived update source ${sourceSha} is unavailable in this Git-less checkout. Run through scripts/mini.sh, which prepares the pinned public archives, or supply the documented PB_UPDATE_* manifest and SHA256 inputs.`); });
   await mkdir('.cache', { recursive: true });
   const scratch = await mkdtemp(resolve('.cache/update-previous-'));
   owner.addCleanup('Previous update source cleanup', 'cleanup', () => rm(scratch, { recursive: true, force: true }));

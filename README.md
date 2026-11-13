@@ -17,13 +17,13 @@ Open http://127.0.0.1:3000. The helper starts embedded Postgres on loopback port
 
 ## Verify
 
-Before the mini E2E command, [prepare and copy the public update archives](docs/TESTING.md#update-proof) and set their printed hashes as `MANIFEST_SHA` and `LEGACY_MANIFEST_SHA`. The mirror has no `.git`, so the command passes those inputs explicitly.
+The mini runner prepares and transfers SHA-verified archives of the pinned previous and legacy clients from this local Git history. Its Git-less mirror receives the release inputs automatically; no extra environment variables are required.
 
 ```sh
 scripts/mini.sh pnpm typecheck
 scripts/mini.sh pnpm build
 scripts/mini.sh pnpm test
-scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/update-fixtures/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256="$MANIFEST_SHA" PB_UPDATE_LIVE_LEGACY_MANIFEST=.cache/update-fixtures/legacy/manifest.json PB_UPDATE_LIVE_LEGACY_MANIFEST_SHA256="$LEGACY_MANIFEST_SHA" pnpm e2e
+scripts/mini.sh pnpm e2e
 ```
 
 The runner checks capacity, syncs source without credentials/local data, installs the lockfile under checksum-verified Node 22 and copies results back. Tests use owned disposable embedded Postgres and Playwright browsers. See [TESTING](docs/TESTING.md) and the [verification skill](.claude/skills/verify-poker-banker/SKILL.md) for scoped commands, evidence and cleanup. Real iOS installation, suspension and keyboard behavior require device acceptance.

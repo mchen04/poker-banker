@@ -158,7 +158,9 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
 
 - **Prove safe automatic release adoption.** This local-only recipe uses the production builder and real service workers, Cache Storage, UI writes and PostgreSQL. It never fulfills a fake response, edits IndexedDB or calls `registration.update()` from the driver to manufacture post-deployment discovery. A separate owned loopback TLS forwarder records and delays genuine upstream responses or holds a module request until the next real build replaces its file. It builds the tracked previous clients and current releases in sequence. Run it last in an exclusive checkout; it deliberately changes `dist/`.
 
-Prepare the pinned previous-source fixture on this Mac because the mini checkout intentionally has no `.git`. The archive contains tracked project files only. The helper verifies both hashes and the pinned commit, and refuses credential/traversal paths before extracting into its own temporary directory.
+Through `scripts/mini.sh`, the pinned tracked-source archives are prepared, validated and transferred automatically, and their manifest hashes are supplied at launch. Standard E2E and skill commands need no manual release variables. The mini checkout intentionally has no `.git`. The helper still verifies both hashes and the pinned commit and refuses credential/traversal paths.
+
+For a Git-less checkout used without the mini runner, prepare these public inputs manually:
 
 ```sh
 mkdir -p .cache/update-fixtures/previous
@@ -187,10 +189,10 @@ PYTHON
 rsync -az .cache/update-fixtures/legacy/ mini:worktrees/poker-banker/.cache/update-fixtures/legacy/
 ```
 
-Use the first printed manifest hash as `MANIFEST_SHA` and the second as `LEGACY_MANIFEST_SHA` below. The live-legacy source is pinned to the publicly observed production client from the update review; it is not a claim about future deployments. These public fixture metadata variables must be present at **launch**, because the existing daemon executes later recipes.
+Without the mini runner, supply the first printed hash as `PB_UPDATE_PREVIOUS_MANIFEST_SHA256` and the second as `PB_UPDATE_LIVE_LEGACY_MANIFEST_SHA256`, alongside the corresponding `PB_UPDATE_*_MANIFEST` paths. The live-legacy source is pinned to the publicly observed production client from the update review; it is not a claim about future deployments. These public fixture metadata variables must be present at **launch**, because the existing daemon executes later recipes.
 
 ```sh
-scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/update-fixtures/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256=MANIFEST_SHA PB_UPDATE_LIVE_LEGACY_MANIFEST=.cache/update-fixtures/legacy/manifest.json PB_UPDATE_LIVE_LEGACY_MANIFEST_SHA256=LEGACY_MANIFEST_SHA .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
+scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
 scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh doctor --run RUN_ID
 scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh drive updates --run RUN_ID --context iphone-standalone
 scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh evidence --run RUN_ID
@@ -228,10 +230,10 @@ Proofs in `automatic-updates-summary.json` and `review/review-cases-summary.json
 
 The original five cases plus seven review cases share one helper and exclusive build scope; allow the focused recipe to complete its real discovery and failure-observation windows. The two lazy modules and previous storage reader are test-build fixtures emitted before the shared production precache stamp. Normal builds contain neither. Normal builds contain no observer listener; opt-in diagnostic builds record the unchanged stamped-worker prefix and observation-source hashes. Cache body bytes are decoded response sizes, not physical disk usage. Every case has screenshots, ARIA/landmarks and explicit before/after release identities. The helper owns and closes its contexts, archive scratch and journey lock; the skill's cleanup then stops its existing owned browser/server/database and keeps evidence.
 
-For one focused review case, pass the same public archive paths/hashes as arguments (SSH does not inherit local exports), then run only the shared automatic-update entry:
+For one focused review case, pass its mode and case selection explicitly; the mini runner supplies the public archives:
 
 ```sh
-scripts/mini.sh env PB_UPDATE_PREVIOUS_MANIFEST=.cache/update-fixtures/previous/manifest.json PB_UPDATE_PREVIOUS_MANIFEST_SHA256=MANIFEST_SHA PB_UPDATE_LIVE_LEGACY_MANIFEST=.cache/update-fixtures/legacy/manifest.json PB_UPDATE_LIVE_LEGACY_MANIFEST_SHA256=LEGACY_MANIFEST_SHA PB_UPDATE_REVIEW_MODE=fixed PB_UPDATE_REVIEW_CASES=R7-failed-install-cache-bound pnpm e2e e2e/app-updates.spec.ts --grep "automatic release adoption" --project iphone-standalone
+scripts/mini.sh env PB_UPDATE_REVIEW_MODE=fixed PB_UPDATE_REVIEW_CASES=R7-failed-install-cache-bound pnpm e2e e2e/app-updates.spec.ts --grep "automatic release adoption" --project iphone-standalone
 ```
 
 Do not combine this focused mode with the full shared journey.
