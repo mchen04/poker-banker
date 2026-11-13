@@ -13,6 +13,14 @@ export async function checkLayout(page: Page): Promise<LayoutIssue[]> {
       return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0.05;
     };
     const label = (element: Element) => `${element.tagName.toLowerCase()}${element.getAttribute('data-testid') ? `[${element.getAttribute('data-testid')}]` : ''} "${(element.getAttribute('aria-label') ?? element.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 60)}"`;
+    const hiddenText = (element: Element) => !!element.closest('.sr-only, .visually-hidden') || getComputedStyle(element).clip === 'rect(0px, 0px, 0px, 0px)' || getComputedStyle(element).clipPath === 'inset(50%)';
+    const clippedByAncestor = (element: Element) => {
+      for (let node = element.parentElement; node && node !== document.body; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (/(hidden|clip)/.test(style.overflowX) && style.textOverflow === 'ellipsis') return true;
+      }
+      return false;
+    };
     const scrolls = (element: Element | null): boolean => {
       for (let node = element; node && node !== document.body; node = node.parentElement) {
         const style = getComputedStyle(node);
@@ -22,9 +30,9 @@ export async function checkLayout(page: Page): Promise<LayoutIssue[]> {
     };
     if (document.scrollingElement && document.scrollingElement.scrollWidth > width + 1) issues.push({ kind: 'page-overflow', detail: `scrollWidth ${document.scrollingElement.scrollWidth} > ${width}` });
     for (const element of Array.from(document.querySelectorAll('body *'))) {
-      if (!visible(element) || element.closest('[aria-hidden="true"]')) continue;
+      if (!visible(element) || element.closest('[aria-hidden="true"]') || hiddenText(element)) continue;
       const box = element.getBoundingClientRect();
-      if ((box.right > width + 1 || box.left < -1) && !scrolls(element.parentElement) && element.children.length === 0) issues.push({ kind: 'offscreen', detail: `${label(element)} spans ${Math.round(box.left)}..${Math.round(box.right)} of ${width}` });
+      if ((box.right > width + 1 || box.left < -1) && !scrolls(element.parentElement) && !clippedByAncestor(element) && element.children.length === 0) issues.push({ kind: 'offscreen', detail: `${label(element)} spans ${Math.round(box.left)}..${Math.round(box.right)} of ${width}` });
       const style = getComputedStyle(element);
       if (element.children.length === 0 && element.scrollWidth > element.clientWidth + 1 && style.overflowX === 'hidden' && style.textOverflow !== 'ellipsis' && !/(INPUT|TEXTAREA|SELECT)/.test(element.tagName)) issues.push({ kind: 'clipped-text', detail: label(element) });
       if (element.matches('button, a[href], input:not([type=hidden]), select, textarea, [role=button], [role=tab]') && !element.closest('.visually-hidden, .sr-only')) {
@@ -55,7 +63,7 @@ export async function checkLayout(page: Page): Promise<LayoutIssue[]> {
       if (spread(names) > 1) issues.push({ kind: 'row-misaligned', detail: `name left edges ${names.join(',')}` });
       const buttonRights = edges('button', rect => rect.right);
       if (spread(buttonRights) > 1) issues.push({ kind: 'row-misaligned', detail: `row right edges ${buttonRights.join(',')}` });
-      const heights = rows.map(row => Math.round(row.getBoundingClientRect().height));
+      const heights = rows.map(row => Math.round((row.closest('li, [role=listitem]') ?? row.parentElement ?? row).getBoundingClientRect().height));
       if (Math.max(...heights) - Math.min(...heights) > 1) issues.push({ kind: 'row-misaligned', detail: `row heights ${heights.join(',')}` });
     }
     return issues;
