@@ -42,6 +42,9 @@ Preconditions:
 
 - Deletes of entries, players and sessions go through the outbox, so the toast with Undo appears only after the server confirms. Offline you see Not saved yet instead. Restores and roster deletes need a connection; their buttons are disabled offline.
 - Deleting a paid buy-in deletes only the buy-in; its generated payment row stays and can be deleted separately. The Saved-toast Undo still reverses both atomically.
-- Restoring writes a copy with `restores_entry_id`; select the copy's ID for a second delete, not the original.
+- Restoring writes a copy with `restores_entry_id`; select the copy's ID for a second delete, not the original. The copy keeps the original's place in chip order, so a restored buy-in never flips a cashed-out player back to Playing.
+- Restoring a session or a removed seat also restores a deleted roster player in it, so their balance stays visible on Players.
+- Deleting a session with unsettled balances shows an amber line naming the amounts owed to and by the banker.
+- A queued entry rejected because its session was deleted on another device stays under Not saved yet with Retry and Discard.
 - Undo follows the Saved-toast rules: eight unpaused seconds, paused by touch, focus, hover and open sheets. Wait about nine seconds before reaching for Removed or Recently deleted, or the toast may cover them.
 - A removed player cannot be re-added through Add player ("Removed from this game"); restore them instead.
