@@ -1058,6 +1058,12 @@ it.each([false, true].flatMap(lostReply => [false, true].map(flushFirst => [lost
   } else await drainApplied(other);
   const originalItems = await other.listOutbox(owner);
   if (flushFirst) {
+    storage.quota(true);
+    await expect(editing.flushDraftWrites()).rejects.toThrow('Not saved on this device');
+    expect(editing.hasRetainedDraft(key, edited)).toBe(true);
+    expect(editing.hasPendingLocalWrites()).toBe(true);
+    expect(storage.draft(key)).toBeUndefined();
+    storage.quota(false);
     storage.failNextGet();
     await expect(editing.flushDraftWrites()).rejects.toThrow('Not saved on this device');
     expect(editing.hasRetainedDraft(key, edited)).toBe(true);
