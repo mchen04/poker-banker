@@ -49,7 +49,7 @@ export default async function deletions({ page, context, browser, baseURL, runId
   await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(toast(page)).toContainText(`Deleted buy-in · Sam ${tag} · $50.00`);
   await page.waitForTimeout(9000);
-  await row(page, copy.id).getByRole('button', { name: 'Deleted Buy-in $50.00', exact: true }).click();
+  await row(page, copy.id).getByRole('button', { name: /^Deleted Buy-in \$50\.00 · / }).click();
   await step('restore-entry-sheet');
   await page.getByRole('button', { name: 'Restore entry', exact: true }).click();
   await expect(toast(page)).toContainText(`Restored buy-in · Sam ${tag} · $50.00`);

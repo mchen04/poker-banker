@@ -63,7 +63,7 @@ test('deleting an entry offers Undo, a later Restore and an offline delete that 
   await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(toast(page)).toContainText('Deleted buy-in · Sam · $50.00');
   expect((await current(page)).totals.total_in_minor).toBe('10000');
-  await activityRow(page, restored.id).getByRole('button', { name: 'Deleted Buy-in $50.00', exact: true }).click();
+  await activityRow(page, restored.id).getByRole('button', { name: /^Deleted Buy-in \$50\.00 · Sam · / }).click();
   const sheet = page.getByRole('dialog', { name: 'Deleted entry', exact: true });
   await expect(sheet).toContainText('Buy-in · Sam');
   await screen(page, info, 'restore-entry-sheet');

@@ -30,7 +30,7 @@ test('an offline reload leaves the start unknown until real entry and table time
   expect(unknown.players[0]!.duration_ms).toBeNull();
   await screen(page, testInfo, 'start-time-unknown');
   const realStart = new Date(Date.parse(unknown.server_now) - 7200000).toISOString().slice(0, 19);
-  await page.getByRole('button', { name: 'Correct Buy-in $100.00', exact: true }).click();
+  await page.getByRole('button', { name: /^Correct Buy-in \$100\.00 · / }).click();
   await typeInput(page.getByLabel('Entry time', { exact: true }), realStart);
   await page.getByRole('button', { name: 'Save correction', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
