@@ -185,9 +185,12 @@ it('deletes a roster player only when not seated and restores them', async () =>
   await rejects(await request(owner, `/sessions/${state.session.id}/players`, 'POST', { op_id: randomUUID(), player_id: playerId }), 404);
   expect(await ok(await request(owner, `/players/${playerId}/delete`, 'POST', { op_id: op }))).toEqual(deleted);
   await rejects(await request(other, `/players/${playerId}/delete`, 'POST', { op_id: randomUUID() }), 404);
+  expect((await ok<{ players: { id: string; display_name: string }[] }>(await request(owner, '/players/deleted'))).players).toMatchObject([{ id: playerId, display_name: 'Roster' }]);
+  expect((await ok<{ players: unknown[] }>(await request(other, '/players/deleted'))).players).toEqual([]);
   const restored = await ok<{ player: { id: string; deleted_at: string | null } }>(await request(owner, `/players/${playerId}/restore`, 'POST', { op_id: randomUUID() }));
   expect(restored.player.deleted_at).toBeNull();
   expect((await ok<{ players: { id: string }[] }>(await request(owner, '/players?q=ros'))).players.map(row => row.id)).toEqual([playerId]);
+  expect((await ok<{ players: unknown[] }>(await request(owner, '/players/deleted'))).players).toEqual([]);
   await rejects(await request(owner, `/players/${playerId}/restore`, 'POST', { op_id: randomUUID() }), 409, 'player_active');
   await rejects(await request(other, `/players/${playerId}/restore`, 'POST', { op_id: randomUUID() }), 404);
 });

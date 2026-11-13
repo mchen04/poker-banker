@@ -383,6 +383,12 @@ export function createApp(pool: Database, config: Config = {}) {
     await db.query('INSERT INTO players(id,banker_id,display_name,name_key) VALUES ($1,$2,$3,$4)', [id, banker, input.display_name, recordName(input.display_name)]);
     return { player: await playerRecord(db, banker, id) };
   }));
+  app.get('/api/players/deleted', async c => {
+    z.strictObject({}).parse(c.req.query());
+    const result = await pool.query<{ id: string; display_name: string; deleted_at: string }>(
+      'SELECT id, display_name, deleted_at::text FROM players WHERE banker_id = $1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC LIMIT 30', [c.get('banker').id]);
+    return c.json({ players: result.rows });
+  });
   app.get('/api/players/:id', async c => {
     const id = v.id.parse(c.req.param('id'));
     return c.json(await readSnapshot(pool, db => playerHistory(db, c.get('banker').id, id)));

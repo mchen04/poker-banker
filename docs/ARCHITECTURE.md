@@ -149,6 +149,7 @@ POST /api/sessions/:id/reopen    {op_id, reason} -> SessionState
 POST /api/sessions/:id/share     {op_id, action: 'enable'|'rotate'|'disable'} -> SessionState
 
 GET  /api/players                ?q= -> {players[] with per-currency cumulative and outstanding}
+GET  /api/players/deleted        -> {players[] with deleted_at}
 POST /api/players                {op_id, display_name}
 PATCH /api/players/:id           {op_id, display_name}
 POST /api/players/:id/delete     {op_id} -> {player} | 409 player_seated
