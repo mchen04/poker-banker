@@ -1,6 +1,6 @@
 # Screen tour and layout
 
-Proves every banker and viewer screen at iPhone width (393×852) and the narrowest supported phone (320×568), checks layout automatically, and records load filmstrips for flicker. It needs a fresh banker because it creates its own players by name.
+Proves every banker and viewer screen at iPhone width (393×852), 375×812 and the narrowest supported phone (320×568), checks layout automatically, and records load filmstrips for flicker. It needs a fresh banker because it creates its own players by name.
 
 ## Run
 
@@ -15,7 +15,7 @@ Repeat on a fresh run with `--context desktop-webkit`. The tour lives in the ski
 
 ## What it captures
 
-`tour/` holds one PNG per screen and width: empty and seated tables, saved toast, long-name player sheet, buy-in, payment, correction, session menu, sessions picker, Players, player report, cold reload, viewer, dark theme and the close sheet. Fixtures use a 43-character name and a $123,456,789.99 buy-in so wrapping and clipping show up.
+`tour/` holds one PNG per screen and width: empty and seated tables, saved toast, long-name player sheet, buy-in, payment, correction, session menu, sessions picker, Players, player report, cold reload, viewer, dark theme, the close sheet, and the deletion screens: delete-entry confirm and toast, Deleted activity row, Restore entry sheet, Remove from game confirm and toast, Removed disclosure, Session menu with Delete session, delete-session confirm and toast, the empty table's Recently deleted, a second player report and the delete-player confirm, toast and Recently deleted list. Fixtures use a 43-character name, "Alexandria Montgomery-Whitfield", a $123,456,789.99 buy-in and a $123,456,789.00 buy-in and payment so wrapping and clipping show up.
 
 `layout.json` comes from `scripts/layout.ts` and lists, per screen and width:
 
@@ -32,4 +32,4 @@ Repeat on a fresh run with `--context desktop-webkit`. The tour lives in the ski
 
 ## Judging
 
-Zero `wrapped-money`, `offscreen`, `page-overflow` and `clipped-text` entries are required. Check every `small-target` and `row-misaligned` entry against the screenshots. Then look at the PNGs yourself: the checker doesn't judge hierarchy, spacing rhythm or tone. Compare them with the previous run's tour. Emulation doesn't prove real iOS keyboard, safe-area or Home Screen behaviour.
+Zero `wrapped-money`, `offscreen`, `page-overflow` and `clipped-text` entries are required. Check every `small-target` and `row-misaligned` entry against the screenshots. Then look at the PNGs yourself: the checker doesn't judge hierarchy, spacing rhythm or tone, and it ignores ellipsized text, so confirm that full player names, session names and transaction kinds (Payment received, Buy-in, Deleted) are readable in rows, sheet and report headers, confirms and toasts. Compare them with the previous run's tour. Emulation doesn't prove real iOS keyboard, safe-area or Home Screen behaviour.

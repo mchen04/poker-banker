@@ -14,14 +14,14 @@ The banker records buy-ins and cash-outs without losing the original ledger. Res
 - `ledger-expense` records tips and meals from a player sheet.
 - `ledger-global-correct` corrects from global Activity.
 - `ledger-player-correct` corrects from Player entries.
-- `ledger-void-replacement` retains the original, explicit void and replacement; void-only requires Confirm void.
+- `ledger-void-replacement` retains the original, explicit void and replacement; deleting without a replacement requires Confirm delete (see [deletion and recovery](deletion-and-recovery.md)).
 
 ## How to get to it (user POV)
 
 - Choose `Buy-in` in the single bottom navigation bar on Table or Players while the current session is open, then explicitly choose a player. The money sheet displays that player as fixed text; choose another player by cancelling and returning to the chooser.
 - Choose the row’s `Buy-in` or `Rebuy` shortcut to review an amount. Choose the player’s name for `Buy-in`, `Cash out`, payments and `Tips and meals`.
 - Choose `Correct` beside an entry in global Activity or in that player's entries.
-- Use `Replacement amount` and `Save correction`, or choose `Void entry` → `Confirm void` without replacement. `Keep entry` returns to the editor with its draft intact.
+- Use `Replacement amount` and `Save correction`, or choose `Delete entry` → `Confirm delete` without replacement. `Keep entry` returns to the editor with its draft intact.
 - Add and reuse players through the [sessions recipe](sessions-and-drafts.md); that recipe owns new/existing-name search and exact-match confirmation.
 
 ## Driving it with Playwright

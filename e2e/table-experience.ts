@@ -33,6 +33,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
   await page.goto('/'); await workspaceReady(page);
   expect((await call<{ sessions: unknown[] }>(page, '/sessions')).sessions, 'Run this recipe first in a fresh local verification banker').toHaveLength(0);
   const tag = `${runId.slice(-8)}-${randomUUID().slice(0, 4)}`;
+  const short = randomUUID().slice(0, 3);
   const taps: Tap[] = [];
   async function measure(label: string, action: (tap: (control: Locator) => Promise<void>) => Promise<void>) {
     const controls: string[] = [];
@@ -75,7 +76,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
   });
   const first = await current(page);
   let playerId = '';
-  const playerName = `Alexandra ${tag}`;
+  const playerName = `Alexandra ${short}`;
   await measure('Add a new player', async tap => {
     await tap(page.getByRole('button', { name: 'Add player', exact: true }));
     await typeInput(page.getByLabel('Search players', { exact: true }), playerName);
@@ -203,7 +204,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
   } finally { await viewerContext.close(); }
   const players = [playerId];
   for (const name of ['Riley', 'Sam', 'Morgan', 'Drew', 'Taylor', 'Casey', 'Jordan']) {
-    const player = await addPlayer(page, `${name} ${tag}`); players.push(player.id);
+    const player = await addPlayer(page, `${name} ${short}`); players.push(player.id);
     await money(page, player.id, '25', { method: name === 'Jordan' ? 'zelle' : 'cash' });
   }
   await measure('Footer buy-in, explicitly choose player and Venmo', async tap => {

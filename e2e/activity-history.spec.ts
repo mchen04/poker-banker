@@ -50,32 +50,34 @@ test('large Activity histories stay correctable, filtered and read only for view
   await expect(filtered.getByTestId(`entry-${oldest.id}`)).toContainText('Voided');
   await filtered.getByTestId(`entry-${second.id}`).scrollIntoViewIfNeeded();
   await filtered.getByTestId(`entry-${second.id}`).getByRole('button').click();
-  await page.getByRole('button', { name: 'Void entry', exact: true }).click();
-  await page.getByRole('button', { name: 'Confirm void', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete entry', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(activity.getByTestId(`entry-${second.id}`)).toContainText('Voided');
+  await expect(activity.getByTestId(`entry-${second.id}`)).toContainText('Deleted');
   await page.getByTestId(`player-${justin.id}`).click();
   state = await current(page);
-  await expect(filtered.getByRole('listitem')).toHaveCount(state.entries.filter(entry => entry.player_id === justin.id).length);
+  let shown = state.entries.filter(entry => entry.voids_entry_id !== second.id);
+  await expect(filtered.getByRole('listitem')).toHaveCount(shown.filter(entry => entry.player_id === justin.id).length);
   await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
   await newSession(page, 'Expansion reset');
   await switchSession(page, sessionId);
-  await expect(activity.getByRole('listitem')).toHaveCount(state.entries.length);
+  await expect(activity.getByRole('listitem')).toHaveCount(shown.length);
 
   const link = await share(page);
   state = await current(page);
+  shown = state.entries.filter(entry => entry.voids_entry_id !== second.id);
   const viewerContext = await newContextLike(page, browser, baseURL!);
   try {
     const viewer = await viewerContext.newPage();
     await viewer.goto(link);
     const viewerActivity = viewer.getByTestId('activity');
-    await expect(viewerActivity.getByRole('listitem')).toHaveCount(state.entries.length);
+    await expect(viewerActivity.getByRole('listitem')).toHaveCount(shown.length);
     await expect(viewerActivity.getByTestId(`entry-${timedEntry.id}`).locator('small')).toHaveText(`${expectedTime} · Morgan latest entry`);
     await expect(viewerActivity.getByTestId(`entry-${oldest.id}`).locator('small')).toHaveText('Time unavailable · Justin entry 1');
     await expect(viewerActivity.getByRole('button', { name: /^Correct / })).toHaveCount(0);
-    expect(await viewerActivity.getByRole('listitem').evaluateAll(rows => rows.map(row => row.getAttribute('data-testid')))).toEqual(state.entries.map(entry => `entry-${entry.id}`));
+    expect(await viewerActivity.getByRole('listitem').evaluateAll(rows => rows.map(row => row.getAttribute('data-testid')))).toEqual(shown.map(entry => `entry-${entry.id}`));
     await expect(viewerActivity.getByTestId(`entry-${oldest.id}`)).toContainText('Voided');
-    await expect(viewerActivity.getByTestId(`entry-${second.id}`)).toContainText('Voided');
+    await expect(viewerActivity.getByTestId(`entry-${second.id}`)).toContainText('Deleted');
     await expect(viewerActivity.getByRole('button')).toHaveCount(0);
   } finally { await viewerContext.close(); }
 });

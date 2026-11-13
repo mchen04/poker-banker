@@ -97,8 +97,8 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
       await capture(page, evidence, `open-footer-owes-paid-${colorScheme}`);
     }
     proofs.debt = colors;
-    const lines = await page.getByTestId(`player-${owing.id}`).locator('strong[title]').evaluate(element => ({ height: element.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(element).lineHeight), overflow: getComputedStyle(element).textOverflow, wrap: getComputedStyle(element).whiteSpace }));
-    expect(lines.overflow).toBe('ellipsis'); expect(lines.wrap).toBe('nowrap'); expect(lines.height).toBeLessThanOrEqual(lines.line + 1);
+    const lines = await page.getByTestId(`player-${owing.id}`).locator('strong[title]').evaluate(element => ({ height: element.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(element).lineHeight), overflow: getComputedStyle(element).textOverflow, scroll: element.scrollWidth, client: element.clientWidth, text: element.textContent, title: element.getAttribute('title') }));
+    expect(lines.overflow).not.toBe('ellipsis'); expect(lines.scroll).toBeLessThanOrEqual(lines.client); expect(lines.text).toBe(lines.title); expect(lines.height).toBeLessThanOrEqual(lines.line * 2 + 1);
     proofs.name = lines;
     if (!phone) {
       const header = await page.locator('.app-bar').boundingBox(); const navigation = await nav.boundingBox();

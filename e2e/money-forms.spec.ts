@@ -192,8 +192,8 @@ test.describe("Draft cancellation and remembered buy-ins", () => {
     const beforeVoid = await current(page);
     const firstBuy = beforeVoid.entries.find(entry => entry.kind === 'buy_in' && entry.amount_minor === '4000')!;
     await page.getByTestId(`entry-${firstBuy.id}`).getByRole('button').click();
-    await page.getByRole('button', { name: 'Void entry', exact: true }).click();
-    await expect(page.getByRole('alertdialog', { name: 'Void ledger entry', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Delete entry', exact: true }).click();
+    await expect(page.getByRole('alertdialog', { name: 'Delete entry', exact: true })).toBeVisible();
     expect((await current(page)).revision).toBe(beforeVoid.revision);
     await page.getByRole('button', { name: 'Keep entry', exact: true }).click();
     await expect(page.getByLabel('Replacement amount', { exact: true })).toHaveValue('40.00');

@@ -70,9 +70,9 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   await page.getByTestId(`player-${player.id}`).click();
   await page.getByRole('dialog').getByTestId(`entry-${expense.id}`).getByRole('button').click();
   await step('player-entries-void-action');
-  await page.getByRole('button', { name: 'Void entry', exact: true }).click();
-  await page.getByRole('button', { name: 'Confirm void', exact: true }).click();
-  await expect(page.getByTestId(`entry-${expense.id}`)).toContainText('Voided');
+  await page.getByRole('button', { name: 'Delete entry', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
+  await expect(page.getByTestId(`entry-${expense.id}`)).toContainText('Deleted');
   await step('player-entries-void-result');
   state = await checkState();
   const payment = state.entries.find(row => row.kind === 'payment_in' && row.method === 'zelle')!;
