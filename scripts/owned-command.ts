@@ -1,7 +1,7 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { createProcessOwner, spawnOwned, stopOwned, type ProcessOwner } from './owned-process';
 
-export function waitOwned(child: ChildProcess) {
+function waitOwned(child: ChildProcess) {
   return new Promise<number | null>((resolve, reject) => {
     const cleanup = () => { child.removeListener('error', failed); child.removeListener('exit', exited); };
     const failed = (error: Error) => { cleanup(); reject(error); };

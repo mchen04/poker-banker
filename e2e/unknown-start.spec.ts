@@ -12,7 +12,7 @@ test('an offline reload leaves the start unknown until real entry and table time
   await expect(page.getByRole('heading', { name: 'Unknown offline start', exact: true })).toBeVisible();
   await openMoney(page, player.id);
   await typeInput(page.getByTestId('money-amount'), '100');
-  await page.getByLabel('Paid now', { exact: true }).uncheck();
+  await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Unpaid', exact: true }).click();
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Not saved yet', exact: true })).toBeVisible();
   const stampedTime = await page.evaluate(async () => {

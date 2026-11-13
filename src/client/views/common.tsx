@@ -1,11 +1,11 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Banker, BankerClient, OutboxItem } from '../data';
-import { deleteDraft, dismissDraftConflict, DraftConflictError, draftConflict, draftConflictNotice, draftConflictNotices, draftSaveFailed, enqueue, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftCursor, type DraftRequest, type RecoveredDraft, listRecoveredDrafts, resolveRecoveredDraft, editRecoveredDraft } from '../data';
+import { deleteDraft, dismissDraftConflict, DraftConflictError, draftConflict, draftConflictNotice, draftConflictNotices, draftSaveFailed, hasRetainedDraft, enqueue, flushDraftWrites, prepareDraftSubmission, readDraft, replaySubmittedDraft, writeDraft, type DraftCursor, type DraftRequest, type RecoveredDraft, listRecoveredDrafts, resolveRecoveredDraft, editRecoveredDraft } from '../data';
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
 
-export type SheetState = { kind: string; player?: string; entry?: string } | null;
+export type SheetState = { kind: string; player?: string; entry?: string; amount?: string } | null;
 export type ClientState = {
   banker: Banker | null;
   client: BankerClient | null;
@@ -24,7 +24,7 @@ export type ClientState = {
 export const ClientContext = createContext<ClientState | null>(null);
 export function useClient() {
   const value = useContext(ClientContext);
-  if (!value) throw new Error('Workspace is unavailable');
+  if (!value) throw new Error('Table is unavailable');
   return value;
 }
 export function money(value: string, currency: string) { return formatMoney(BigInt(value), currency); }
@@ -50,8 +50,7 @@ export function currencyDecimal(value: Rational, currency: string, squareRoot = 
   const scale = 10n ** BigInt(exponent);
   const scaled = { numerator: value.numerator, denominator: String(BigInt(value.denominator) * (squareRoot ? scale * scale : scale)) };
   const text = squareRoot ? formatSquareRoot(scaled, exponent) : formatRational(scaled, exponent);
-  const symbol = new Intl.NumberFormat('en-US', { style: 'currency', currency }).formatToParts(0n).find(part => part.type === 'currency')?.value ?? currency;
-  return `${text.startsWith('−') ? '−' : ''}${symbol}${text.replace('−', '')}`;
+  return money(text.replace('−', '-').replace('.', ''), currency);
 }
 export function duration(value: string | null, showSeconds = false) {
   if (value === null) return 'No time recorded';
@@ -312,7 +311,17 @@ export function useDraft<T extends object>(key: string, initial: T, options: { r
       throw problem;
     } finally { if (inFlight.current === flight) inFlight.current = undefined; }
   }
-  return { value, update, ready, clear, error, submit, reconcile, queue, withSnapshot, reviewRequired, acknowledgeReview, submitted: !!value.__submitted };
+  async function keep() {
+    const previous = latestValue.current;
+    const isCurrent = capture();
+    const canRetain = () => isCurrent() && ready && cursor.current.version !== undefined && !retainedEdit.current && !inFlight.current && !reviewBlocked.current && latestValue.current === previous;
+    if (canRetain() && hasRetainedDraft(key, previous)) return;
+    try { await withSnapshot((value, observation) => writeDraft(key, value, observation)); }
+    catch (problem) {
+      if (problem instanceof DraftConflictError || !canRetain() || !hasRetainedDraft(key, previous)) throw problem;
+    }
+  }
+  return { value, update, ready, clear, keep, error, submit, reconcile, queue, withSnapshot, reviewRequired, acknowledgeReview, submitted: !!value.__submitted };
 }
 export function DraftRecovery<T>({ recover, recovered, pending = false, notice = '' }: { recover: () => Promise<T>; recovered: (value: T) => void; pending?: boolean; notice?: string }) {
   const [busy, setBusy] = useState(false);
@@ -427,12 +436,12 @@ export function DraftSaveStatus() {
     }
   }
   const visible = notices.filter(notice => bankerId && notice.key.startsWith(`${bankerId}/`));
-  return <>{visible.length > 0 && <div className="warning" role="alert" data-testid="draft-conflict-notice">{visible.map(notice => <p key={notice.key}>{notice.message}</p>)}<button type="button" onClick={() => { if (account?.isCurrent?.() === false) return; for (const notice of visible) dismissDraftConflict(notice); }}>Dismiss draft change notice</button></div>}
+  return <>{visible.length > 0 && <div className="warning" role="status" aria-live="polite" data-testid="draft-conflict-notice">{visible.map(notice => <p key={notice.key}>{notice.message}</p>)}<button type="button" onClick={() => { if (account?.isCurrent?.() === false) return; for (const notice of visible) dismissDraftConflict(notice); }}>Dismiss draft change notice</button></div>}
     {recoveries.length > 0 && <section aria-label="Needs review"><h2>Needs review</h2>{recoveries.filter(recovery => bankerId && recovery.key.startsWith(`${bankerId}/`)).map(recovery => recovery.collision ? <details className="warning" key={recovery.key} data-testid="recovered-draft"><summary>Review recovered edit</summary><p>A saved draft and your recovered edit are both kept. Check the game for an earlier save before choosing.</p><h3>Saved draft</h3><RecoveredDraftFields value={recovery.source_value} /><h3>Your recovered edit</h3><RecoveredDraftFields value={recovery.value} /><button type="button" disabled={busy} onClick={() => { void resolve(recovery, true); }}>Use recovered edit</button><button type="button" disabled={busy} onClick={() => { void resolve(recovery, false); }}>Keep saved edit</button></details> : <RecoveredDraftEditor key={recovery.key} recovery={recovery} busy={busy} act={edit} />)}</section>}
-    <ErrorText text={recoveryError} />{failed && <div className="warning" role="alert"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
+    <ErrorText text={recoveryError} />{failed && <div className="warning" role="status" aria-live="polite"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
 }
-export function ErrorText({ text }: { text: string }) { return text ? <p role="alert" className="error">{text}</p> : null; }
-export function Sheet({ title, children, close, leadingClose = false, closeLabel = 'Done', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
+export function ErrorText({ text, id }: { text: string; id?: string }) { return text ? <p id={id} role="alert" aria-live="polite" className="error" tabIndex={-1}>{text}</p> : null; }
+export function Sheet({ title, children, close, leadingClose = true, closeLabel = 'Cancel', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const client = useContext(ClientContext);
   const updateBanner = client?.updateBanner;
@@ -445,19 +454,21 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
     const previous = document.activeElement as HTMLElement | null;
     const panel = ref.current;
     let focused = false;
+    const available = (element: HTMLElement) => element.getClientRects().length > 0 && !element.matches(':disabled') && getComputedStyle(element).visibility !== 'hidden';
     function focusEditor() {
       if (focused || !panel) return;
-      const editor = panel.querySelector<HTMLInputElement>('[data-testid="money-amount"]') ?? panel.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input:not([type="checkbox"]),select,textarea');
-      if (editor && !editor.disabled) { editor.focus(); focused = true; }
+      const editors = [...panel.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input:not([type="checkbox"]),select,textarea')].filter(editor => available(editor) && editor.dataset.autofocus !== 'false');
+      const editor = editors.find(editor => editor.dataset.testid === 'money-amount') ?? editors[0];
+      if (editor) { editor.focus(); focused = document.activeElement === editor; }
     }
     focusEditor();
-    if (!focused) panel?.querySelector<HTMLElement>('button')?.focus();
+    if (!focused) [...panel?.querySelectorAll<HTMLElement>('button,summary') ?? []].find(available)?.focus();
     const observer = new MutationObserver(() => { focusEditor(); if (focused) observer.disconnect(); });
     if (panel && !focused) observer.observe(panel, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
     function keyboard(event: KeyboardEvent) {
       if (event.key === 'Escape') { event.preventDefault(); if (!busyRef.current) closeRef.current(); }
       if (event.key !== 'Tab' || !panel) return;
-      const fields = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]')];
+      const fields = [...panel.querySelectorAll<HTMLElement>('button,input,select,textarea,a[href],summary,[tabindex]')].filter(element => element.tabIndex >= 0 && available(element));
       const first = fields[0], last = fields.at(-1);
       if (!first) { event.preventDefault(); panel.focus(); return; }
       if (!panel.contains(document.activeElement)) { event.preventDefault(); first.focus(); return; }
@@ -469,8 +480,46 @@ export function Sheet({ title, children, close, leadingClose = false, closeLabel
     document.body.style.overflow = 'hidden';
     return () => { observer.disconnect(); document.removeEventListener('keydown', keyboard); document.body.style.overflow = oldOverflow; previous?.focus(); };
   }, []);
-  const closeButton = <button type="button" aria-label={leadingClose ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
+  useLayoutEffect(() => {
+    const panel = ref.current;
+    const backdrop = panel?.parentElement;
+    const viewport = window.visualViewport;
+    let frame = 0;
+    const keepVisible = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (!panel || !backdrop) return;
+        const height = viewport?.height ?? window.innerHeight;
+        backdrop.dataset.compact = String(height < 480);
+        backdrop.style.height = `${height}px`;
+        backdrop.style.setProperty('--sheet-viewport-height', `${height}px`);
+        backdrop.style.top = `${viewport?.offsetTop ?? 0}px`;
+        backdrop.style.bottom = 'auto';
+        const active = document.activeElement;
+        if (!(active instanceof HTMLElement) || !panel.contains(active) || !active.matches('input,select,textarea')) return;
+        const body = active.closest<HTMLElement>('.form-body,.money-fields,.sheet-fields,.sheet-status');
+        if (!body) return;
+        const field = active.getBoundingClientRect();
+        const bounds = body.getBoundingClientRect();
+        if (field.bottom > bounds.bottom - 16) body.scrollTop += field.bottom - bounds.bottom + 16;
+        else if (field.top < bounds.top + 16) body.scrollTop -= bounds.top + 16 - field.top;
+      });
+    };
+    keepVisible();
+    viewport?.addEventListener('resize', keepVisible);
+    viewport?.addEventListener('scroll', keepVisible);
+    window.addEventListener('resize', keepVisible);
+    panel?.addEventListener('focusin', keepVisible);
+    return () => {
+      cancelAnimationFrame(frame);
+      viewport?.removeEventListener('resize', keepVisible);
+      viewport?.removeEventListener('scroll', keepVisible);
+      window.removeEventListener('resize', keepVisible);
+      panel?.removeEventListener('focusin', keepVisible);
+    };
+  }, []);
+  const closeButton = <button type="button" aria-label={className.includes('money-sheet') ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
   return <div className="sheet-backdrop"><div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
-    {updateBanner}<DraftSaveStatus /><div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><fieldset className="sheet-fields" disabled={busy}>{children}</fieldset>
+    <div className="sheet-status">{updateBanner}<DraftSaveStatus /></div><div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><div className="sheet-fields"><fieldset className="sheet-controls" disabled={busy}>{children}</fieldset></div>
   </div></div>;
 }

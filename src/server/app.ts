@@ -87,8 +87,9 @@ export function createApp(pool: Database, config: Config = {}) {
     const result = await pool.query<{ id: string; name: string; played_on: string; currency: string; status: string; revision: string }>(
       `SELECT id, name, to_char(played_on,'YYYY-MM-DD') AS played_on, currency, status, revision::text FROM game_sessions
        WHERE banker_id = $1 AND position(lower($2) in lower(name)) > 0
+       AND ($5::text IS NULL OR status = $5)
        AND ($3::date IS NULL OR (played_on,id) < ($3::date,$4::uuid))
-       ORDER BY played_on DESC,id DESC LIMIT 31`, [c.get('banker').id, query.q ?? '', before?.[0] ?? null, before?.[1] ?? null]);
+       ORDER BY played_on DESC,id DESC LIMIT 31`, [c.get('banker').id, query.q ?? '', before?.[0] ?? null, before?.[1] ?? null, query.status ?? null]);
     const sessions = result.rows.slice(0, 30);
     const last = sessions.at(-1);
     return c.json({ sessions, next: result.rows.length > 30 && last ? `${last.played_on},${last.id}` : null });
@@ -191,6 +192,28 @@ export function createApp(pool: Database, config: Config = {}) {
     if (input.amount_minor !== '0' && ((input.kind === 'buy_in' && input.paid_now !== false) || (input.kind === 'cash_out' && input.paid_now === true))) {
       await insertEntry(db, banker, id, revision, { player_id: input.player_id, kind: input.kind === 'buy_in' ? 'payment_in' : 'payment_out', amount_minor: input.amount_minor, method: input.method!, occurred_at: occurredAt });
     }
+    return loadSession(db, banker, id);
+  }));
+  app.post('/api/sessions/:id/entries/:entry_id/undo', c => mutate(c, pool, v.undoEntry, async (db, banker, input) => {
+    const id = v.id.parse(c.req.param('id'));
+    const entryId = v.id.parse(c.req.param('entry_id'));
+    const row = await sessionRow(db, banker, id, true);
+    assertOpen(row);
+    if (row.revision !== input.expected_revision) conflict('revision_mismatch', 'Session changed. Review it before undoing');
+    const state = await loadSession(db, banker, id);
+    const original = state.entries.find(entry => entry.id === entryId) ?? notFound();
+    if (original.voids_entry_id || state.entries.some(entry => entry.voids_entry_id === original.id)) conflict('already_voided', 'This entry cannot be undone');
+    if (original.revision !== input.expected_revision) conflict('revision_mismatch', 'Only the latest saved entry can be undone');
+    const targets = state.entries.filter(entry => entry.revision === original.revision && entry.player_id === original.player_id);
+    const paymentKind = original.kind === 'buy_in' ? 'payment_in' : original.kind === 'cash_out' ? 'payment_out' : null;
+    const paired = targets.filter(entry => entry.id !== original.id);
+    if (targets.some(entry => entry.voids_entry_id !== null) || paired.length > 1 || (paired.length === 1 &&
+      (paymentKind === null || original.amount_minor === '0' || paired[0]!.kind !== paymentKind || paired[0]!.amount_minor !== original.amount_minor || paired[0]!.occurred_at !== original.occurred_at || paired[0]!.note !== null))) {
+      conflict('undo_unavailable', 'This command cannot be undone');
+    }
+    if (targets.some(target => state.entries.some(entry => entry.voids_entry_id === target.id))) conflict('already_voided', 'This command cannot be undone');
+    const revision = await bump(db, banker, id);
+    for (const target of targets) await insertEntry(db, banker, id, revision, { ...target, voids_entry_id: target.id });
     return loadSession(db, banker, id);
   }));
   app.post('/api/sessions/:id/entries/:entry_id/void', c => mutate(c, pool, v.voidEntry, async (db, banker, input) => {

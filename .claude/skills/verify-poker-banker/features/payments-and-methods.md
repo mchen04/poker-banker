@@ -8,14 +8,14 @@ Chip entries and actual payments remain separate. The banker can record Cash, Ve
 - `payments-unpaid` leaves an unpaid buy-in out of money received.
 - `payments-later` records a later payment through the player sheet.
 - `payments-direction` supports player-to-bank and bank-to-player payments.
-- `payments-cash-out` records Paid out now with a method.
+- `payments-cash-out` records immediate payment by selecting Cash, Venmo or Zelle.
 - `payments-correct-method` shows both the voided method and effective replacement.
 
 ## How to get to it (user POV)
 
-- In Buy-in, turn `Paid now` on and choose a button in `Payment method`.
-- In Cash out, turn `Paid out now` on and choose a method.
-- Open a player row → `Record payment`; choose `Payment direction` and a method.
+- In Buy-in, choose `Unpaid`, `Cash`, `Venmo` or `Zelle` in `Payment method`. A paid selection defaults only from this player’s own last method.
+- In Cash out, choose a payment method to record payment now, or retain `Unpaid` to pay later.
+- Open a player row → `Record payment`; choose `Player pays bank` or `Bank pays player` in the `Payment direction` group, then a method.
 - In Activity or Player entries, correct the payment row and choose a button in `Replacement method`.
 
 ## Driving it with Playwright
@@ -30,12 +30,12 @@ Preconditions:
 ```ts
 import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
-import { addPlayer, current, money, newSession, openMoney } from '../e2e/helpers';
+import { addPlayer, current, money, newSession, openMoney, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, runId, step, checkState }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   await newSession(page, 'Verify payment methods');
   const player = await addPlayer(page, `Pay ${runId.slice(-8)}`);
   await money(page, player.id, '40', { method: 'venmo' });
@@ -62,7 +62,7 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
   expect(state.entries.some(entry => entry.kind === 'payment_in' && entry.method === 'cash' && entry.amount_minor === '2000' && !entry.voids_entry_id)).toBe(true);
   await money(page, player.id, '60', { kind: 'Cash out', paid: true, method: 'zelle' });
   await openMoney(page, player.id, 'Record payment');
-  await page.getByLabel('Payment direction', { exact: true }).selectOption('payment_out');
+  await page.getByRole('group', { name: 'Payment direction', exact: true }).getByRole('button', { name: 'Bank pays player', exact: true }).click();
   await typeInput(page.getByTestId('money-amount'), '1');
   await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();

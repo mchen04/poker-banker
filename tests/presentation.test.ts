@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { duration, resultMoney, resultCurrencyDecimal, resultNumber } from '../src/client/views/common';
+import { currencyDecimal, duration, resultMoney, resultCurrencyDecimal, resultNumber } from '../src/client/views/common';
 
 describe('clear display values', () => {
   it('uses whole minutes for durations including zero and padded hours', () => {
@@ -20,5 +20,14 @@ describe('clear display values', () => {
     expect(resultCurrencyDecimal({ numerator: '-3', denominator: '2' }, 'USD')).toBe('−$0.02');
     expect(resultNumber({ numerator: '1', denominator: '3' })).toBe('+0.33');
     expect(resultNumber({ numerator: '0', denominator: '1' })).toBe('Even');
+  });
+  it('groups reported currency rates and variation without losing bigint precision', () => {
+    expect(currencyDecimal({ numerator: '123456789', denominator: '1' }, 'USD')).toBe('$1,234,567.89');
+    expect(currencyDecimal({ numerator: '-123456789', denominator: '1' }, 'USD')).toBe('−$1,234,567.89');
+    expect(currencyDecimal({ numerator: String(123456789n ** 2n), denominator: '1' }, 'USD', true)).toBe('$1,234,567.89');
+    expect(currencyDecimal({ numerator: '9223372036854775807', denominator: '1' }, 'USD')).toBe('$92,233,720,368,547,758.07');
+    expect(currencyDecimal({ numerator: '1234567', denominator: '1' }, 'JPY')).toBe('¥1,234,567');
+    expect(currencyDecimal({ numerator: '2005', denominator: '2' }, 'USD')).toBe('$10.02');
+    expect(currencyDecimal({ numerator: '1234567', denominator: '1' }, 'KWD')).toContain('1,234.567');
   });
 });

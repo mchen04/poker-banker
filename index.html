@@ -11,6 +11,99 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icon-180.png" />
     <link rel="icon" href="/icon-192.png" type="image/png" />
+    <script>
+      (() => {
+        const parameter = '__pb_boot';
+        const storageKey = 'pb-bootstrap-recovery';
+        let started = false;
+        let recovering = false;
+        let navigationStarted = false;
+        const timers = new Set();
+        const budget = new URL(location.href);
+        const marker = budget.searchParams.get(parameter) || '';
+        const match = /^([a-z0-9-]+)\.([12])$/.exec(marker);
+        const incident = match?.[1] || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+        budget.searchParams.delete(parameter);
+        const path = budget.pathname + budget.search + budget.hash;
+        let attempts = match ? Number(match[2]) : 0;
+        try {
+          const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
+          if (saved?.path === path && saved.incident === incident && Number.isInteger(saved.attempts)) attempts = Math.max(attempts, saved.attempts);
+        } catch {}
+        const announce = (worker, requestId) => {
+          const release = document.querySelector('meta[name="pb-release"]')?.content;
+          if (release) worker?.postMessage({ type: 'CLIENT_RELEASE', requestId, release, updateProtocol: 0 });
+        };
+        const message = event => {
+          if (!started && event.data?.type === 'CLIENT_RELEASE_REQUEST') announce(event.source, event.data.requestId);
+        };
+        const controllerChanged = () => announce(navigator.serviceWorker.controller);
+        const stop = () => {
+          started = true;
+          for (const timer of timers) clearTimeout(timer);
+          window.removeEventListener('error', failed, true);
+          window.removeEventListener('unhandledrejection', rejected);
+          window.removeEventListener('pb:app-started', stop);
+          navigator.serviceWorker?.removeEventListener('message', message);
+          navigator.serviceWorker?.removeEventListener('controllerchange', controllerChanged);
+          if (marker) {
+            try { history.replaceState(history.state, '', path); } catch {}
+          }
+          try { sessionStorage.removeItem(storageKey); } catch {}
+        };
+        const recover = async () => {
+          if (started || recovering || navigationStarted) return;
+          recovering = true;
+          if (attempts >= 2) {
+            const show = () => {
+              const root = document.getElementById('root');
+              if (!started && root) root.textContent = 'Poker banker could not load. Check your connection and reopen the app.';
+            };
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show, { once: true });
+            else show();
+            return;
+          }
+          const refresh = async () => {
+            if (!navigator.serviceWorker) return;
+            try {
+              const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
+              if (!started) await registration.update();
+            } catch {}
+          };
+          await Promise.race([refresh(), new Promise(resolve => { timers.add(setTimeout(resolve, 1500)); })]);
+          if (started || navigationStarted) return;
+          const next = new URL(location.href);
+          attempts++;
+          next.searchParams.set(parameter, incident + '.' + attempts);
+          try { sessionStorage.setItem(storageKey, JSON.stringify({ path, incident, attempts })); } catch {}
+          navigationStarted = true;
+          location.replace(next.href);
+        };
+        const isAppScript = (filename, allowDevEntry = false) => {
+          if (!filename) return false;
+          try {
+            const source = new URL(filename, location.href);
+            return source.origin === new URL(location.href).origin && (/^\/assets\/[^/]+\.js$/.test(source.pathname) || allowDevEntry && source.pathname === '/src/client/main.tsx');
+          } catch { return false; }
+        };
+        const failed = event => {
+          const entry = document.querySelector('script[type="module"][src]');
+          if (entry && event.target === entry && isAppScript(entry.src, true) || isAppScript(event.filename)) void recover();
+        };
+        const rejected = event => {
+          const reason = event.reason instanceof Error ? event.reason.message : String(event.reason);
+          if (/chunkloaderror|loading chunk|dynamically imported|importing a module script/i.test(reason)) void recover();
+        };
+        window.addEventListener('error', failed, true);
+        window.addEventListener('unhandledrejection', rejected);
+        window.addEventListener('pb:app-started', stop);
+        if (navigator.serviceWorker) {
+          navigator.serviceWorker.addEventListener('message', message);
+          navigator.serviceWorker.addEventListener('controllerchange', controllerChanged);
+          controllerChanged();
+        }
+      })();
+    </script>
     <title>Justin's poker banker</title>
   </head>
   <body>

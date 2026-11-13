@@ -14,7 +14,7 @@ A banker shares one session through a private read-only link. A fresh logged-out
 ## How to get to it (user POV)
 
 - Choose `Session menu` → `Share session`, then `Enable sharing`.
-- Choose `Copy link`, `Rotate link` or `Disable sharing` in that sheet.
+- Choose `Copy link` in that sheet. `Rotate link` requires `Confirm rotate`; `Disable sharing` requires `Confirm disable`. Keep link or Keep sharing cancels the pending change.
 - Open the Viewer link in a fresh logged-out context.
 
 ## Driving it with Playwright
@@ -29,26 +29,26 @@ Preconditions:
 ```ts
 import { writeFile } from 'node:fs/promises';
 import { expect } from '@playwright/test';
-import { addPlayer, menu, money, newSession, share } from '../e2e/helpers';
+import { newContextLike, addPlayer, menu, money, newSession, share, switchSession, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, browser, baseURL, runId, evidence, step }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   const shared = await newSession(page, 'Verify shared game');
   const player = await addPlayer(page, `Share ${runId.slice(-8)}`);
   await money(page, player.id, '40', { method: 'venmo' });
   await newSession(page, 'Verify private other game');
-  await page.getByTestId(`session-tab-${shared.session.id}`).click();
+  await switchSession(page, shared.session.id);
   const link = await share(page);
-  const viewerContext = await browser.newContext({ baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', viewport: page.viewportSize() ?? undefined, locale: 'en-US', timezoneId: 'UTC' });
+  const viewerContext = await newContextLike(page, browser, baseURL);
   try {
     const viewer = await viewerContext.newPage();
     await viewer.goto(link);
     await expect(viewer.getByText(/View only, updated/)).toBeVisible();
     await expect(viewer.getByTestId('activity')).toContainText('Venmo');
     await expect(viewer.getByText('Verify private other game', { exact: false })).toHaveCount(0);
-    for (const name of ['Add player', 'Buy-in', 'Session menu', 'Players', 'History']) await expect(viewer.getByRole('button', { name, exact: true })).toHaveCount(0);
+    for (const name of ['Add player', 'Buy-in', 'Session menu', 'Players', 'Switch session', 'Sessions']) await expect(viewer.getByRole('button', { name, exact: true })).toHaveCount(0);
     expect((await viewer.request.get(`${baseURL}/api/sessions`)).status()).toBe(401);
     expect((await viewer.request.get(`${baseURL}/api/players/${player.id}/report`)).status()).toBe(401);
     const blocked = await viewer.request.post(`${baseURL}/api/sessions/${shared.session.id}/entries`, { headers: { origin: baseURL }, data: {} });
@@ -56,7 +56,7 @@ export default async function ({ page, browser, baseURL, runId, evidence, step }
     await step('sharing-banker-save-before');
     await money(page, player.id, '5', { method: 'venmo' });
     const confirmedAt = Date.now();
-    await expect(viewer.getByTestId(`player-${player.id}`)).toContainText('in $45.00', { timeout: 3000 });
+    await expect(viewer.getByTestId(`player-${player.id}`)).toContainText('Bought $45.00', { timeout: 3000 });
     const delay = Date.now() - confirmedAt;
     expect(delay).toBeLessThan(3000);
     await viewer.screenshot({ path: `${evidence}/sharing-viewer-live.png` });
@@ -67,11 +67,19 @@ export default async function ({ page, browser, baseURL, runId, evidence, step }
     const copyResult = await page.getByRole('dialog').getByRole('status').textContent();
     await step('sharing-copy-result');
     await page.getByRole('button', { name: 'Rotate link', exact: true }).click();
+    await expect(page.getByLabel('Viewer link', { exact: true })).toHaveValue(link);
+    await expect(page.getByRole('alertdialog', { name: 'Rotate viewer link', exact: true })).toBeVisible();
+    await step('sharing-rotate-before-confirmation');
+    await page.getByRole('button', { name: 'Confirm rotate', exact: true }).click();
     await expect(page.getByLabel('Viewer link', { exact: true })).not.toHaveValue(link);
     const rotated = await page.getByLabel('Viewer link', { exact: true }).inputValue();
     await viewer.reload();
     await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Disable sharing', exact: true }).click();
+    await expect(page.getByLabel('Viewer link', { exact: true })).toHaveValue(rotated);
+    await expect(page.getByRole('alertdialog', { name: 'Disable viewer link', exact: true })).toBeVisible();
+    await step('sharing-disable-before-confirmation');
+    await page.getByRole('button', { name: 'Confirm disable', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Enable sharing', exact: true })).toBeVisible();
     await viewer.goto(rotated);
     await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();

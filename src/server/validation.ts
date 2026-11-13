@@ -47,6 +47,7 @@ export const voidEntry = z.strictObject({
   op_id: opId, replacement_amount_minor: nonnegativeMinor.optional(),
   replacement_method: method.optional(), replacement_occurred_at: timestamp.nullable().optional(),
 });
+export const undoEntry = z.strictObject({ op_id: opId, expected_revision: revision });
 export const reportQuery = z.strictObject({
   group: z.enum(['overall', 'location', 'game', 'weekday', 'month']).optional(),
   location: z.string().max(100).optional(), game: z.string().max(100).optional(),
@@ -58,5 +59,5 @@ export const reopenSession = z.strictObject({ op_id: opId, reason: z.string().tr
 export const shareSession = z.strictObject({ op_id: opId, action: z.enum(['enable', 'rotate', 'disable']) });
 export const sinceQuery = z.strictObject({ since: revision.optional() });
 export const searchQuery = z.strictObject({ q: z.string().max(100).optional() });
-export const listQuery = z.strictObject({ q: z.string().max(100).optional(), before: z.string().max(100).optional() });
+export const listQuery = z.strictObject({ q: z.string().max(100).optional(), before: z.string().max(100).optional(), status: z.enum(['open', 'closed']).optional() });
 export const cursor = z.tuple([date, id]);

@@ -1,10 +1,35 @@
 import { typeInput } from './input';
 import { randomUUID } from 'node:crypto';
-import type { Page, TestInfo } from '@playwright/test';
+import type { Browser, Page, TestInfo } from '@playwright/test';
 import type { SessionState } from '../src/domain/session';
+import { formatMoney, parseMoney } from '../src/domain/money';
 import { expect, screen } from './fixtures';
 
 export const password = randomUUID();
+export type ContextProfile = Readonly<{ userAgent: string; hasTouch: boolean; scale: number; standalone: boolean; dark: boolean; viewport?: Readonly<{ width: number; height: number }> }>;
+export async function captureContextProfile(page: Page): Promise<ContextProfile> {
+  const observed = await page.evaluate(() => ({
+    userAgent: navigator.userAgent, hasTouch: navigator.maxTouchPoints > 0, scale: devicePixelRatio,
+    standalone: !!(navigator as Navigator & { standalone?: boolean }).standalone,
+    dark: matchMedia('(prefers-color-scheme: dark)').matches,
+  }));
+  const viewport = page.viewportSize();
+  return Object.freeze({ ...observed, viewport: viewport ? Object.freeze({ ...viewport }) : undefined });
+}
+export async function newContextLike(page: Page, browser: Browser, baseURL: string, captured?: ContextProfile) {
+  const profile = captured ?? await captureContextProfile(page);
+  const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', viewport: profile.viewport ? { ...profile.viewport } : undefined, userAgent: profile.userAgent, hasTouch: profile.hasTouch, isMobile: profile.hasTouch && /iPhone|iPad|Android/.test(profile.userAgent), deviceScaleFactor: profile.scale, colorScheme: profile.dark ? 'dark' : 'light', locale: 'en-US', timezoneId: 'UTC' });
+  if (profile.standalone) await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'standalone', { configurable: true, value: true });
+    const native = window.matchMedia.bind(window);
+    window.matchMedia = query => {
+      const result = native(query);
+      if (query.includes('display-mode') && query.includes('standalone')) Object.defineProperty(result, 'matches', { configurable: true, value: true });
+      return result;
+    };
+  });
+  return context;
+}
 export async function call<T>(page: Page, path: string, method = 'GET', body?: unknown): Promise<T> {
   const origin = new URL(page.url()).origin;
   const response = await page.request.fetch(`${origin}/api${path}`, { method, headers: { origin, 'content-type': 'application/json' }, ...(body === undefined ? {} : { data: body }) });
@@ -42,19 +67,19 @@ export async function createAccount(page: Page, testInfo?: TestInfo) {
     await expect(page.getByTestId('recovery-codes')).toBeVisible();
     expect((await page.getByTestId('recovery-codes').textContent())!.match(/[a-f0-9]{8}(?:-[a-f0-9]{8}){3}/g)).toEqual(codes);
   }
-  await expect(page.getByRole('button', { name: 'Continue to workspace', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Continue to table', exact: true })).toBeDisabled();
   await page.getByLabel('I saved these codes', { exact: true }).check();
-  await page.getByRole('button', { name: 'Continue to workspace', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Continue to table', exact: true }).click();
+  await workspaceReady(page);
   return { username, codes, ...(await call<{ banker: { id: string; username: string } }>(page, '/auth/me')) };
 }
-export async function signIn(page: Page, username: string, secret = password) {
+export async function signIn(page: Page, username: string, secret: string = password) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await typeInput(page.getByLabel('Username', { exact: true }), username);
   await typeInput(page.getByLabel('Password', { exact: true }), secret);
-  await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign in to table', exact: true }).click();
+  await workspaceReady(page);
 }
 export async function signOut(page: Page) {
   await page.getByRole('button', { name: 'Players', exact: true }).click();
@@ -67,8 +92,52 @@ export async function signOut(page: Page) {
   await confirm.click();
   await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
 }
+async function previousUpdateFixture(page: Page) {
+  return /^(?:r36-previous-|r38-legacy-302-)/.test(await page.locator('meta[name="pb-release"]').getAttribute('content') ?? '');
+}
+async function liveLegacyUpdateFixture(page: Page) {
+  return (await page.locator('meta[name="pb-release"]').getAttribute('content'))?.startsWith('r38-legacy-302-') ?? false;
+}
+export async function workspaceReady(page: Page) {
+  const previous = await previousUpdateFixture(page);
+  const workspace = page.getByRole('navigation', { name: previous ? 'Workspace navigation' : 'Table navigation', exact: true }).getByRole('button', { name: previous ? 'Workspace' : 'Table', exact: true });
+  await expect(workspace).toBeVisible();
+  await expect(workspace).toHaveAttribute('aria-pressed', 'true');
+  const selected = await liveLegacyUpdateFixture(page) ? page.getByRole('tab', { selected: true }) : page.getByRole('button', { name: 'Switch session', exact: true }).and(page.locator('[data-testid^="session-tab-"]'));
+  const welcome = page.getByRole('button', { name: 'Create your first session', exact: true });
+  await expect(selected.or(welcome)).toBeVisible();
+}
+export async function openNewSession(page: Page) {
+  const previous = await previousUpdateFixture(page);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('navigation', { name: previous ? 'Workspace navigation' : 'Table navigation', exact: true }).getByRole('button', { name: previous ? 'Workspace' : 'Table', exact: true }).click();
+  await workspaceReady(page);
+  const existing = await call<{ sessions: { id: string }[] }>(page, '/sessions');
+  if (!existing.sessions.length) await page.getByRole('button', { name: 'Create your first session', exact: true }).click();
+  else if (await liveLegacyUpdateFixture(page)) await page.getByRole('button', { name: 'New session', exact: true }).click();
+  else if (previous) {
+    await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+    await page.getByRole('dialog', { name: 'History', exact: true }).getByRole('button', { name: 'New session', exact: true }).click();
+  } else {
+    const headerAction = page.locator('.session-heading').getByRole('button', { name: 'New session', exact: true });
+    if (await headerAction.isVisible()) await headerAction.click();
+    else await page.getByTestId('session-bottom-bar').getByRole('button', { name: 'New session', exact: true }).click();
+  }
+  await expect(page.getByRole('dialog', { name: 'New session', exact: true })).toBeVisible();
+}
+export async function switchSession(page: Page, id: string) {
+  const previous = await previousUpdateFixture(page);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('navigation', { name: previous ? 'Workspace navigation' : 'Table navigation', exact: true }).getByRole('button', { name: previous ? 'Workspace' : 'Table', exact: true }).click();
+  await workspaceReady(page);
+  await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+  await page.getByRole('dialog', { name: previous ? 'History' : 'Sessions', exact: true }).getByTestId(`session-tab-${id}`).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Switch session', exact: true })).toHaveAttribute('data-testid', `session-tab-${id}`);
+  await expect.poll(() => new URL(page.url()).searchParams.get('session')).toBe(id);
+}
 export async function newSession(page: Page, name: string, testInfo?: TestInfo) {
-  await page.getByRole('button', { name: 'New session', exact: true }).click();
+  await openNewSession(page);
   await typeInput(page.getByLabel('Session name', { exact: true }), name);
   await typeInput(page.getByLabel('Session date', { exact: true }), '2026-11-10');
   if (testInfo) await screen(page, testInfo, 'new-session');
@@ -102,25 +171,31 @@ export async function money(page: Page, player: string, amount: string, options:
   const kind = options.kind ?? 'Buy-in';
   await openMoney(page, player, kind);
   await typeInput(page.getByTestId('money-amount'), amount);
-  if (options.paid !== undefined && (kind === 'Buy-in' || kind === 'Cash out')) await page.getByLabel(kind === 'Buy-in' ? 'Paid now' : 'Paid out now', { exact: true }).setChecked(options.paid);
+  if (kind === 'Buy-in' || kind === 'Cash out') {
+    if (await previousUpdateFixture(page)) {
+      if (options.paid !== undefined) await page.getByLabel(kind === 'Buy-in' ? 'Paid now' : 'Paid out now', { exact: true }).setChecked(options.paid);
+    } else if (options.paid === false) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Unpaid', exact: true }).click();
+    else if (options.paid === true && !options.method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
+  }
   if (options.method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: options.method[0]!.toUpperCase() + options.method.slice(1), exact: true }).click();
   if (options.testInfo) await screen(page, options.testInfo, kind === 'Buy-in' ? 'buy-in' : kind === 'Cash out' ? 'cash-out' : kind === 'Record payment' ? 'payment' : 'expense');
   await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByTestId('saved-confirmation')).toContainText(amount.includes('.') ? amount : `${amount}.00`);
   await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
-  return current(page);
+  const saved = await current(page);
+  await expect(page.getByTestId('saved-confirmation')).toContainText(formatMoney(parseMoney(amount, saved.session.currency), saved.session.currency));
+  return saved;
 }
 export async function menu(page: Page, action: string) {
   await page.getByRole('button', { name: 'Session menu', exact: true }).click();
-  const names: Record<string, string> = { 'Close session': 'Close game', 'Reopen session': 'Reopen game', Share: 'Share session' };
+  const names: Record<string, string> = { Share: 'Share session' };
   await page.getByRole('dialog').getByRole('button', { name: names[action] ?? action, exact: true }).click();
 }
 export async function closeSession(page: Page, discrepancy = false) {
   await menu(page, 'Close session');
   if (discrepancy) await page.getByRole('checkbox').check();
   await page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true }).click();
-  await expect(page.getByText(discrepancy ? /Closed, off by/ : 'Closed, balanced', { exact: !discrepancy })).toBeVisible();
+  await expect(page.getByText(discrepancy ? 'Closed · chip discrepancy' : 'Closed · chips balanced', { exact: true })).toBeVisible();
   return current(page);
 }
 export async function share(page: Page) {

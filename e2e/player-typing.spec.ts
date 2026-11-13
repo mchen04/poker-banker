@@ -77,7 +77,9 @@ test('a conflict after closing the form shows a non-storage notice that can be d
     }, key);
     await typeInput(page.getByTestId('money-amount'), '50');
     await expect(page.getByTestId('money-amount')).toHaveValue('50');
-    await keepMoneyDraft(page);
+    await typeInput(page.getByTestId('money-amount'), '');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await other.evaluate(async () => { await (window as unknown as { __releaseDraftLock?: () => Promise<void> }).__releaseDraftLock?.(); });
     const notice = page.getByTestId('draft-conflict-notice');
     await expect(notice).toBeVisible();

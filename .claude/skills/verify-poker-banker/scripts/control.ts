@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 import { webkit, devices, expect, type Browser, type BrowserServer, type BrowserContext, type Page } from '@playwright/test';
 import type { SessionState } from '../../../../src/domain/session';
-import { createAccount, signIn, current } from '../../../../e2e/helpers';
+import { createAccount, signIn, current, workspaceReady } from '../../../../e2e/helpers';
 import { ledger } from './ledger';
 import { createProcessOwner, spawnOwned, stopOwned, withShutdownDeadline, type ProcessOwner } from '../../../../scripts/owned-process';
 import { ownedMain, runOwned } from '../../../../scripts/owned-command';
@@ -38,7 +38,8 @@ async function request(command: Command): Promise<unknown> {
   const client = createConnection(socket);
   const pending = new Promise((resolve, reject) => {
     let output = '';
-    client.setTimeout(180000, () => client.destroy(new Error('Verification command exceeded 180 seconds')));
+    const deadline = command.recipe === 'updates' || command.action === 'recipe' ? 900000 : 180000;
+    client.setTimeout(deadline, () => client.destroy(new Error(`Verification command exceeded ${deadline / 1000} seconds`)));
     client.on('connect', () => client.write(`${JSON.stringify(command)}\n`));
     client.on('data', chunk => { output += String(chunk); });
     client.on('error', reject);
@@ -134,7 +135,9 @@ async function daemon() {
     const release = (await shell.text()).match(/name="pb-release" content="([^"]+)"/)?.[1];
     expect(release).toBe(meta.release);
     const history = await page.request.get(`${meta.baseURL}/api/sessions`); expect(history.status()).toBe(200);
-    await expect(page.getByRole('button', { name: 'Workspace', exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await page.getByRole('navigation', { name: 'Table navigation', exact: true }).getByRole('button', { name: 'Table', exact: true }).click();
+    await workspaceReady(page);
     if (local) {
       const listener = Number((await runOwned(owner, 'lsof', ['-nP', `-iTCP:${meta.port}`, '-sTCP:LISTEN', '-t'])).trim());
       expect(listener).toBe(meta.listenerPid);
@@ -152,7 +155,7 @@ async function daemon() {
     }
     if (command.action === 'doctor') return doctor();
     if (command.action === 'evidence') return manifest();
-    if (meta.state !== 'ready' || !browser || !user) throw new Error('Launch has not reached a signed-up usable workspace');
+    if (meta.state !== 'ready' || !browser || !user) throw new Error('Launch has not reached a signed-up usable table');
     const mode = command.mode ?? 'iphone-webkit';
     if (!['iphone-webkit', 'iphone-standalone', 'desktop-webkit'].includes(mode)) throw new Error('Unknown verification context');
     const page = await contextPage(mode);
@@ -169,12 +172,16 @@ async function daemon() {
       }, checkState: () => current(page) };
     try {
       if (command.action === 'drive' && command.recipe === 'ledger') await ledger(recipeContext);
+      else if (command.action === 'drive' && command.recipe === 'updates') {
+        const { verifyUpdateJourney } = await import('../../../../scripts/verify-update-journey');
+        await verifyUpdateJourney({ page, browser, baseURL: meta.baseURL, evidence: directory, tag: `verify-${runId.slice(-8)}` });
+      }
       else if (command.action === 'recipe' && command.recipe) {
         const path = resolve(command.recipe);
         if (!path.startsWith(`${root}/`) || !path.endsWith('.ts')) throw new Error('Recipe must be a TypeScript file inside this repository');
         const loaded = await import(`${pathToFileURL(path).href}?run=${Date.now()}`) as { default: (context: RecipeContext) => Promise<void> };
         await loaded.default(recipeContext);
-      } else throw new Error('Use drive ledger or recipe <repo-relative-file.ts>');
+      } else throw new Error('Use drive ledger, drive updates or recipe <repo-relative-file.ts>');
       const result = { passed: true, mode, recipe: command.recipe, steps: steps.length, evidence: directory };
       await json(join(directory, `${command.action}-result.json`), result); return result;
     } catch (error) {
@@ -232,7 +239,7 @@ async function daemon() {
     starting();
     user = await createAccount(page);
     starting();
-    await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+    await workspaceReady(page);
     const shell = await page.request.get(meta.baseURL);
     meta.release = (await shell.text()).match(/name="pb-release" content="([^"]+)"/)?.[1];
     if (!meta.release) throw new Error('Build release stamp is missing');
@@ -300,7 +307,7 @@ else if (action === 'launch') {
     }
     if (interrupted) { await stopLaunch(); console.error(`Verification launch interrupted by ${interrupted}; evidence preserved at ${evidence}`); }
     else {
-      if (!ready) { await stopLaunch(); throw new Error(`Launch never reached workspace; evidence preserved at ${evidence}`); }
+      if (!ready) { await stopLaunch(); throw new Error(`Launch never reached the table; evidence preserved at ${evidence}`); }
       handoffTask = owner.handoff(child).then(() => { handedOff = true; });
       await handoffTask;
       if (interrupted) { await stopLaunch(); throw new Error('Verification launch was interrupted during handoff'); }

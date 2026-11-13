@@ -1,4 +1,5 @@
 import { observeServerTime } from './clock';
+import { MAX_MINOR, parseMoney } from '../domain/money';
 import type { SessionState } from '../domain/session';
 
 export type Banker = { id: string; username: string };
@@ -75,6 +76,8 @@ let channel: BroadcastChannel | undefined;
 const generations = new Map<string, number>();
 const blockedOwners = new Set<string>();
 const ownerRequests = new Map<string, Set<AbortController>>();
+let inFlightRequests = 0;
+export function hasInFlightRequests(): boolean { return inFlightRequests > 0; }
 const generation = (banker: string) => generations.get(banker) ?? 0;
 const syncRuns = new Map<string, symbol>();
 const draftReplays = new Map<string, symbol>();
@@ -167,6 +170,7 @@ async function http<T>(path: string, method: string, body: unknown, consume: (re
     if (!requests) { requests = new Set(); ownerRequests.set(banker, requests); }
     requests.add(controller);
   }
+  inFlightRequests++;
   try {
     const response = await fetch(path, {
       method, credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
@@ -201,6 +205,7 @@ async function http<T>(path: string, method: string, body: unknown, consume: (re
     if (method === 'GET' && result !== null && typeof result === 'object' && 'server_now' in result && typeof result.server_now === 'string') observeServerTime(result.server_now);
     return result;
   } finally {
+    inFlightRequests--;
     window.clearTimeout(timeout);
     if (banker) {
       const requests = ownerRequests.get(banker);
@@ -322,10 +327,13 @@ function recoverOperation(value: unknown, request: DraftRequest, currency?: stri
 }
 function recoveryMinor(value: unknown, currency: string | undefined): string {
   if (!currency) throw new Error('The session currency is unavailable. Review the amount in minor units.');
-  const exponent = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits!;
-  const match = /^(\d+)(?:\.(\d*))?$/.exec(String(value).trim());
-  if (!match || (match[2]?.length ?? 0) > exponent) throw new Error('Enter an exact amount for this currency.');
-  return String(BigInt(match[1]!) * 10n ** BigInt(exponent) + BigInt((match[2] ?? '').padEnd(exponent, '0') || '0'));
+  return String(parseMoney(String(value), currency));
+}
+function recoveryWholeMinor(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !/^\d+$/.test(value.trim())) throw new Error(`${label}: use digits only, without decimal points, commas or currency symbols.`);
+  const minor = BigInt(value.trim());
+  if (minor > MAX_MINOR) throw new Error(`${label}: enter ${MAX_MINOR} minor units or less.`);
+  return String(minor);
 }
 function recoveryRequest(value: DraftValue, request: DraftRequest, currency?: string): DraftRequest {
   const body: Record<string, unknown> = { ...request.body, op_id: value.op_id };
@@ -346,10 +354,7 @@ function recoveryRequest(value: DraftValue, request: DraftRequest, currency?: st
       body.amount_minor = recoveryMinor(value.amount, currency);
     }
     const chip = body.kind === 'buy_in' || body.kind === 'cash_out';
-    const payment = body.kind === 'payment_in' || body.kind === 'payment_out';
     if (chip && 'paid_now' in value) body.paid_now = value.paid_now;
-    if ((payment || (chip && body.paid_now)) && /^\d+$/.test(String(body.amount_minor)) && BigInt(String(body.amount_minor)) > 0n && 'method' in value) body.method = value.method;
-    else delete body.method;
     if (value.occurred_at) body.occurred_at = new Date(String(value.occurred_at)).toISOString();
     else if ('__recovered_occurred_at' in value) body.occurred_at = value.__recovered_occurred_at;
   }
@@ -363,6 +368,17 @@ function recoveryRequest(value: DraftValue, request: DraftRequest, currency?: st
     if (value.time) body.replacement_occurred_at = new Date(String(value.time)).toISOString();
   }
   if ('big_blind_minor' in body && 'blind' in value) body.big_blind_minor = value.blind ? recoveryMinor(value.blind, request.method === 'PATCH' ? currency : String(value.currency ?? currency ?? '')) : null;
+  for (const [field, label] of [['amount_minor', 'Amount'], ['replacement_amount_minor', 'Replacement amount'], ['big_blind_minor', 'Big blind']] as const) {
+    if (field in body && !(field === 'big_blind_minor' && body[field] === null)) body[field] = recoveryWholeMinor(body[field], label);
+  }
+  if (body.big_blind_minor === '0') throw new Error('Enter a big blind above zero.');
+  if (entry) {
+    if (body.amount_minor === '0' && ['buy_in', 'payment_in', 'payment_out', 'expense'].includes(String(body.kind))) throw new Error('Enter an amount above zero. Only a cash-out may be zero.');
+    const payment = body.kind === 'payment_in' || body.kind === 'payment_out';
+    const paidChip = (body.kind === 'buy_in' || body.kind === 'cash_out') && body.paid_now;
+    if ((payment || paidChip) && typeof body.amount_minor === 'string' && body.amount_minor !== '0' && 'method' in value) body.method = value.method;
+    else delete body.method;
+  }
   return { ...request, body };
 }
 async function operationRecord(store: IDBObjectStore, banker: string, request: DraftRequest): Promise<DraftRecord | undefined> {
@@ -513,7 +529,7 @@ export function writeDraft(key: string, value: unknown, observation?: DraftCurso
   draftIntents.set(key, intent);
   return saveDraftIntent(key, intent);
 }
-function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
+function saveDraftIntent(key: string, intent: DraftIntent, restoreAbsent = false): Promise<void> {
   const banker = key.split('/')[0]!;
   activeClears.get(banker)?.abort();
   queuedDraftIntents.add(intent);
@@ -526,21 +542,26 @@ function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
       completion = done;
       const store = transaction.objectStore('drafts');
       const existing = await req(store.get(key)) as DraftRecord | undefined;
-      if (intent.expectedVersion === undefined || (intent.expectedVersion === unknownDraftVersion && !existing)) {
+      const restoring = restoreAbsent && !existing && intent.error !== undefined && draftIntents.get(key) === intent;
+      const fresh = restoring ? editableOperation(intent.value, true) : undefined;
+      const value = fresh ?? intent.value;
+      if (!restoring && (intent.expectedVersion === undefined || (intent.expectedVersion === unknownDraftVersion && !existing))) {
         const observed = draftVersion(existing);
         advanceDraftCursor(intent.cursor, intent.expectedVersion, observed, intent.revision);
         intent.expectedVersion = observed;
       }
-      try { assertDraftVersion(key, existing, intent.expectedVersion); } catch (problem) { await done; throw problem; }
+      try { assertDraftVersion(key, existing, restoring ? null : intent.expectedVersion); } catch (problem) { await done; throw problem; }
       let next: DraftRecord;
-      if ((existing?.value as DraftValue | undefined)?.__submitted) next = { ...existing!, next_value: intent.value, updated_at: Date.now() };
+      if ((existing?.value as DraftValue | undefined)?.__submitted) next = { ...existing!, next_value: value, updated_at: Date.now() };
       else {
-        next = { key, banker_id: banker, value: intent.value, updated_at: Date.now() };
+        next = { key, banker_id: banker, value, updated_at: Date.now() };
       }
       store.put(next);
       await done;
+      if (restoring) { intent.value = value; intent.revision = ++draftRevision; }
       advanceDraftCursor(intent.cursor, intent.expectedVersion, draftVersion(next), intent.revision);
       if (draftIntents.get(key) === intent) draftIntents.delete(key);
+      if (fresh) operationNotice(key, fresh, draftVersion(next), intent.cursor);
       changed();
     } catch (problem) {
       await completion?.catch(() => {});
@@ -565,6 +586,10 @@ function saveDraftIntent(key: string, intent: DraftIntent): Promise<void> {
 export function hasPendingLocalWrites(): boolean { return draftIntents.size > 0 || draftWrites.size > 0 || enqueueWrites.size > 0; }
 export function draftSaveFailed(key?: string): boolean {
   return key ? draftIntents.get(key)?.error !== undefined : [...draftIntents.values()].some(intent => intent.error !== undefined);
+}
+export function hasRetainedDraft(key: string, value: unknown): boolean {
+  const intent = draftIntents.get(key);
+  return intent?.error !== undefined && JSON.stringify(intent.value) === JSON.stringify(value);
 }
 export function draftConflict(key: string, cursor: DraftCursor, value?: unknown): DraftConflictError | undefined {
   const notice = draftConflicts.get(cursor);
@@ -880,7 +905,7 @@ export async function replaySubmittedDraft<T>(key: string, isCurrent = () => tru
 }
 async function flushOnlyDrafts(): Promise<void> {
   while (draftWrites.size) await Promise.allSettled([...draftWrites.values()]);
-  await Promise.allSettled([...draftIntents].map(([key, intent]) => saveDraftIntent(key, intent)));
+  await Promise.allSettled([...draftIntents].map(([key, intent]) => saveDraftIntent(key, intent, true)));
   if (draftIntents.size) throw new Error('Not saved on this device. Retry saving draft before continuing.');
 }
 export async function flushDraftWrites(): Promise<void> {
@@ -1173,7 +1198,7 @@ async function acknowledge(banker: string, item: OutboxItem, state: SessionState
   changed();
   return latest;
 }
-export function syncOutbox(banker: string, onSaved: (state: SessionState, item: OutboxItem) => void, onChange: () => void): () => void {
+export function syncOutbox(banker: string, onSaved: (state: SessionState, item: OutboxItem, receipt: SessionState) => void, onChange: () => void): () => void {
   const epoch = generation(banker);
   const run = Symbol();
   syncRuns.set(banker, run);
@@ -1206,7 +1231,7 @@ export function syncOutbox(banker: string, onSaved: (state: SessionState, item: 
         if (!isCurrent()) { await settleClaim(item, isCurrent); break; }
         const latest = await acknowledge(banker, item, state, isCurrent);
         if (!isCurrent()) { await settleClaim(item, isCurrent); break; }
-        if (latest) { onSaved(latest, item); if (isCurrent()) onChange(); }
+        if (latest) { onSaved(latest, item, state); if (isCurrent()) onChange(); }
       }
     } finally { running = false; }
   };

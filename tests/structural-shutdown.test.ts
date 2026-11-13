@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -163,7 +163,8 @@ async function run(entry: Entry, code: string, target: number | 'ready') {
     listening: false, listen(...args: unknown[]) { this.listening = true; queueMicrotask(() => (args.at(-1) as () => void)()); return this; },
     address: () => ({ port: 54321 }), close(callback?: (error?: Error) => void) { this.listening = false; queueMicrotask(() => callback?.()); }, closeAllConnections() {},
   });
-  const page = { request: { get: async () => ({ status: () => 200, text: async () => '<meta name="pb-release" content="fixture">', json: async () => ({ banker: { id: 'fixture' } }) }) }, getByRole: () => ({}), screenshot: async () => {}, goto: async () => {}, on() {}, url: () => 'https://127.0.0.1', title: async () => 'fixture', evaluate: async () => true };
+  const locator = { getByRole: () => locator, click: async () => {} };
+  const page = { request: { get: async () => ({ status: () => 200, text: async () => '<meta name="pb-release" content="fixture">', json: async () => ({ banker: { id: 'fixture' } }) }) }, getByRole: () => locator, screenshot: async () => {}, goto: async () => {}, on() {}, url: () => 'https://127.0.0.1', title: async () => 'fixture', evaluate: async () => true };
   const context = { newPage: async () => page, addInitScript: async () => {}, close: async () => {} };
   const browser = { newContext: async () => context, close: async () => {}, version: () => 'fixture' };
   const webkit = { launchServer: async () => {
@@ -173,7 +174,7 @@ async function run(entry: Entry, code: string, target: number | 'ready') {
   }, connect: async () => browser };
   const log = Object.assign(new EventEmitter(), { destroyed: false, write() {}, end(callback: () => void) { callback(); } });
   const fixtures: Record<string, unknown> = {
-    ...ownership, createProcessOwner, process: fakeProcess, console: { log() {}, error(error: unknown) { failures.push(error); } },
+    ...ownership, createProcessOwner, createHash, X509Certificate: class { publicKey = { export: () => Buffer.from('fixture-spki') }; }, process: fakeProcess, console: { log() {}, error(error: unknown) { failures.push(error); } },
     fixtureOwn: (owner: ReturnType<typeof ownership.createProcessOwner>) => controller.signal.addEventListener('abort', () => { externalStops.push(owner.stop().catch(error => failures.push(error))); }, { once: true }),
     runOwned: async (owner: ReturnType<typeof ownership.createProcessOwner>, executable: string) => {
       const child = owner.spawn(process.execPath, ['fixture-command']);
@@ -206,7 +207,7 @@ async function run(entry: Entry, code: string, target: number | 'ready') {
     mkdtemp: async (prefix: string) => { const directory = `${prefix}fixture`; scratch.add(directory); return directory; },
     rm: async (path: string) => { if (scratch.has(path)) scratch.delete(path); },
     readFile: async () => 'fixture', resolve, join, fileURLToPath: (value: URL) => value.pathname,
-    testDatabase: async () => database, seedBenchmark: async () => ({ username: 'fixture', password: randomUUID() }),
+    testDatabase: async () => database, seedBenchmark: async () => ({ username: 'fixture', password: randomUUID(), counts: { main_open_entries: 0 } }),
     createServer: () => server, createHttpsServer: () => server, closeOwnedServer: async () => {},
     createWriteStream: () => { queueMicrotask(() => log.emit('open')); return log; },
     LocalClient: class { async request() { return { status: 200, body: { entries: [], session: { name: 'fixture' }, players: [], totals: { total_in_minor: '0' } } }; } cookie() { return 'fixture'; } close() {} },
@@ -214,9 +215,9 @@ async function run(entry: Entry, code: string, target: number | 'ready') {
     ShapedProxy: class { handle() {} close() {} },
     createApp: () => ({ use() {}, get() {}, fetch() {} }), compress: () => {}, serveStatic: () => {}, emulateEdgeHeaders: (value: unknown) => value, serve: () => server,
     args: ['--local'], runId: 'fixture', socket: '/fixture.sock', evidence: '/fixture-evidence', metadata: '/fixture-meta', webkit,
-    createAccount: async () => ({ username: 'fixture', banker: { id: 'fixture' } }), devices: { 'iPhone 15': {} },
+    createAccount: async () => ({ username: 'fixture', banker: { id: 'fixture' } }), workspaceReady: async () => {}, signIn: async () => {}, devices: { 'iPhone 15': {} },
     createConnection: () => {}, createNetServer: () => server, chmod: async () => {}, json: async () => {}, manifest: async () => {}, files: async () => [],
-    owned: () => {}, execFileSync: () => '12345', expect: () => ({ toBeVisible: async () => {}, toBe() {}, toEqual() {}, toHaveLength() {} }),
+    owned: () => {}, execFileSync: () => '12345', expect: () => ({ toBeVisible: async () => {}, toBe() {}, toEqual() {}, toHaveLength() {}, toHaveCount() {} }),
   };
   if (entry === 'e2e-server' || entry === 'benchmarkStack' || entry === 'benchmarkBrowser') {
     const module = instrument('testDatabase', await readFile(new URL('../tests/database.ts', import.meta.url), 'utf8')).code.replaceAll('startupGate(', 'ungated(');

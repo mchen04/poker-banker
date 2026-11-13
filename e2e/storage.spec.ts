@@ -2,7 +2,7 @@ import { typeInput } from './input';
 import type { Request } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
-import { addPlayer, call, createAccount, current, keepMoneyDraft, money, newSession, openMoney } from './helpers';
+import { switchSession, addPlayer, call, createAccount, current, keepMoneyDraft, money, newSession, openMoney, workerReady } from './helpers';
 import type { SessionState } from '../src/domain/session';
 
 test('a version 1 database upgrades forward and preserves both session drafts exactly', async ({ page }) => {
@@ -35,7 +35,7 @@ test('a version 1 database upgrades forward and preserves both session drafts ex
   await expect(page.getByTestId('money-amount')).toHaveValue('73.45');
   await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await keepMoneyDraft(page);
-  await page.getByTestId(`session-tab-${second.session.id}`).click();
+  await switchSession(page, second.session.id);
   await openMoney(page, player.id);
   await expect(page.getByTestId('money-amount')).toHaveValue('91.');
   const migrated = await page.evaluate(async () => {
@@ -46,6 +46,98 @@ test('a version 1 database upgrades forward and preserves both session drafts ex
   expect(migrated.version).toBe(2);
   expect(migrated.records.find(record => record.key === key)).toMatchObject({ key, value, banker_id: user.banker.id });
   expect(migrated.records.find(record => record.key === otherKey)).toMatchObject({ key: otherKey, value: otherValue, banker_id: user.banker.id });
+});
+
+test('the offline picker opens owned cached sessions with their separate drafts and pending entries', async ({ page, context }) => {
+  const account = await createAccount(page);
+  const first = await newSession(page, 'Cached Monday A');
+  const second = await newSession(page, 'Cached Thursday B');
+  const draftPlayer = await addPlayer(page, 'Retained draft player');
+  const queuePlayer = await addPlayer(page, 'Pending entry player');
+  await openMoney(page, draftPlayer.id);
+  await typeInput(page.getByTestId('money-amount'), '73.45');
+  await keepMoneyDraft(page);
+  await workerReady(page);
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+  await expect.poll(() => page.evaluate(async ({ banker, ids }) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('poker-banker'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    try {
+      const rows = await new Promise<{ banker_id: string; state: SessionState }[]>((resolve, reject) => { const request = db.transaction('snapshots').objectStore('snapshots').getAll(); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      return ids.every(id => rows.some(row => row.banker_id === banker && row.state.session.id === id));
+    } finally { db.close(); }
+  }, { banker: account.banker.id, ids: [first.session.id, second.session.id] })).toBe(true);
+  const foreignId = await page.evaluate(async ({ banker, session }) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('poker-banker'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    const foreign = crypto.randomUUID(), id = crypto.randomUUID();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction('snapshots', 'readwrite');
+        tx.oncomplete = () => resolve(); tx.onerror = tx.onabort = () => reject(tx.error);
+        const store = tx.objectStore('snapshots');
+        const read = store.get(`${banker}/${session}`);
+        read.onsuccess = () => { const state = structuredClone(read.result.state); state.session.id = id; state.session.name = 'Private Thursday from another banker'; store.put({ key: `${foreign}/${id}`, banker_id: foreign, state }); };
+      });
+    } finally { db.close(); }
+    return id;
+  }, { banker: account.banker.id, session: second.session.id });
+  await context.setOffline(true);
+  try {
+    await openMoney(page, queuePlayer.id);
+    await typeInput(page.getByTestId('money-amount'), '20');
+    await page.getByRole('button', { name: 'Save entry', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Not saved yet', exact: true })).toBeVisible();
+    await page.goto(`/?session=${first.session.id}`);
+    await expect(page.getByRole('heading', { name: first.session.name, exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Not saved yet', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Sessions', exact: true });
+    await expect(picker.getByTestId(`session-tab-${second.session.id}`)).toBeVisible();
+    await expect(picker.getByRole('status')).toContainText('Offline');
+    await expect(picker.getByTestId(`session-tab-${foreignId}`)).toHaveCount(0);
+    await typeInput(picker.getByLabel('Search sessions', { exact: true }), 'THURSDAY');
+    await expect(picker.getByTestId(`session-tab-${second.session.id}`)).toBeVisible();
+    await expect(picker.getByTestId(`session-tab-${first.session.id}`)).toHaveCount(0);
+    await expect(picker.getByTestId(`session-tab-${foreignId}`)).toHaveCount(0);
+    await typeInput(picker.getByLabel('Search sessions', { exact: true }), 'PRIVATE');
+    await expect(picker.getByText('No matching sessions.', { exact: true })).toBeVisible();
+    await typeInput(picker.getByLabel('Search sessions', { exact: true }), 'THURSDAY');
+    await picker.getByTestId(`session-tab-${second.session.id}`).click();
+    await expect(page.getByRole('heading', { name: second.session.name, exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Not saved yet', exact: true })).toBeVisible();
+    await expect(page.getByTestId('totals')).not.toContainText('$20.00');
+    await openMoney(page, draftPlayer.id);
+    await expect(page.getByTestId('money-amount')).toHaveValue('73.45');
+    await keepMoneyDraft(page);
+    const saved = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/sessions/${second.session.id}/entries`);
+    await context.setOffline(false);
+    expect((await saved).status()).toBe(200);
+    await expect(page.getByRole('heading', { name: 'Not saved yet', exact: true })).toHaveCount(0);
+    expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in').map(entry => entry.amount_minor)).toEqual(['2000']);
+    await openMoney(page, draftPlayer.id);
+    await expect(page.getByTestId('money-amount')).toHaveValue('73.45');
+  } finally { await context.setOffline(false); }
+});
+
+test('the online picker keeps old open sessions pinned and paginates closed history', async ({ page }) => {
+  await createAccount(page);
+  const currentSession = await newSession(page, 'Current cached session');
+  const oldOpen = await call<SessionState>(page, '/sessions', 'POST', { op_id: randomUUID(), name: 'Old open outside the history page', played_on: '2024-01-01', currency: 'USD' });
+  for (let index = 0; index < 31; index++) {
+    const state = await call<SessionState>(page, '/sessions', 'POST', { op_id: randomUUID(), name: `Closed fixture ${index}`, played_on: '2026-11-11', currency: 'USD' });
+    await call(page, `/sessions/${state.session.id}/close`, 'POST', { op_id: randomUUID(), expected_revision: state.revision });
+  }
+  await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: 'Sessions', exact: true });
+  const pinned = picker.getByRole('region', { name: 'Current and open sessions', exact: true });
+  await expect(pinned.getByTestId(`session-tab-${oldOpen.session.id}`)).toBeVisible();
+  await expect(pinned.getByTestId(`session-tab-${currentSession.session.id}`)).toHaveAttribute('aria-current', 'true');
+  await expect(picker.locator('[data-testid^="session-tab-"]')).toHaveCount(32);
+  await picker.getByRole('button', { name: 'Load more sessions', exact: true }).click();
+  await expect(picker.locator('[data-testid^="session-tab-"]')).toHaveCount(33);
+  await expect(picker.getByRole('button', { name: 'Load more sessions', exact: true })).toHaveCount(0);
+  await typeInput(picker.getByLabel('Search sessions', { exact: true }), 'Closed fixture 30');
+  await expect(picker.locator('[data-testid^="session-tab-"]')).toHaveCount(1);
+  await expect(picker.getByRole('button', { name: /Closed fixture 30/ })).toBeVisible();
 });
 
 test('rejected writes stay visible, block the session in order, and support retry or discard', async ({ page }, testInfo) => {
@@ -74,7 +166,7 @@ test('rejected writes stay visible, block the session in order, and support retr
   state = await call<SessionState>(page, `/sessions/${state.session.id}/reopen`, 'POST', { op_id: randomUUID(), reason: 'Apply queued entries' });
   state = await call<SessionState>(page, `/sessions/${state.session.id}/timing`, 'PATCH', { op_id: randomUUID(), started_at: state.session.started_at, ended_at: null });
   await page.getByTestId(`pending-${queued[0]!.op_id}`).getByRole('button', { name: 'Retry', exact: true }).click();
-  await expect(page.getByTestId(`player-${player.id}`)).toContainText('in $150.00');
+  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Bought $150.00');
   state = await current(page);
   expect(state.entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(3);
   const buys = state.entries.filter(entry => entry.kind === 'buy_in').sort((a, b) => Number(a.revision) - Number(b.revision));

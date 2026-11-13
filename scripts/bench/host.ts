@@ -56,8 +56,8 @@ export async function hostMonitor(serverGroup: number, postgres: number, engine:
     clearInterval(interval); lag.disable();
     const capture = pending;
     const errors: unknown[] = [];
-    try { await owner.stop(); } catch (error) { errors.push(error); }
     try { await withShutdownDeadline('Benchmark host capture shutdown', () => Promise.allSettled(capture ? [capture] : [])); } catch (error) { errors.push(error); }
+    try { await owner.stop(); } catch (error) { errors.push(error); }
     if (captureFailure) errors.push(captureFailure);
     if (errors.length) throw new AggregateError(errors, 'Benchmark host sampling cleanup failed');
     return summary();

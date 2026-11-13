@@ -1,34 +1,60 @@
-# Browser verification
+# Verification
 
-Run `scripts/mini.sh pnpm e2e`. Playwright builds the app and starts the local Hono server used by `pnpm start:local` with a fresh throwaway embedded Postgres for each application test. The native-input-only probe uses synthetic page content and does not need a database. The harness owns the server’s Node process directly so shutdown waits for the server, its connection pool and Postgres before removing its scratch directories. Each journey gets its own HTTPS loopback port, cookies and browser storage. The server generates a one-day self-signed certificate in its ignored temporary directory and removes it at shutdown. Browser contexts ignore certificate errors for that local test server; production Secure cookies stay enabled. The Chromium project also launches its Playwright-owned browser with `--ignore-certificate-errors`, because Chromium's service-worker script fetch does not honor the context-only bypass. This flag applies only to the local browser test process. The tests do not change any account, certificate trust store or production TLS settings. Browser workers run sequentially because update verification replaces the local static build.
+## Commands and ownership
 
-The four projects are iPhone WebKit with touch, iPhone WebKit with emulated standalone signals, desktop WebKit, and desktop Chromium. All browsers belong to Playwright. Existing browser caches are used when their revisions match the installed Playwright version.
+Run scoped files while iterating. Run the complete gate once before release:
 
-All typed fields in E2E helpers, specs and maintained verification recipes use `e2e/input.ts`. The driver selects, deletes and types through physical keyboard events. Native date and datetime fields use explicit keyboard segments for the suite's `en-US` locale; unsupported locales fail before entry. Normal typing checks native retention immediately. An explicit expected application value is used only for the stale-edit rejection check. A captured WebKit bulk fill reported success while the same input remained empty before submission; the trace does not record native React events. The earlier instrumented same-symptom probe and the native-input checks establish the keyboard path. The native probe covers both browser engines, prefixes, replacements, clear, leap dates, midnight, noon and AM/PM replacement. No retries or longer timeouts are added.
+The mini runner prepares and transfers SHA-verified archives of the pinned previous and legacy clients from this local Git history. Its Git-less mirror receives the release inputs automatically; no extra environment variables are required.
 
-The disposable e2e server sets `PB_TEST_EDGE_HEADERS=1`. The local server then removes non-cache headers from `304` responses after timing instrumentation, including `X-PB-Banker-ID`, to reproduce Vercel's response behavior. The verification skill launches this same disposable server, so its local recipes exercise stripped-header polling too. Normal `200` responses retain their owner proof. The wrapper is absent from the Vercel function entry and is off for an ordinary `pnpm start:local` launch unless explicitly enabled.
+```sh
+scripts/mini.sh pnpm typecheck
+scripts/mini.sh pnpm build
+scripts/mini.sh pnpm test
+scripts/mini.sh pnpm e2e
+```
 
-## What the emulation proves
+The runner checks shared-host capacity, installs the frozen lockfile under Node 22 and copies ignored `test-results/` and `evidence/` back. Vitest reports to `test-results/vitest.json`; Playwright retains its JSON/HTML report, failed traces and screenshots. No test uses a remote database. Keep builds, browser suites, update proofs and benchmarks serial because they share `dist/`.
 
-The recovery matrix covers all ledger kinds, new and existing players, session creation and settings, timing, close and reopen, sharing, timer start, pure void correction, rename and an unknown legacy command. UI checks edit and resubmit real requests, then inspect saved state; an unknown endpoint remains editable after its explicit rejection and can be discarded. Cross-tab checks retain typing, require conflict review, and preserve frozen requests.
+Database/API tests use real disposable embedded Postgres. Every browser application test owns a fresh database, HTTPS loopback server, cookies and storage. The input-only probe needs no database. All processes start through the owned-process registry; shutdown waits for registered groups, escalates with bounded waits, ends pools before Postgres, and removes only that run's PG/TLS/scratch directories. Pool error listeners consume idle-connection errors without leaking connection strings. Cleanup failures remain nonzero; evidence survives.
 
-The journeys exercise authentication, recovery and session revocation, account isolation, session-scoped persistent drafts, roster history, money and corrections, closing and cumulative results, sharing, polling, offline replay, IndexedDB forward migration, payment methods, timer persistence, result displays, reporting and the waiting-worker update path.
+Four projects use Playwright-owned browsers: `iphone-webkit`, `iphone-standalone`, `desktop-webkit` and `desktop-chromium`, with one worker and retries zero. Standalone emulates iPhone 15 touch/display-mode and `navigator.standalone`. Test contexts trust only their generated loopback certificate; Chromium's owned process also needs its local certificate-error flag for service workers. No system trust store or user browser is changed.
 
-Fault-injection and unchanged-poll checks block service workers when Playwright needs direct network observation. The cross-tab late-acknowledgement regression holds a real response after its database write commits and verifies that sign-out cancels the request without restoring cleared private storage. Update and offline journeys keep workers enabled.
+The disposable server strips non-cache headers from `304`, including banker identity, to reproduce Vercel. Ordinary `200` retains identity. This wrapper is absent from the function and disabled in an ordinary local launch unless `PB_TEST_EDGE_HEADERS=1` is explicit. The real Vercel entry is imported by its HTTP regression test to verify Web Request JSON bodies reach Hono.
 
-The standalone project sets `navigator.standalone` and the standalone display-mode media query before the page loads. The update journey dispatches hidden and visible document states, checks the waiting banner and activates a rebuilt worker on the same local server. It verifies retained authentication, drafts, session data and the new worker version.
+## Coverage and browser input
 
-## What remains open
+The permanent suites cover exact money and rational reports; append-only corrections/Undo; zero cash-outs; partial/late settlements; timers and unknown times; closed/reopened cumulative results; account/viewer isolation; idempotency/concurrency; request ownership and stripped `304`; persistent drafts, cross-tab conflicts and frozen-request recovery; quota failures, atomic sign-out consent, offline replay and recovery-code backup.
 
-Emulation does not prove a real iOS Home Screen installation, iOS process suspension or termination, real device storage eviction, a physical keyboard or the iOS software keyboard. Those acceptance items require a real iPhone. Local certificate-error bypass also does not prove production certificate trust or installation from a publicly trusted HTTPS origin. WebKit engine tests are evidence about the engine and viewport, not a claim that an actual Home Screen installation was tested.
+All typed fields use `e2e/input.ts`: select/delete/type through physical keyboard events, with native retention checked immediately. Date/datetime entry uses explicit `en-US` segments; unsupported locales fail. WebKit bulk fill previously reported success with an empty React input, so retries or longer timeouts are not substitutes for this input path.
 
-## Visual checks
+Fault-injection tests block workers only when direct network observation is required. They hold genuine responses after database commit, then verify ownership, retained uncertainty and exactly-once replay. Offline/update proofs retain workers. API fixture setup is identified separately from UI actions; saved-state checks use read-only public endpoints.
 
-Screenshots are written under ignored `evidence/screenshots/` in phone and desktop projects, in light and dark color schemes. Basic checks reject buttons without accessible names, visible text below 11 px and horizontal page overflow at 375 px. These checks do not replace a complete accessibility audit or a physical-device review.
+## Update proof
 
+Follow [offline and app updates](../.claude/skills/verify-poker-banker/features/offline-and-app-updates.md) for pinned tracked-source archives and launch variables. `drive updates` and the browser suite share `scripts/verify-update-journey.ts` and `scripts/verify-update-review.ts`. Run it last, then clean up; it changes the shared static build.
 
-## Vercel production-build check
+Real builds, HTTPS, workers, Cache Storage, UI writes and Postgres prove:
 
-Round 5 was built from a clean source archive on this Mac with Node 22, a fresh frozen-lockfile install and `vercel build --prod`. Only the explicitly supplied `.vercel/project.json` link metadata was copied; no environment files were copied, read or downloaded. The clean copy received nonsecret local build settings (Vite, `pnpm build`, `pnpm install --frozen-lockfile`, `dist`, Node `22.x`) so the check did not need `vercel pull` or `--yes`. Receipts and exact source/patch hashes are in `evidence/vercel/r5-final/`.
+- Idle A discovers/adopts B automatically; an editing sheet, offline outbox, active request or held committed Undo blocks unsafe reload. Drafts and authentication survive; replay writes once.
+- Previous `dc2082b` v2 drafts/outbox replay unchanged against the current API, and the actual archived reader accepts current records.
+- Overlapping lifecycle signals and stalled headers/bodies initiate one navigation. The navigation deadline covers the body and falls back to the cached shell.
+- Server-deleted lazy modules remain reachable from retained release caches. Normal app builds have one static entry; proof-only modules are emitted by the same build/precache path.
+- Real HTML/bundle skew recovers before the entry executes, with at most two recovery navigations. A healthy real module held 18 seconds completes without a timeout reload.
+- Seven deployments, including a failed B installation whose document stays open, retain complete manifests and finite per-cache URL/body-byte inventories. Unknown-client fallback pins clear after identification. Original live assets/drafts remain; closing documents collects unreferenced metadata/assets.
+- Exact legacy `30209c1` cannot acquire request guards retroactively. Its waiting worker receives ACTIVATE but no old-controller fetch events during a held POST, so quiet time cannot establish safety. Activation remains deferred until legacy documents close or navigate; cold adoption preserves drafts and queued bodies. This is deliberately not a claim of hot adoption after legacy resume.
 
-`cle1` is the function region. Existing locked optional dependencies now include the Linux ARM64 binding required by the emitted function. Server/domain/API relative imports use explicit `.js` suffixes so the emitted ESM loads under plain Node 22. The artifact check imported the complete handler, loaded bundled `pg`, and hashed/verified Argon2id with zero database queries. It verified the matching Linux GNU ELF binding is present; this Mac cannot prove that binary executes on Linux. No deploy or remote database was used. The mini runner excludes `.vercel/` along with environment files.
+The owned TLS proof forwarder delays genuine upstream responses or modules; it does not manufacture response bodies. Normal builds reject the diagnostic observer. Cache byte counts are decoded response sizes, not physical disk allocation. Named opt-in review cases are documented in the feature file; never run them alongside the shared full update journey.
+
+## UX and evidence
+
+The [verification skill](../.claude/skills/verify-poker-banker/SKILL.md) owns launch, doctor, ledger/feature driving, evidence and cleanup. Its feature map supplies current selectors and reusable layout captures. Require saved-state proof alongside a Saved toast. Keep passwords, cookies and recovery codes out of artifacts.
+
+Layout captures check light/dark phone at 393×659 and 393×852, desktop 1440×1000, four/six complete player rows, long names and maximum money, debt contrast, all money sheets and invalid fields, session picker/settings, and live/revoked viewers. Keyboard emulation uses a 380px visual viewport. The ready card restores two-control close; the footer retains its Buy-in/New session meaning. Undo has eight unpaused seconds and retains recorded timer history. Reports keep hand-computed values and grouped variation formatting.
+
+Basic accessibility checks require named buttons, visible text of at least 11px, 44px control targets and no horizontal overflow at 375px. They do not replace a full accessibility audit.
+
+## Limits
+
+Browser emulation proves engine, viewport and controlled application behavior. It does not prove real Home Screen installation, iOS suspension/termination or worker lifetime, OS storage eviction, actual software-keyboard panning, physical home-indicator clearance or public HTTPS trust. Those remain real-device acceptance items. Local benchmarks also do not establish deployed latency; see [PERFORMANCE](PERFORMANCE.md).
+
+The earlier clean-copy `vercel build --prod` proof used only supplied project-link metadata, no downloaded/read environment files, and resides in `evidence/vercel/r5-final/`. Re-run it explicitly when deployment configuration changes; it is not part of local browser acceptance.

@@ -65,7 +65,10 @@ it('keeps a mismatched ordinary form reachable after reload', async () => {
   expect(await reopened.listRecoveredDrafts(owner)).toEqual([expect.objectContaining({ key, value: expect.objectContaining({ reason: value.reason }), request: expect.objectContaining({ path: request.path }) })]);
 });
 
-it('reconstructs a current money edit rather than resubmitting the earlier operation amount', async () => {
+it.each([
+  ['60.00', '6000'], ['12.5', '1250'], ['.75', '75'], ['$1,234.56', '123456'],
+  ['$90,071,992,547,409.93', '9007199254740993'],
+])('resubmits the current recovered amount %s exactly rather than the earlier operation amount', async (amount, amountMinor) => {
   const data = await import('../src/client/data');
   const key = data.draftKey(owner, session, 'buy_in', 'player');
   const request = { path: `/api/sessions/${session}/entries`, method: 'POST', body: { op_id: 'old', player_id: 'player', kind: 'buy_in', amount_minor: '1000', paid_now: true, method: 'cash', occurred_at: null } };
@@ -73,11 +76,30 @@ it('reconstructs a current money edit rather than resubmitting the earlier opera
   const recovery = (await data.listRecoveredDrafts(owner))[0]!;
   expect(recovery.request?.body).toMatchObject({ amount_minor: '5000', occurred_at: null });
   vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/auth/me' ? { banker: { id: owner, username: owner } } : { ok: true }, { headers: { 'X-PB-Banker-ID': owner } })));
-  await data.editRecoveredDraft(recovery, { ...(recovery.value as object), amount: '60.00' }, 'submit');
+  await data.editRecoveredDraft(recovery, { ...(recovery.value as object), amount }, 'submit');
   const sends = vi.mocked(fetch).mock.calls.filter(([path]) => path !== '/api/auth/me');
   expect(sends).toHaveLength(1);
-  expect(JSON.parse(String(sends[0]![1]?.body))).toMatchObject({ amount_minor: '6000', occurred_at: null });
+  expect(JSON.parse(String(sends[0]![1]?.body))).toMatchObject({ amount_minor: amountMinor, occurred_at: null });
   expect(await data.listRecoveredDrafts(owner)).toEqual([]);
+});
+
+it.each([
+  ['1.005', 'Enter no more than 2 decimal places for USD.'],
+  ['92233720368547758.08', 'Enter $92,233,720,368,547,758.07 or less.'],
+])('keeps the complete recovered draft when amount %s needs correction', async (amount, message) => {
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, 'buy_in', 'player');
+  const request = { path: `/api/sessions/${session}/entries`, method: 'POST', body: { op_id: 'old', player_id: 'player', kind: 'buy_in', amount_minor: '1000', paid_now: true, method: 'cash', occurred_at: null } };
+  const value = { op_id: 'fresh', amount, kind: 'buy_in', paid_now: true, method: 'cash', note: 'Keep this note', occurred_at: '', __recovered_occurred_at: null, __operation_conflict: 'Review', __recovery_request: request, __recovery_currency: 'USD' };
+  await data.writeDraft(key, value);
+  const recovery = (await data.listRecoveredDrafts(owner))[0]!;
+  expect(recovery.request).toBeUndefined();
+  expect(recovery.request_error).toBe(message);
+  await expect(data.editRecoveredDraft(recovery, recovery.value, 'submit')).rejects.toThrow(message);
+  expect(await data.readDraft(key)).toEqual(value);
+  expect(await data.listSubmittedDrafts(owner)).toEqual([]);
+  expect(await data.listOutbox(owner)).toEqual([]);
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 it.each(['save', 'discard', 'submit'] as const)('rejects a stale recovered %s before changing a newer draft or sending', async action => {
@@ -154,14 +176,63 @@ it.each([
   expect(recovered.request?.body).toMatchObject({ kind: edit.kind, amount_minor: edit.amount === '0.00' ? '0' : '5000', paid_now: edit.paid_now });
 });
 
-it('uses an edited raw minor amount when a source-less entry has no currency', async () => {
+it.each([
+  ['7500', '7500'], [' 0007500 ', '7500'], ['9223372036854775807', '9223372036854775807'],
+])('submits edited raw minor amount %s exactly when a source-less entry has no currency', async (amount, expected) => {
   const data = await import('../src/client/data');
   await data.enqueue({ banker_id: owner, session_id: session, path: `/api/sessions/${session}/entries`, label: 'Payment out', body: { op_id: 'legacy', kind: 'payment_out', player_id: 'player', amount_minor: '5000', method: 'cash', occurred_at: null } });
   const stop = data.syncOutbox(owner, () => {}, () => {});
   try { await vi.waitFor(async () => expect(await data.listOutbox(owner)).toEqual([])); } finally { stop(); }
   const recovered = (await data.listRecoveredDrafts(owner))[0]!;
-  await data.editRecoveredDraft(recovered, { ...(recovered.value as object), amount_minor: '7500' }, 'save');
-  expect((await data.listRecoveredDrafts(owner))[0]!.request?.body.amount_minor).toBe('7500');
+  await data.editRecoveredDraft(recovered, { ...(recovered.value as object), amount_minor: amount }, 'save');
+  const edited = (await data.listRecoveredDrafts(owner))[0]!;
+  expect(edited.request?.body).toMatchObject({ amount_minor: expected, method: 'cash' });
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/auth/me' ? { banker: { id: owner, username: owner } } : { ok: true }, { headers: { 'X-PB-Banker-ID': owner } })));
+  await data.editRecoveredDraft(edited, edited.value, 'submit');
+  const sends = vi.mocked(fetch).mock.calls.filter(([path]) => path !== '/api/auth/me');
+  expect(sends).toHaveLength(1);
+  expect(JSON.parse(String(sends[0]![1]?.body))).toMatchObject({ amount_minor: expected, method: 'cash' });
+});
+
+it.each([
+  { field: 'amount_minor', form: 'payment_out', path: `/api/sessions/${session}/entries`, method: 'POST', amount: '12.50', message: 'Amount: use digits only, without decimal points, commas or currency symbols.' },
+  { field: 'amount_minor', form: 'payment_out', path: `/api/sessions/${session}/entries`, method: 'POST', amount: '9223372036854775808', message: 'Amount: enter 9223372036854775807 minor units or less.' },
+  { field: 'amount_minor', form: 'payment_out', path: `/api/sessions/${session}/entries`, method: 'POST', amount: '0', message: 'Enter an amount above zero. Only a cash-out may be zero.' },
+  { field: 'replacement_amount_minor', form: 'correction', path: `/api/sessions/${session}/entries/entry/void`, method: 'POST', amount: '$1250', message: 'Replacement amount: use digits only, without decimal points, commas or currency symbols.' },
+  { field: 'replacement_amount_minor', form: 'correction', path: `/api/sessions/${session}/entries/entry/void`, method: 'POST', amount: '9223372036854775808', message: 'Replacement amount: enter 9223372036854775807 minor units or less.' },
+  { field: 'big_blind_minor', form: 'settings', path: `/api/sessions/${session}`, method: 'PATCH', amount: '1,250', message: 'Big blind: use digits only, without decimal points, commas or currency symbols.' },
+  { field: 'big_blind_minor', form: 'settings', path: `/api/sessions/${session}`, method: 'PATCH', amount: '9223372036854775808', message: 'Big blind: enter 9223372036854775807 minor units or less.' },
+  { field: 'big_blind_minor', form: 'settings', path: `/api/sessions/${session}`, method: 'PATCH', amount: '0', message: 'Enter a big blind above zero.' },
+])('preserves a raw recovered $field draft and sends nothing for $amount', async ({ field, form, path, method, amount, message }) => {
+  const data = await import('../src/client/data');
+  const key = data.draftKey(owner, session, form);
+  const body = { op_id: 'old', [field]: '5000', ...(form === 'payment_out' ? { kind: 'payment_out', player_id: 'player', method: 'cash', occurred_at: null } : {}) };
+  const value = { op_id: 'fresh', [field]: amount, note: 'Keep this note', ...(form === 'payment_out' ? { kind: 'payment_out', method: 'cash', __recovery_raw_amount: true } : {}), __operation_conflict: 'Review', __recovery_request: { path, method, body } };
+  await data.writeDraft(key, value);
+  const recovery = (await data.listRecoveredDrafts(owner))[0]!;
+  expect(recovery.request).toBeUndefined();
+  expect(recovery.request_error).toBe(message);
+  await expect(data.editRecoveredDraft(recovery, recovery.value, 'submit')).rejects.toThrow(message);
+  expect(await data.readDraft(key)).toEqual(value);
+  expect(await data.listSubmittedDrafts(owner)).toEqual([]);
+  expect(await data.listOutbox(owner)).toEqual([]);
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it('preserves an unset blind and a derived signed discrepancy beyond the per-entry maximum', async () => {
+  const data = await import('../src/client/data');
+  for (const operation of [
+    { form: 'settings', path: `/api/sessions/${session}`, method: 'PATCH', body: { big_blind_minor: null } },
+    { form: 'close', path: `/api/sessions/${session}/close`, method: 'POST', body: { expected_revision: '7', accept_discrepancy_minor: '-18446744073709551614' } },
+  ]) {
+    const request = { path: operation.path, method: operation.method, body: { ...operation.body, op_id: 'old' } };
+    await data.writeDraft(data.draftKey(owner, session, operation.form), { op_id: 'fresh', ...operation.body, __operation_conflict: 'Review', __recovery_request: request });
+  }
+  const recoveries = await data.listRecoveredDrafts(owner);
+  expect(recoveries).toHaveLength(2);
+  expect(recoveries.find(recovery => recovery.key.includes('/settings'))?.request?.body).toMatchObject({ big_blind_minor: null });
+  expect(recoveries.find(recovery => recovery.key.includes('/close'))?.request?.body).toMatchObject({ accept_discrepancy_minor: '-18446744073709551614' });
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 it('does not fall back to a previous amount when the decimal amount was cleared', async () => {

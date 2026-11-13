@@ -6,10 +6,17 @@ import { resolve, join, relative } from 'node:path';
 import { summarize } from './bench/stats';
 import type { Sample } from './bench/types';
 
-const [id, beforePath, afterPath, metrics] = process.argv.slice(2);
+const [id, beforePath, afterPath, metrics, ...extra] = process.argv.slice(2);
+const option = (name: string, fallback: string) => extra.includes(name) ? extra[extra.indexOf(name) + 1]! : fallback;
+const count = Number(option('--samples', '1'));
+assert(Number.isInteger(count) && count >= 1 && count <= 20);
+const workload = option('--workload', 'large');
+assert(['small', 'large', 'long'].includes(workload));
+const journeys = extra.includes('--journeys');
 assert(id && /^[a-z0-9-]+$/.test(id) && beforePath && afterPath && metrics, 'Usage: tsx scripts/bench-compare.ts ID BEFORE_DIRECTORY AFTER_DIRECTORY METRICS');
 const root = resolve('.');
-const output = resolve('evidence/bench/hillclimb', id);
+const output = resolve(option('--output', `evidence/bench/hillclimb/${id}`));
+assert(!relative(resolve('evidence/bench'), output).startsWith('..'));
 await mkdir(output, { recursive: true });
 const results: { side: string; pair: number; metrics: ReturnType<typeof summarize>; samples: Sample[]; noisyHost: boolean }[] = [];
 const owner = createProcessOwner();
@@ -37,13 +44,13 @@ const handlers = signals.map(signal => {
   return { signal, handler };
 });
 try {
-  for (let pair = 1; pair <= 5; pair++) for (const [side, directory] of [['A', beforePath], ['B', afterPath]] as const) {
+  for (let pair = 1; pair <= 5; pair++) for (const [side, directory] of (pair % 2 ? [['A', beforePath], ['B', afterPath]] as const : [['B', afterPath], ['A', beforePath]] as const)) {
     checkInterrupted();
     const cwd = resolve(directory);
     assert(!relative(root, cwd).startsWith('..'), 'Comparison worktrees must stay in the project');
     const destination = `evidence/bench/comparison-${id}-${side}-${pair}`;
     console.log(`Comparison ${id} pair ${pair}/5 side ${side}`);
-    child = spawnOwned(owner, process.execPath, ['--import', 'tsx', 'scripts/bench.ts', '--runs', '1', '--samples', '1', '--wait-ms', '0', '--skip-build', '--metrics', metrics, '--output', destination], { cwd, detached: true, stdio: ['inherit', 'inherit', 'inherit', 'ipc'] });
+    child = spawnOwned(owner, process.execPath, ['--import', 'tsx', 'scripts/bench.ts', '--runs', '1', '--samples', String(count), '--workload', workload, ...(journeys ? ['--journeys'] : []), '--memory-cycles', '0', '--wait-ms', '0', '--skip-build', '--metrics', metrics, '--output', destination], { cwd, detached: true, stdio: ['inherit', 'inherit', 'inherit', 'ipc'] });
     stopping = undefined;
     await running(() => new Promise<void>((done, reject) => {
       child!.once('error', reject); child!.once('exit', code => code === 0 ? done() : reject(new Error(`${side}${pair} failed: ${code}`)));
@@ -76,7 +83,7 @@ if (!interrupted) {
     const wins = after.filter((value, index) => value < before[index]!).length;
     return { metric, before, after, beforeMedian: a, afterMedian: b, deltaPercent: (b - a) / a * 100, beforeRange: [Math.min(...before), Math.max(...before)], afterRange: [Math.min(...after), Math.max(...after)], pairedWins: wins, noiseFloorMs: Math.max(spread(before), spread(after)), clearsNoise: wins === 5 && a - b > Math.max(spread(before), spread(after)) };
   });
-  await withShutdownDeadline('Comparison final evidence', () => writeFile(join(output, 'comparison.json'), JSON.stringify({ id, order: 'A,B repeated five times', comparisons, errors: 0, noisyHost: results.some(run => run.noisyHost), receipts: results.map(run => ({ side: run.side, pair: run.pair, samples: run.samples.length })) }, null, 2)));
+  await withShutdownDeadline('Comparison final evidence', () => writeFile(join(output, 'comparison.json'), JSON.stringify({ id, order: 'Five pairs alternating A,B / B,A', samplesPerLeg: count, workload, journeys, comparisons, errors: 0, noisyHost: results.some(run => run.noisyHost), receipts: results.map(run => ({ side: run.side, pair: run.pair, samples: run.samples.length })) }, null, 2)));
   console.log(JSON.stringify(comparisons, null, 2));
   console.log(`Comparison evidence: ${output}`);
 }

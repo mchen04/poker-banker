@@ -33,7 +33,7 @@ async function rejects(response: Response, status: number, code?: string) {
   if (code) expect(body.error.code).toBe(code);
 }
 async function account(): Promise<Account> {
-  const response = await request(null, '/auth/signup', 'POST', { username: `feedback-${randomUUID().slice(0, 12)}`, password: 'a-secure-feedback-password' });
+  const response = await request(null, '/auth/signup', 'POST', { username: `feedback-${randomUUID().slice(0, 12)}`, password: randomUUID() });
   const result = await ok<{ banker: { id: string } }>(response);
   return { id: result.banker.id, cookie: response.headers.get('set-cookie')!.split(';')[0]! };
 }

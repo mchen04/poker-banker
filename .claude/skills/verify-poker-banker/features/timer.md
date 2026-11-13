@@ -10,13 +10,15 @@ Session time is server state. A timer can start manually or with the first buy-i
 - `timer-correction` saves corrected bounds and visible history.
 - `timer-invalid-range` rejects an end before its start.
 - `timer-close` freezes elapsed time when closed.
+- `timer-retained-after-undo` keeps a lasting Timer started … · Correct times line when voiding buy-ins leaves no confirmed buy-in and a running timer. It survives reload and clears after timing correction or a new buy-in.
 
 ## How to get to it (user POV)
 
 - Choose `Start timer` beside the session timer in a new game.
 - Alternatively record the game's first buy-in.
 - Choose `Session menu` → `Correct times`, edit `Started at` and `Ended at`, then `Save timing`.
-- Close through `Session menu` → `Close game`.
+- After Undo leaves no buy-ins, use the lasting `Correct times` line below the timer, even after the toast disappears or the page reloads. The focused follow-up recipe in [the feature map](README.md#ready-to-close-and-lasting-timer-follow-ups) proves this path.
+- Close through the ready-to-close card or `Session menu` → `Close session`.
 
 ## Driving it with Playwright
 
@@ -30,13 +32,13 @@ Preconditions:
 ```ts
 import { typeInput } from '../e2e/input';
 import { expect } from '@playwright/test';
-import { addPlayer, call, closeSession, current, menu, money, newSession } from '../e2e/helpers';
+import { newContextLike, addPlayer, call, closeSession, current, menu, money, newSession, workspaceReady } from '../e2e/helpers';
 import type { SessionState } from '../src/domain/session';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 export default async function ({ page, context, browser, baseURL, runId, step, checkState }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   await newSession(page, 'Verify manual timer');
   await expect(page.getByTestId('session-timer')).toHaveText('Timer not started');
   await step('timer-manual-start-before');
@@ -52,7 +54,7 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
   await expect.poll(() => page.getByTestId('session-timer').textContent()).not.toBe(firstText);
   await page.reload();
   expect((await checkState()).session.started_at).toBe(started);
-  const otherContext = await browser.newContext({ baseURL, ignoreHTTPSErrors: new URL(baseURL).hostname === '127.0.0.1', locale: 'en-US', timezoneId: 'UTC' });
+  const otherContext = await newContextLike(page, browser, baseURL);
   try {
     await otherContext.addCookies(await context.cookies());
     const other = await otherContext.newPage();
@@ -65,7 +67,8 @@ export default async function ({ page, context, browser, baseURL, runId, step, c
     await typeInput(page.getByLabel('Started at', { exact: true }), corrected.slice(0, 19));
     await typeInput(page.getByLabel('Ended at', { exact: true }), new Date(Date.parse(corrected) - 1000).toISOString().slice(0, 19));
     await page.getByRole('button', { name: 'Save timing', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('Request validation failed');
+    await expect(page.getByRole('alert')).toContainText('End must be at or after a valid start. Correct these times.');
+    await expect(page.getByLabel('Ended at', { exact: true })).toBeFocused();
     expect((await checkState()).session.started_at).toBe(started);
     await typeInput(page.getByLabel('Ended at', { exact: true }), '');
     await page.getByRole('button', { name: 'Save timing', exact: true }).click();

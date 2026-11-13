@@ -87,7 +87,7 @@ test('another tab signing out preserves the failed draft through auth reset and 
     expect(await storedAmount(page, key)).toBeUndefined();
     await typeInput(page.getByLabel('Username', { exact: true }), account.username);
     await typeInput(page.getByLabel('Password', { exact: true }), password);
-    await page.getByRole('button', { name: 'Sign in to workspace', exact: true }).click();
+    await page.getByRole('button', { name: 'Sign in to table', exact: true }).click();
     await expect(page.getByTestId(`player-${player.id}`)).toBeVisible();
     await openMoney(page, player.id);
     await expect(page.getByTestId('money-amount')).toHaveValue('123');

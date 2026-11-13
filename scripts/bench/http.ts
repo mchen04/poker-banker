@@ -24,8 +24,11 @@ export class LocalClient implements BenchmarkClient {
           if (cookie) this.sessionCookie = cookie.split(';')[0]!;
           let body: unknown = null;
           try { if (bytes.length) body = JSON.parse(bytes.toString('utf8')); } catch { body = bytes.toString('utf8'); }
-          const timing = String(response.headers['server-timing'] ?? '').match(/app;dur=([\d.]+)/);
-          resolve({ status: response.statusCode ?? 0, body, ms: performance.now() - started, serverMs: timing ? Number(timing[1]) : null, bytes: bytes.length });
+          const timing = String(response.headers['server-timing'] ?? '');
+          const app = timing.match(/(?:^|,\s*)app;dur=([\d.]+)/);
+          const db = timing.match(/(?:^|,\s*)db;dur=([\d.]+)/);
+          const count = timing.match(/(?:^|,\s*)db_count;desc="(\d+)"/);
+          resolve({ status: response.statusCode ?? 0, body, ms: performance.now() - started, serverMs: app ? Number(app[1]) : null, dbMs: db ? Number(db[1]) : null, queryCount: count ? Number(count[1]) : null, bytes: bytes.length });
         });
       });
       request.setTimeout(15000, () => request.destroy(new Error('Owned benchmark request timed out')));

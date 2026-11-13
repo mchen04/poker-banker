@@ -7,16 +7,18 @@ The banker closes only after everyone with entries has cashed out. A mismatch ne
 - `close-playing-blocker` explains who still needs to cash out.
 - `close-pending-blocker` explains unsaved entries separately.
 - `close-balanced` closes matching chip totals.
+- `close-ready-card` offers Everyone has cashed out · Close session and an unsettled count once no player is playing.
 - `close-discrepancy` requires acceptance of the exact displayed difference.
 - `reopen-reason` records why the game reopened.
 - `cumulative-reclose-once` counts closed games once and keeps outstanding payments separate.
 
 ## How to get to it (user POV)
 
-- In an open session, choose `Session menu` → `Close game`.
-- Cash out blockers through their player sheets. Save or discard Not saved yet entries before closing.
-- If off by an amount, check `Accept discrepancy of …`, then choose `Close session`.
-- In a closed game, choose `Session menu` → `Reopen game`, enter `Reason`, then choose `Reopen session`.
+- After everyone has cashed out, choose `Everyone has cashed out · Close session`, then confirm. The card also names outstanding settlements; it does not bypass the existing blockers or discrepancy acceptance.
+- In an open session, choose `Session menu` → `Close session`. The centre action remains Buy-in on Table and Players; closing never replaces it.
+- Tap a full-width blocker row to open that player’s cash-out. Save or discard Not saved yet entries before closing.
+- If chip totals differ, check `Accept discrepancy of …`, then choose `Close session`.
+- In a closed game, choose `Session menu` → `Reopen session`, enter `Reason`, then choose `Reopen session`.
 - Choose `Players` and a player to inspect finalized and outstanding amounts and Past sessions.
 
 ## Driving it with Playwright
@@ -33,14 +35,14 @@ import { typeInput } from '../e2e/input';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { expect } from '@playwright/test';
-import { addPlayer, call, closeSession, menu, money, newSession } from '../e2e/helpers';
+import { addPlayer, call, closeSession, menu, money, newSession, workspaceReady } from '../e2e/helpers';
 import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
 
 type History = { cumulative: { currency: string; result_minor: string }[]; sessions: { session: { id: string; status: string } }[] };
 
 export default async function ({ page, runId, evidence, step }: RecipeContext) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
+  await workspaceReady(page);
   const tag = `${runId.slice(-8)}-${randomUUID().slice(0, 6)}`;
   const first = await newSession(page, `Verify balanced close ${tag}`);
   const winner = await addPlayer(page, `Win ${tag}`);
@@ -49,7 +51,7 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
   await money(page, loser.id, '100');
   await menu(page, 'Close session');
   await expect(page.getByText('Cash out everyone with entries before closing.', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
   await step('close-playing-blocker');
   await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
   await money(page, winner.id, '140', { kind: 'Cash out', paid: true });
@@ -72,12 +74,12 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
   await money(page, winner.id, '100');
   await money(page, winner.id, '90', { kind: 'Cash out', paid: true });
   await menu(page, 'Close session');
-  await expect(page.getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
   await expect(page.getByLabel('Accept discrepancy of −$10.00', { exact: true })).toBeVisible();
   await step('close-discrepancy-before-acceptance');
   await page.getByLabel('Accept discrepancy of −$10.00', { exact: true }).check();
   await page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true }).click();
-  await expect(page.getByText('Closed, off by −$10.00', { exact: true })).toBeVisible();
+  await expect(page.getByText('Closed · chip discrepancy', { exact: true })).toBeVisible();
   history = await call<History>(page, `/players/${winner.id}`);
   expect(history.cumulative).toContainEqual({ currency: 'USD', result_minor: '3000' });
   expect(history.sessions.filter(row => row.session.status === 'closed')).toHaveLength(2);
@@ -93,7 +95,7 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
 ## Gotchas
 
 - Outstanding payments do not block a balanced chip close. They remain visible separately and are not player profit.
-- Discrepancy is cash-outs minus buy-ins. A $90 cash-out against a $100 buy-in displays −$10.00, including the consent label and closed recap.
+- Discrepancy is chips returned minus chips bought; it is separate from payments. A $90 cash-out against a $100 buy-in displays −$10.00, including the consent label and closed recap.
 - Discrepancy consent belongs to the displayed revision. If another write changes it, inspect the new amount and consent again.
 - Reopen does not erase timing history or unset the end. This recipe re-closes without resuming play.
 - A positive result must show a plus sign, a negative result a minus sign and zero Even. Color alone is insufficient.

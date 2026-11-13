@@ -40,9 +40,9 @@ it('loads the forty-player seeded roster with six database calls and preserves h
   const other = randomUUID();
   expect((await app.request(`${origin}/api/players/${other}`, { headers: { cookie } })).status).toBe(404);
 });
-it('matches history summary JSON for all 21 seeded bankers and searched rosters', async () => {
+it('matches history summary JSON for all 22 seeded bankers and searched rosters', async () => {
   const bankers = await database.pool.query<{ id: string }>('SELECT id FROM bankers ORDER BY id');
-  expect(bankers.rows).toHaveLength(21);
+  expect(bankers.rows).toHaveLength(22);
   let checked = 0;
   for (const banker of bankers.rows) {
     const players = await database.pool.query<{ id: string; name_key: string }>('SELECT id,name_key FROM players WHERE banker_id=$1 ORDER BY name_key,id', [banker.id]);
@@ -57,7 +57,7 @@ it('matches history summary JSON for all 21 seeded bankers and searched rosters'
       expect(JSON.stringify(await playerRoster(database.pool, banker.id, search))).toBe(JSON.stringify(matched));
     }
   }
-  expect(checked).toBe(280);
+  expect(checked).toBe(320);
 });
 it('normalizes API roster searches before preserving summary JSON', async () => {
   for (const [search, count] of [['PLAYER', 40], ['  Player 01  ', 0], ['Ｐｌａｙｅｒ ０１', 1], ['absent', 0], ['', 40]] as const) {

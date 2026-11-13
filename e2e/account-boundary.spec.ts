@@ -1,5 +1,5 @@
 import { typeInput } from './input';
-import type { Page, Request } from '@playwright/test';
+import { request as apiRequests, type Page, type Request } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { test, expect } from './fixtures';
@@ -41,21 +41,23 @@ async function accounts(page: Page) {
   const a = await createAccount(page);
   const aCookies = await page.context().cookies();
   const origin = new URL(page.url()).origin;
-  const response = await page.request.post('/api/auth/signup', { headers: { origin }, data: { username: `boundary-${crypto.randomUUID().slice(0, 12)}`, password } });
-  expect(response.status()).toBe(200);
-  const b = await response.json() as { banker: { id: string; username: string } };
-  const bCookies = await page.context().cookies();
-  await page.context().addCookies(aCookies);
-  return { a, b, aCookies, bCookies };
+  const setup = await apiRequests.newContext({ baseURL: origin, ignoreHTTPSErrors: true });
+  try {
+    const response = await setup.post('/api/auth/signup', { headers: { origin }, data: { username: `boundary-${crypto.randomUUID().slice(0, 12)}`, password } });
+    expect(response.status()).toBe(200);
+    const b = await response.json() as { banker: { id: string; username: string } };
+    const bCookies = (await setup.storageState()).cookies;
+    return { a, b, aCookies, bCookies };
+  } finally { await setup.dispose(); }
 }
 
 async function probe(page: Page) {
   const source = await readFile('src/client/data.ts', 'utf8');
   const compile = (value: string) => ts.transpileModule(value, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
-  for (const match of source.matchAll(/from ['"](\.\/[^'"]+)['"]/g)) {
-    const name = match[1]!.slice(2);
-    const dependency = await readFile(`src/client/${name}.ts`, 'utf8');
-    await page.route(`**/${name}`, route => route.fulfill({ contentType: 'text/javascript', body: compile(dependency) }));
+  for (const match of compile(source).matchAll(/from ['"](\.\.?\/[^'"]+)['"]/g)) {
+    const name = match[1]!;
+    const dependency = await readFile(new URL(`../src/client/${name}.ts`, import.meta.url), 'utf8');
+    await page.route(`**${new URL(name, 'https://probe.invalid/account-probe.js').pathname}`, route => route.fulfill({ contentType: 'text/javascript', body: compile(dependency) }));
   }
   await page.route('**/account-probe.js', route => route.fulfill({ contentType: 'text/javascript', body: compile(source) }));
   await page.route('**/account-probe-second.js', route => route.fulfill({ contentType: 'text/javascript', body: compile(source) }));
@@ -171,17 +173,13 @@ for (const recovery of ['same mounted sheet', 'workspace'] as const) {
     const submitted = (await records(page)).drafts.find(draft => draft.value.__submitted)!;
     expect(submitted.key.startsWith(`${a.banker.id}/`)).toBe(true);
     if (recovery === 'workspace') await page.reload();
-    let switchCookie = true;
+    const check = recovery === 'workspace' ? page.getByRole('button', { name: 'Check saved form: Add player', exact: true }) : page.getByRole('button', { name: 'Check saved result', exact: true });
+    await expect(check).toBeVisible();
     await page.route('**/api/auth/me', async route => {
       const response = await route.fetch();
       expect((await response.json()).banker.id).toBe(a.banker.id);
-      if (switchCookie) {
-        switchCookie = false;
-        await page.context().addCookies(bCookies);
-      }
       await route.fulfill({ response });
     });
-    const check = recovery === 'workspace' ? page.getByRole('button', { name: 'Check saved form: Add player', exact: true }) : page.getByRole('button', { name: 'Check saved result', exact: true });
     const rejected = page.waitForResponse(response => new URL(response.url()).pathname === path && response.request().method() === 'POST');
     await check.click();
     expect((await rejected).status()).toBe(404);
