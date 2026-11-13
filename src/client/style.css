@@ -63,6 +63,7 @@ ul { padding-left: 20px; }
 .session-heading h1 { margin: 0; min-width: 0; font-size: 1.5rem; line-height: 2rem; }
 .session-title { display: inline-flex; align-items: center; max-width: 100%; min-height: 44px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text); font: inherit; letter-spacing: inherit; text-align: left; overflow-wrap: normal; }
 .session-title-text, span.session-title { min-width: 0; overflow-wrap: break-word; }
+.session-title-end { white-space: nowrap; }
 span.session-title { display: block; padding-block: 6px; }
 .session-title .icon { display: inline-block; width: 20px; height: 20px; margin-left: 4px; vertical-align: -3px; color: var(--muted); }
 .session-heading-actions { display: flex; align-items: center; margin-right: -10px; }
@@ -348,10 +349,10 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
   .app-bar { display: none; }
 }
 @media (min-width: 375px) {
-  .with-actions .player-card.actions-below .player-row { grid-template-rows: auto minmax(44px, auto); row-gap: 2px; padding-right: 16px; }
-  .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; }
+  .with-actions .player-card.actions-below .player-row { grid-template-rows: auto minmax(44px, auto); row-gap: 2px; }
+  .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; margin-right: calc(0px - var(--actions-w)); }
   .player-card.actions-below .player-state { grid-area: 2 / 1; }
-  .player-card.actions-below .player-detail { grid-area: 2 / 2; margin-right: var(--actions-w); }
+  .player-card.actions-below .player-detail { grid-area: 2 / 2; }
   .player-card.actions-below .player-actions { align-self: end; padding-bottom: 8px; }
 }
 @media (max-width: 374px) {

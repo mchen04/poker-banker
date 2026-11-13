@@ -90,12 +90,14 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
     observer?.observe(section);
     return () => observer?.disconnect();
   }, [state, mode, actions]);
+  const titleParts = Array.from(new Intl.Segmenter().segment(settings.name), part => part.segment);
+  const titleTail = titleParts.pop() ?? '', titleHead = titleParts.join('');
   function display(next: DisplayMode) { setMode(next); localStorage.setItem('pb-display', next); }
   return <div className="session-board">
     <div className="session-overview">
       <header className="session-heading">
         <div className="session-heading-text">
-          <h1 aria-label={settings.name} title={settings.name}>{viewer ? <span className="session-title">{settings.name}</span> : <button className="session-title" data-testid={`session-tab-${settings.id}`} aria-label="Switch session" aria-haspopup="dialog" onClick={() => open({ kind: 'history' })}><span className="session-title-text">{settings.name}<ChevronDownIcon /></span></button>}</h1>
+          <h1 aria-label={settings.name} title={settings.name}>{viewer ? <span className="session-title">{settings.name}</span> : <button className="session-title" data-testid={`session-tab-${settings.id}`} aria-label="Switch session" aria-haspopup="dialog" onClick={() => open({ kind: 'history' })}><span className="session-title-text">{titleHead}<span className="session-title-end">{titleTail}<ChevronDownIcon /></span></span></button>}</h1>
         </div>
         {!viewer && <div className="session-heading-actions"><button className={`icon-button${settings.status === 'closed' ? ' closed-session-new' : ''}`} aria-label="New session" title="New session" onClick={() => open({ kind: 'new' })}><PlusIcon /></button><button className="icon-button" aria-label="Session menu" title="Session menu" onClick={() => open({ kind: 'menu' })}><MoreIcon /></button></div>}
         <p className="session-meta"><span className="meta-item meta-info" title={info}>{info}</span><span className="meta-item status-line">{status}</span><Timer state={state} unknownStart={unknownStart} />{!viewer && (unknownStart ? <button className="text-button meta-action" onClick={() => open({ kind: 'timing' })}>Correct times</button> : settings.started_at === null && settings.status === 'open' && <StartTimer />)}</p>
