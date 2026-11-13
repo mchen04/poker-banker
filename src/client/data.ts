@@ -542,29 +542,26 @@ function saveDraftIntent(key: string, intent: DraftIntent, restoreAbsent = false
       completion = done;
       const store = transaction.objectStore('drafts');
       const existing = await req(store.get(key)) as DraftRecord | undefined;
-      if (restoreAbsent && !existing && intent.error !== undefined && draftIntents.get(key) === intent) {
-        const previous = intent.expectedVersion;
-        const fresh = editableOperation(intent.value, true);
-        if (fresh) { intent.value = fresh; intent.revision = ++draftRevision; }
-        advanceDraftCursor(intent.cursor, previous, null, intent.revision);
-        intent.expectedVersion = null;
-        if (fresh) operationNotice(key, fresh, null, intent.cursor);
-      }
-      if (intent.expectedVersion === undefined || (intent.expectedVersion === unknownDraftVersion && !existing)) {
+      const restoring = restoreAbsent && !existing && intent.error !== undefined && draftIntents.get(key) === intent;
+      const fresh = restoring ? editableOperation(intent.value, true) : undefined;
+      const value = fresh ?? intent.value;
+      if (!restoring && (intent.expectedVersion === undefined || (intent.expectedVersion === unknownDraftVersion && !existing))) {
         const observed = draftVersion(existing);
         advanceDraftCursor(intent.cursor, intent.expectedVersion, observed, intent.revision);
         intent.expectedVersion = observed;
       }
-      try { assertDraftVersion(key, existing, intent.expectedVersion); } catch (problem) { await done; throw problem; }
+      try { assertDraftVersion(key, existing, restoring ? null : intent.expectedVersion); } catch (problem) { await done; throw problem; }
       let next: DraftRecord;
-      if ((existing?.value as DraftValue | undefined)?.__submitted) next = { ...existing!, next_value: intent.value, updated_at: Date.now() };
+      if ((existing?.value as DraftValue | undefined)?.__submitted) next = { ...existing!, next_value: value, updated_at: Date.now() };
       else {
-        next = { key, banker_id: banker, value: intent.value, updated_at: Date.now() };
+        next = { key, banker_id: banker, value, updated_at: Date.now() };
       }
       store.put(next);
       await done;
+      if (restoring) { intent.value = value; intent.revision = ++draftRevision; }
       advanceDraftCursor(intent.cursor, intent.expectedVersion, draftVersion(next), intent.revision);
       if (draftIntents.get(key) === intent) draftIntents.delete(key);
+      if (fresh) operationNotice(key, fresh, draftVersion(next), intent.cursor);
       changed();
     } catch (problem) {
       await completion?.catch(() => {});
