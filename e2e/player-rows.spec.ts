@@ -12,8 +12,11 @@ async function rows(page: Page) {
       stacked: card.classList.contains('actions-below'),
       buttons: actions ? actions.querySelectorAll('button').length : 0,
       amountRight: Math.round(amount.right),
+      bottomGap: Math.round(card.getBoundingClientRect().bottom - amount.bottom),
       amountLeft: Math.round(card.querySelector('.player-position-wrap')!.getBoundingClientRect().left),
       cardRight: Math.round(card.getBoundingClientRect().right),
+      amountTop: Math.round(amount.top),
+      actionsTop: actions?.querySelector('button') ? Math.round(actions.querySelector('button')!.getBoundingClientRect().top) : null,
       actionsLeft: actions?.querySelector('button') ? Math.round(actions.querySelector('button')!.getBoundingClientRect().left) : null,
       actionsRight: actions?.querySelector('button:last-child') ? Math.round(actions.querySelector('button:last-child')!.getBoundingClientRect().right) : null,
       label: card.querySelector('.position-label')?.textContent?.trim(),
@@ -51,6 +54,7 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
   expect(new Set(stacked.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
   for (const row of withButtons) expect(row.amountLeft).toBeGreaterThan(row.actionsRight!);
   for (const row of stacked) expect(row.nameRight).toBeLessThanOrEqual(row.cardRight - 16);
+  expect(stacked[0]!.bottomGap).toBeLessThanOrEqual(9);
 
   const link = await share(page);
   const context = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: { width: 393, height: 852 }, locale: 'en-US', timezoneId: 'UTC' });
@@ -65,21 +69,33 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
   } finally { await context.close(); }
 });
 
-test('narrow phones stack only crowded rows and keep sheet actions in reach', async ({ page }) => {
+test('narrow phones keep one amount position, put buttons beside amounts when they fit and keep sheet actions in reach', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await createAccount(page);
   await newSession(page, 'Narrow');
   const justin = await addPlayer(page, 'Justin');
-  const long = await addPlayer(page, 'Alexandria Montgomery-Vanderbilt the Third');
   const priya = await addPlayer(page, 'Priya');
   await money(page, justin.id, '200');
-  await money(page, long.id, '123456789.99');
   await money(page, priya.id, '200');
-  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(1);
-  const shown = await rows(page);
-  expect(shown.map(row => row.stacked)).toEqual([false, true, false]);
-  expect(new Set(shown.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
+  const long = await addPlayer(page, 'Alexandria Montgomery-Vanderbilt the Third');
+  await money(page, long.id, '50');
+  await expect(page.locator('.players.inline-actions > .player-card.actions-below')).toHaveCount(3);
+  const inline = await rows(page);
+  expect(new Set(inline.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
+  for (const row of inline) {
+    expect(row.amountLeft).toBeGreaterThan(row.actionsRight!);
+    expect(row.amountTop).toBeGreaterThanOrEqual(row.actionsTop!);
+  }
 
+  await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });
+  await money(page, long.id, '123456789.99');
+  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(3);
+  await expect(page.locator('.players.inline-actions')).toHaveCount(0);
+  const apart = await rows(page);
+  expect(new Set(apart.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
+  for (const row of apart) expect(row.actionsTop!).toBeGreaterThan(row.amountTop);
+
+  await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });
   await page.setViewportSize({ width: 320, height: 480 });
   await openMoney(page, long.id, 'Buy-in');
   const fields = page.locator('.money-fields');
@@ -100,6 +116,7 @@ test('narrow phones stack only crowded rows and keep sheet actions in reach', as
   await expect(close).toBeDisabled();
   await expect(close).toBeInViewport({ ratio: 1 });
   await expect(close).toHaveAccessibleDescription('Cash out 3 players first');
+  await expect.poll(() => sheet.evaluate(element => element.style.scrollPaddingBottom === `${element.querySelector<HTMLElement>('.sticky-action')!.offsetHeight + 16}px`)).toBe(true);
   const blockers = page.getByRole('dialog').locator('.close-blocker');
   for (let index = 0; index < 3; index += 1) {
     await blockers.nth(index).focus();

@@ -66,14 +66,15 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
   const stacked = money(collect, currency).length + money(pay, currency).length > 24;
   const playersRef = useRef<HTMLElement>(null);
   const [actionsBelow, setActionsBelow] = useState('');
+  const [inlineActions, setInlineActions] = useState(false);
   useLayoutEffect(() => {
     const section = playersRef.current;
-    if (!section) { setActionsBelow(''); return; }
+    if (!section) { setActionsBelow(''); setInlineActions(false); return; }
     const measure = () => {
       const cards = [...section.querySelectorAll<HTMLElement>('.player-card')];
       const was = cards.map(card => card.classList.contains('actions-below'));
       for (const card of cards) card.classList.remove('actions-below');
-      const clippedAmounts = new Set(cards.filter(card => {
+      const clips = (card: HTMLElement) => {
         const amount = card.querySelector<HTMLElement>('.player-detail .fit-text');
         if (!amount) return false;
         const fitted = amount.style.fontSize;
@@ -84,7 +85,10 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
         amount.style.fontSize = fitted;
         amount.classList.toggle('fit-wrap', wrapped);
         return clipped;
-      }));
+      };
+      const inlineWas = section.classList.contains('inline-actions');
+      section.classList.remove('inline-actions');
+      const clippedAmounts = new Set(cards.filter(clips));
       section.classList.add('measuring');
       const crowded = cards.filter(card => {
         const name = card.querySelector<HTMLElement>('.player-name strong');
@@ -96,8 +100,16 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
         return name.scrollWidth > name.clientWidth + 1 || name.getBoundingClientRect().height > line * 2 + 1;
       }).map(card => card.dataset.player ?? '');
       section.classList.remove('measuring');
+      let inline = false;
+      if (crowded.length && window.matchMedia('(max-width: 374px)').matches) {
+        section.classList.add('inline-actions');
+        for (const card of cards) card.classList.add('actions-below');
+        inline = !cards.some(clips);
+      }
+      section.classList.toggle('inline-actions', inlineWas);
       cards.forEach((card, index) => card.classList.toggle('actions-below', was[index]!));
-      setActionsBelow(window.matchMedia('(max-width: 374px)').matches ? crowded.join(' ') : crowded.length ? cards.map(card => card.dataset.player ?? '').join(' ') : '');
+      setInlineActions(inline);
+      setActionsBelow(crowded.length ? cards.map(card => card.dataset.player ?? '').join(' ') : '');
     };
     measure();
     let last = -1;
@@ -128,7 +140,7 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
     <div className="session-table">{readyToClose && <button className="ready-to-close" data-testid="ready-to-close" onClick={() => open({ kind: 'close' })}><span>Everyone has cashed out · Close session{unsettled > 0 ? ` · ${unsettled} unsettled` : ''}</span><ChevronRightIcon /></button>}
       <div className="section-heading"><h2>Players <span className="count">{state.players.length}</span></h2>{actions && state.players.length > 0 && <button className="text-button" onClick={() => open({ kind: 'add' })}>Add player</button>}</div>
       {hasResults && <div className="segmented display-modes" role="group" aria-label="Result display"><button aria-pressed={mode === 'total'} onClick={() => display('total')}>Total</button><button aria-pressed={mode === 'hourly'} onClick={() => display('hourly')}>Per hour</button><button aria-pressed={mode === 'blinds'} onClick={() => display('blinds')}>BB</button></div>}
-      <section ref={playersRef} className={`players${actions ? ' with-actions' : ''}`} aria-label="Session players">{state.players.length === 0 && <div className="empty-row"><span>No players yet</span></div>}{state.players.map(player => {
+      <section ref={playersRef} className={`players${actions ? ' with-actions' : ''}${inlineActions ? ' inline-actions' : ''}`} aria-label="Session players">{state.players.length === 0 && <div className="empty-row"><span>No players yet</span></div>}{state.players.map(player => {
         const { lastBuy } = moneyOptions(state.entries, player.id);
         const balance = BigInt(player.balance_minor);
         const content = <>
@@ -340,12 +352,11 @@ export function MoneySheet({ title, playerId, kind: initialKind, initialAmount }
   }
   return <Sheet title={title} leadingClose closeLabel="Cancel" className="money-sheet" close={cancel}>{canceling ? <section className="cancel-draft" role="alertdialog" aria-label="Keep or discard this draft" tabIndex={-1} ref={cancelPanel}><h3>Discard this typed amount?</h3><p>Your typed amount has not been saved to the ledger.</p><button type="button" className="wide" disabled={saving || !draft.ready} onClick={() => { void keep(); }}>Keep draft and close</button><button type="button" className="danger wide" onClick={() => { void discard(); }}>Discard draft</button><button type="button" className="primary wide" onClick={() => setCanceling(false)}>Keep editing</button><ErrorText text={draft.error || error} /></section> : <form className="money-form" noValidate onSubmit={submit}><div className="money-fields" ref={setFields}><p className="money-player" data-testid="money-player">{player.display_name}</p><label className="amount-field"><span>Amount <span className="field-currency">({currency})</span></span><input aria-label="Amount" aria-invalid={!!amountError} aria-describedby={amountError ? 'money-amount-error' : amountFeedback ? 'money-amount-preview' : undefined} ref={amountInput} data-testid="money-amount" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.value.amount} onChange={event => { draft.update({ ...draft.value, amount: event.target.value }); setAmountError(''); setError(''); }} disabled={!draft.ready} required /></label>{amountError && <p id="money-amount-error" className="error field-error money-amount-error" role="alert">{amountError}</p>}{amountFeedback && !amountError && <p id="money-amount-preview" className="hint amount-preview" role="status">{amountFeedback}</p>}
     {chip && <fieldset className="payment-methods payment-choice" aria-label="Payment method"><legend>{draft.value.kind === 'buy_in' ? 'Received from player' : 'Paid to player'}</legend><div><button type="button" aria-pressed={!draft.value.paid_now} onClick={() => draft.update({ ...draft.value, paid_now: false })}>Unpaid</button>{(['cash', 'venmo', 'zelle'] as const).map(method => <button key={method} type="button" aria-pressed={draft.value.paid_now && draft.value.method === method} onClick={() => draft.update({ ...draft.value, paid_now: true, method })}>{methodLabel(method)}</button>)}</div></fieldset>}
-    {remembered && draft.value.kind === 'buy_in' && draft.value.paid_now && draft.value.method === lastBuyMethod && <p className="hint payment-default" data-testid="payment-default">{methodLabel(lastBuyMethod)}, same as their last buy-in</p>}
     {payment && <><fieldset className="payment-methods payment-directions" aria-label="Payment direction"><legend>Payment direction</legend><div><button type="button" aria-pressed={draft.value.kind === 'payment_in'} onClick={() => draft.update({ ...draft.value, kind: 'payment_in' })}>Player pays bank</button><button type="button" aria-pressed={draft.value.kind === 'payment_out'} onClick={() => draft.update({ ...draft.value, kind: 'payment_out' })}>Bank pays player</button></div></fieldset><PaymentMethods value={draft.value.method} change={method => draft.update({ ...draft.value, method })} /></>}
     {(initialKind === 'buy_in' && (lastBuy || typicalBuy || doubleAmount) || initialKind === 'cash_out') && <div className="quick-amounts" aria-label="Quick amounts">{initialKind === 'buy_in' && lastBuy && <button type="button" disabled={!draft.ready} onClick={() => quick(lastBuy)}>Last <span className="money-value">{money(lastBuy, currency)}</span></button>}{initialKind === 'buy_in' && typicalBuy && typicalBuy !== lastBuy && <button type="button" disabled={!draft.ready} onClick={() => quick(typicalBuy)}>Typical <span className="money-value">{money(typicalBuy, currency)}</span></button>}{initialKind === 'buy_in' && doubleAmount && <button type="button" disabled={!draft.ready} onClick={() => quick(doubleAmount!)}>×2 <span className="money-value">{money(doubleAmount, currency)}</span></button>}{initialKind === 'cash_out' && <button type="button" disabled={!draft.ready} onClick={() => quick('0')}>No chips left · <span className="money-value">{money('0', currency)}</span></button>}</div>}
     {initialKind === 'cash_out' && <p className="hint amount-guidance">Enter the actual chips returned. Unpaid means you will pay later.</p>}
     {initialKind === 'expense' && <label>Expense detail<input placeholder="Tip or meal" value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}
-    <details><summary>Record an earlier time or note</summary><label>Entry time<input type="datetime-local" step="1" value={draft.value.occurred_at} onChange={event => draft.update({ ...draft.value, occurred_at: event.target.value })} /></label>{draft.value.__recovered_occurred_at !== undefined && <p className="hint">{draft.value.__recovered_occurred_at === null ? 'The original entry time is unknown. It stays unknown unless you enter a time.' : 'The original entry time is kept unless you enter another time.'}</p>}{initialKind !== 'expense' && <label>Note<input value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}</details></div><footer className={`money-actions${below ? ' content-below' : ''}`}><ErrorText text={draft.error || error} /><button className="primary wide" disabled={saving || !draft.ready}>{saving ? 'Saving…' : 'Save entry'}</button></footer></form>}</Sheet>;
+    <details><summary>Record an earlier time or note</summary><label>Entry time<input type="datetime-local" step="1" value={draft.value.occurred_at} onChange={event => draft.update({ ...draft.value, occurred_at: event.target.value })} /></label>{draft.value.__recovered_occurred_at !== undefined && <p className="hint">{draft.value.__recovered_occurred_at === null ? 'The original entry time is unknown. It stays unknown unless you enter a time.' : 'The original entry time is kept unless you enter another time.'}</p>}{initialKind !== 'expense' && <label>Note<input value={draft.value.note} onChange={event => draft.update({ ...draft.value, note: event.target.value })} /></label>}</details></div><footer className={`money-actions${below ? ' content-below' : ''}`}><ErrorText text={draft.error || error} />{remembered && draft.value.kind === 'buy_in' && draft.value.paid_now && draft.value.method === lastBuyMethod && <p className="payment-default" data-testid="payment-default">{methodLabel(lastBuyMethod)}, same as their last buy-in</p>}<button className="primary wide" disabled={saving || !draft.ready}>{saving ? 'Saving…' : 'Save entry'}</button></footer></form>}</Sheet>;
 }
 export function AddPlayerSheet() {
   const { banker, state, open, client } = useClient();
