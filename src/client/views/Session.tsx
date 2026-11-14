@@ -90,7 +90,7 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
     observer?.observe(section);
     return () => observer?.disconnect();
   }, [state, mode, actions]);
-  const titleParts = Array.from(new Intl.Segmenter().segment(settings.name), part => part.segment);
+  const titleParts = typeof Intl.Segmenter === 'function' ? Array.from(new Intl.Segmenter().segment(settings.name), part => part.segment) : Array.from(settings.name);
   const titleTail = titleParts.pop() ?? '', titleHead = titleParts.join('');
   function display(next: DisplayMode) { setMode(next); localStorage.setItem('pb-display', next); }
   return <div className="session-board">
@@ -341,7 +341,7 @@ export function CorrectionSheet({ entryId }: { entryId: string }) {
   useEffect(() => { if (confirmingDelete) deletePanel.current?.focus(); }, [confirmingDelete]);
   const key = draftKey(banker!.id, state!.session.id, 'correction', entryId);
   const originalTime = entry.occurred_at ? new Date(new Date(entry.occurred_at).getTime() - new Date(entry.occurred_at).getTimezoneOffset() * 60000).toISOString().slice(0, 19) : '';
-  const draft = useDraft(key, { op_id: crypto.randomUUID(), amount: decimal(entry.amount_minor, currency), method: entry.method ?? 'cash', time: originalTime });
+  const draft = useDraft(key, { op_id: crypto.randomUUID(), amount: decimal(entry.amount_minor, currency), method: entry.method ?? 'cash', time: originalTime, original_time: originalTime });
   const { amount, method, time } = draft.value;
   const setAmount = (amount: string) => draft.update({ ...draft.value, amount });
   const setMethod = (method: PaymentMethod) => draft.update({ ...draft.value, method });
@@ -365,7 +365,7 @@ export function CorrectionSheet({ entryId }: { entryId: string }) {
     try {
       const body: Record<string, unknown> = { op_id: draft.value.op_id, replacement_amount_minor: String(parsed) };
       if (payment) body.replacement_method = method;
-      if (time && time !== originalTime) body.replacement_occurred_at = new Date(time).toISOString();
+      if (time && time !== (draft.value.original_time ?? originalTime)) body.replacement_occurred_at = new Date(time).toISOString();
       await draft.submit(`/api/sessions/${state!.session.id}/entries/${entryId}/void`, body, 'POST'); open(null);
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not correct entry'); setBusy(false); }
   }
