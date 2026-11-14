@@ -228,6 +228,7 @@ details[open] summary { margin-bottom: 8px; }
 .player-stats dd { margin: 0; font-size: 1rem; line-height: 1.5rem; font-weight: 600; }
 .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0 0 8px; }
 .action-grid button { min-height: 48px; font-size: 1rem; }
+.action-grid button:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .sheet .activity { margin-top: 16px; }
 .sheet .activity h2 { font-size: 1rem; line-height: 1.5rem; }
 
@@ -237,7 +238,7 @@ details[open] summary { margin-bottom: 8px; }
 .close-blockers { margin: 12px 0 16px; display: grid; gap: 8px; }
 .close-blocker { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px; text-align: left; font-weight: 400; }
 .close-blocker > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.close-blocker-action { flex-shrink: 0; color: var(--accent); font-weight: 600; }
+.close-blocker-action { flex-shrink: 0; padding: 10px 14px; border-radius: var(--radius-control); background: var(--accent-soft); color: var(--accent); font-size: .875rem; font-weight: 600; }
 .choice-list button { display: block; width: 100%; min-height: 56px; padding: 8px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; text-align: left; font-size: 1rem; overflow-wrap: anywhere; }
 .choice-list button[aria-current='true'] { color: var(--accent); border-left: 3px solid var(--accent); padding-left: 12px; background: var(--accent-soft); }
 .choice-list small { margin-top: 2px; }
