@@ -21,6 +21,7 @@ async function rows(page: Page) {
       actionsRight: actions?.querySelector('button:last-child') ? Math.round(actions.querySelector('button:last-child')!.getBoundingClientRect().right) : null,
       label: card.querySelector('.position-label')?.textContent?.trim(),
       amountColor: getComputedStyle(card.querySelector('.player-position')!).color,
+      amountSize: getComputedStyle(card.querySelector('.player-position')!).fontSize,
       nameColor: getComputedStyle(name).color,
     };
   }));
@@ -69,7 +70,7 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
   } finally { await context.close(); }
 });
 
-test('narrow phones keep one amount position, put buttons beside amounts when they fit and keep sheet actions in reach', async ({ page }) => {
+test('narrow phones keep one amount position, put buttons beside amounts when they fit and keep sheet actions in reach', async ({ page, browser, baseURL }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await createAccount(page);
   await newSession(page, 'Narrow');
@@ -87,6 +88,18 @@ test('narrow phones keep one amount position, put buttons beside amounts when th
     expect(row.amountTop).toBeGreaterThanOrEqual(row.actionsTop!);
   }
 
+  const link = await share(page);
+  const context = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: { width: 320, height: 568 }, locale: 'en-US', timezoneId: 'UTC' });
+  try {
+    const viewer = await context.newPage();
+    await viewer.goto(link);
+    await expect(viewer.getByText(/View only ·/)).toBeVisible();
+    await expect(viewer.locator('.players > .player-card.actions-below')).toHaveCount(3);
+    await expect(viewer.locator('.players.inline-actions')).toHaveCount(0);
+    const shown = await rows(viewer);
+    expect(new Set(shown.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
+    for (const row of shown) expect(row.bottomGap).toBeLessThanOrEqual(9);
+  } finally { await context.close(); }
   await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });
   await money(page, long.id, '123456789.99');
   await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(3);
@@ -94,6 +107,8 @@ test('narrow phones keep one amount position, put buttons beside amounts when th
   const apart = await rows(page);
   expect(new Set(apart.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
   for (const row of apart) expect(row.actionsTop!).toBeGreaterThan(row.amountTop);
+  expect(new Set(apart.map(row => row.amountSize))).toEqual(new Set(['16px']));
+
 
   await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });
   await page.setViewportSize({ width: 320, height: 480 });

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 
-export function FitText({ text, className = '', as: Tag = 'span', testId, min = 11, refit }: { text: string; className?: string; as?: 'span' | 'strong' | 'b'; testId?: string; min?: number; refit?: boolean }) {
+export function FitText({ text, className = '', as: Tag = 'span', testId, min = 11, refit }: { text: string; className?: string; as?: 'span' | 'strong' | 'b'; testId?: string; min?: number; refit?: boolean | string }) {
   const ref = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const element = ref.current;
