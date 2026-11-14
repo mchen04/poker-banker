@@ -54,6 +54,9 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
   await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
   const clearance = await page.evaluate(() => document.querySelector('.notice')!.getBoundingClientRect().top - (document.querySelector('.workspace')!.getBoundingClientRect().bottom - Number.parseFloat(getComputedStyle(document.querySelector('.workspace')!).paddingBottom)));
   expect(clearance).toBeGreaterThanOrEqual(0);
+  const before = await page.evaluate(() => document.querySelector('.players > .player-card:last-child')!.getBoundingClientRect().top);
+  await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });
+  expect(await page.evaluate(() => document.querySelector('.players > .player-card:last-child')!.getBoundingClientRect().top)).toBe(before);
   await page.evaluate(() => scrollTo(0, 0));
   const withButtons = stacked.filter(row => row.buttons > 0);
   expect(withButtons.length).toBe(2);
