@@ -57,19 +57,20 @@ export function DeletedSessions({ choose }: { choose: (id: string | null, notice
     let active = true;
     if (!online || !client) return;
     const generation = ++deletedGeneration.current;
+    setError('');
     void listDeletedSessions(client).then(result => { if (active && client.isCurrent() && generation === deletedGeneration.current) { setDeleted(result.sessions); setNext(result.next); } }).catch(() => {});
     return () => { active = false; };
   }, [online, client]);
   async function more() {
     if (!client || !next || loadingMore) return;
     const generation = deletedGeneration.current;
-    setLoadingMore(true);
+    setLoadingMore(true); setError('');
     try {
       const result = await listDeletedSessions(client, next);
       if (!client.isCurrent() || generation !== deletedGeneration.current) return;
       setDeleted(current => [...current, ...result.sessions]);
       setNext(result.next);
-    } catch (problem) { if (client.isCurrent()) setError(problem instanceof Error ? problem.message : 'Could not load deleted sessions'); }
+    } catch (problem) { if (client.isCurrent() && generation === deletedGeneration.current) setError(problem instanceof Error ? problem.message : 'Could not load deleted sessions'); }
     finally { if (client.isCurrent()) setLoadingMore(false); }
   }
   async function restore(session: DeletedSession) {
