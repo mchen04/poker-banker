@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 
-export function FitText({ text, className = '', as: Tag = 'span', testId, min = 11 }: { text: string; className?: string; as?: 'span' | 'strong' | 'b'; testId?: string; min?: number }) {
+export function FitText({ text, className = '', as: Tag = 'span', testId, min = 11, refit }: { text: string; className?: string; as?: 'span' | 'strong' | 'b'; testId?: string; min?: number; refit?: boolean }) {
   const ref = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const element = ref.current;
@@ -23,7 +23,7 @@ export function FitText({ text, className = '', as: Tag = 'span', testId, min = 
     const observer = typeof ResizeObserver === 'undefined' || !root ? null : new ResizeObserver(entries => { const width = Math.round(entries[0]!.contentRect.width); if (width !== last) { last = width; fit(); } });
     if (root) observer?.observe(root);
     return () => observer?.disconnect();
-  }, [text, min]);
+  }, [text, min, refit]);
   return <Tag ref={ref as never} className={`fit-text ${className}`} data-testid={testId}>{text}</Tag>;
 }
 
