@@ -104,7 +104,7 @@ export async function workspaceReady(page: Page) {
   await expect(workspace).toBeVisible();
   await expect(workspace).toHaveAttribute('aria-pressed', 'true');
   const selected = await liveLegacyUpdateFixture(page) ? page.getByRole('tab', { selected: true }) : page.getByRole('button', { name: 'Switch session', exact: true }).and(page.locator('[data-testid^="session-tab-"]'));
-  const welcome = page.getByRole('button', { name: 'Create your first session', exact: true });
+  const welcome = page.getByRole('button', { name: 'Create your first session', exact: true }).or(page.getByRole('heading', { name: 'No active sessions', exact: true }));
   await expect(selected.or(welcome)).toBeVisible();
 }
 export async function openNewSession(page: Page) {
@@ -113,7 +113,8 @@ export async function openNewSession(page: Page) {
   await page.getByRole('navigation', { name: previous ? 'Workspace navigation' : 'Table navigation', exact: true }).getByRole('button', { name: previous ? 'Workspace' : 'Table', exact: true }).click();
   await workspaceReady(page);
   const existing = await call<{ sessions: { id: string }[] }>(page, '/sessions');
-  if (!existing.sessions.length) await page.getByRole('button', { name: 'Create your first session', exact: true }).click();
+  const first = page.getByRole('button', { name: 'Create your first session', exact: true });
+  if (!existing.sessions.length) await (await first.count() ? first : page.getByTestId('session-bottom-bar').getByRole('button', { name: 'New session', exact: true })).click();
   else if (await liveLegacyUpdateFixture(page)) await page.getByRole('button', { name: 'New session', exact: true }).click();
   else if (previous) {
     await page.getByRole('button', { name: 'Switch session', exact: true }).click();

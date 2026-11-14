@@ -12,7 +12,7 @@ export default async function ({ page, banker, runId, step, checkState }: Recipe
   const name = `Verify ${tag}`;
   const firstName = `${name} early`;
   const secondName = `${name} late`;
-  const welcome = page.getByRole('button', { name: 'Create your first session', exact: true });
+  const welcome = page.getByRole('heading', { name: 'No active sessions', exact: true });
   const existing = await call<{ sessions: { id: string }[] }>(page, '/sessions');
   const empty = existing.sessions.length === 0;
   if (empty) await expect(welcome).toBeVisible();

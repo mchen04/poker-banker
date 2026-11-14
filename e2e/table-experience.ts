@@ -69,7 +69,8 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
   await page.setViewportSize({ width: 393, height: 659 });
   const firstName = `Tap table ${tag}`;
   await measure('Create first session', async tap => {
-    await tap(page.getByRole('button', { name: 'Create your first session', exact: true }));
+    await expect(page.getByRole('heading', { name: 'No active sessions', exact: true })).toBeVisible();
+    await tap(page.getByTestId('session-bottom-bar').getByRole('button', { name: 'New session', exact: true }));
     await typeInput(page.getByLabel('Session name', { exact: true }), firstName);
     await tap(page.getByRole('button', { name: 'Create session', exact: true }));
     await expect(page.getByRole('heading', { name: firstName, exact: true })).toBeVisible();

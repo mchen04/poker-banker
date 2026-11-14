@@ -14,7 +14,7 @@ Each game has its own settings and drafts. A banker can create multiple games on
 
 ## How to get to it (user POV)
 
-- Choose `Create your first session` in an empty Table, or the visible `+ New` button (accessible name `New session`) next to the current title.
+- Choose the footer `New session` in an empty Table, or the visible `+ New` button (accessible name `New session`) next to the current title.
 - Choose `Switch session`, then search Sessions and choose a dated game; choose `Load more sessions` for older games.
 - Choose `Session menu` → `Session settings` to edit settings.
 - Choose `Add player` in a session, search an existing name, or choose `Add 'Name' as new`.

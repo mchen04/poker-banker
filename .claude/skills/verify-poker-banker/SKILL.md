@@ -17,7 +17,7 @@ From the repository root, run:
 .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
 ```
 
-Keep the returned run ID. Local launch builds production assets, starts a fresh embedded Postgres with migrations and the same local Hono server used by `pnpm start:local`, and starts an owned headless WebKit browser. Ready means the helper has signed up its own banker, acknowledged the recovery codes and loaded Table. Ready requires the active Table navigation plus the selected Switch session control or the empty table’s Create your first session action. A listening port alone is insufficient.
+Keep the returned run ID. Local launch builds production assets, starts a fresh embedded Postgres with migrations and the same local Hono server used by `pnpm start:local`, and starts an owned headless WebKit browser. Ready means the helper has signed up its own banker, acknowledged the recovery codes and loaded Table. Ready requires the active Table navigation plus the selected Switch session control or the empty table’s No active sessions heading. A listening port alone is insufficient.
 
 For a deployed URL, explicitly select live mode:
 

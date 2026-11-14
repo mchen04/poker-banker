@@ -28,7 +28,7 @@ Repeat on a fresh run with `--context desktop-webkit`. The tour lives in the ski
 | `small-target` | A control is under 44×44 CSS px. |
 | `row-misaligned` | Player rows disagree on the name's left edge, the rightmost control's right edge or row height. |
 
-`14-cold-reload-frames.json` and `16-viewer-load-frames.json` record the text of each frame captured while the page loads. A pass has no frame showing a different or empty state before the real one (for example, "Create your first session" on a banker who already has sessions), and no loading chatter.
+`14-cold-reload-frames.json` and `16-viewer-load-frames.json` record the text of each frame captured while the page loads. A pass has no frame showing a different or empty state before the real one (for example, "No active sessions" on a banker who already has sessions), and no loading chatter.
 
 ## Judging
 
