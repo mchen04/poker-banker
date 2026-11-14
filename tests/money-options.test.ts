@@ -36,4 +36,16 @@ describe('reviewable money defaults', () => {
     const voidedPayment = [...paid, { ...entry('4', 'a', 'payment_in', '2500', 'venmo', '2'), revision: '4' }];
     expect(moneyOptions(voidedPayment, 'a').lastBuyMethod).toBeUndefined();
   });
+  it('pairs a restored buy-in with a payment only when both were saved together', () => {
+    const copy = (id: string, of: LedgerEntry, revision: string): LedgerEntry => ({ ...of, id, revision, restores_entry_id: of.id });
+    const removed = (id: string, of: LedgerEntry, revision: string): LedgerEntry => ({ ...of, id, revision, voids_entry_id: of.id });
+    const unpaidBuy = entry('1', 'a', 'buy_in', '10000'), laterVenmo = entry('2', 'a', 'payment_in', '10000', 'venmo');
+    const settledThenRestored = [unpaidBuy, laterVenmo, removed('3', unpaidBuy, '3'), removed('4', laterVenmo, '3'), copy('5', unpaidBuy, '5'), copy('6', laterVenmo, '5')];
+    expect(moneyOptions(settledThenRestored, 'a').lastBuyMethod).toBeUndefined();
+    const paidBuy = entry('1', 'a', 'buy_in', '10000'), paidVenmo = { ...entry('2', 'a', 'payment_in', '10000', 'venmo'), revision: '1' };
+    const paidThenRestored = [paidBuy, paidVenmo, removed('3', paidBuy, '3'), removed('4', paidVenmo, '3'), copy('5', paidBuy, '5'), copy('6', paidVenmo, '5')];
+    expect(moneyOptions(paidThenRestored, 'a').lastBuyMethod).toBe('venmo');
+    const restoredAgain = [...paidThenRestored, removed('7', paidThenRestored[4]!, '7'), removed('8', paidThenRestored[5]!, '7'), copy('9', paidThenRestored[4]!, '9'), copy('10', paidThenRestored[5]!, '9')];
+    expect(moneyOptions(restoredAgain, 'a').lastBuyMethod).toBe('venmo');
+  });
 });
