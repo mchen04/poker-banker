@@ -207,6 +207,7 @@ button.entry-row:active { background: var(--subtle); }
 .money-amount-error { margin: -8px 0 12px; padding: 6px 8px; }
 .amount-guidance { margin: 0 0 12px; }
 .payment-methods { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }
+.payment-default { margin: -4px 0 8px; }
 .payment-methods legend { padding: 0; margin-bottom: 4px; font-size: .875rem; line-height: 1.25rem; font-weight: 600; }
 .payment-methods > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .payment-methods.payment-choice > div { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -355,6 +356,7 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
 .sheet-backdrop[data-compact='true'] .money-sheet .payment-methods { margin-bottom: 4px; }
 .sheet-backdrop[data-compact='true'] .money-sheet .payment-methods legend { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
 .sheet-backdrop[data-compact='true'] .money-sheet .quick-amounts { margin-bottom: 4px; }
+.sheet-backdrop[data-compact='true'] .money-sheet .payment-default { margin: -2px 0 4px; font-size: .75rem; line-height: 1rem; }
 .sheet-backdrop[data-compact='true'] .money-sheet .money-actions { padding: 4px 0 calc(4px + env(safe-area-inset-bottom)); }
 
 @media (max-width: 699px) {

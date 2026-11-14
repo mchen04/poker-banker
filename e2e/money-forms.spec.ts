@@ -279,11 +279,15 @@ test.describe("Draft cancellation and remembered buy-ins", () => {
     await money(page, fresh.id, '20', { method: 'venmo' });
     await page.getByTestId(`repeat-buy-in-${fresh.id}`).click();
     await pressed('Venmo');
+    await expect(page.getByTestId('payment-default')).toHaveText('Venmo, same as their last buy-in');
+    await methods.getByRole('button', { name: 'Cash', exact: true }).click();
+    await expect(page.getByTestId('payment-default')).toHaveCount(0);
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
     await money(page, fresh.id, '20', { paid: false });
     await page.getByTestId(`repeat-buy-in-${fresh.id}`).click();
     await pressed('Unpaid');
+    await expect(page.getByTestId('payment-default')).toHaveCount(0);
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
     await money(page, fresh.id, '20', { method: 'cash' });
