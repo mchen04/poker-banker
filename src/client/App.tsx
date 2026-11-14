@@ -212,7 +212,7 @@ export function App() {
     } catch (problem) {
       if (epoch.current !== generation || activeBanker.current?.id !== account.id) return [];
       if ((problem as { status?: number }).status === 401) { resetAuth(); return []; }
-      const snapshots = await listSnapshots(account.id);
+      const snapshots = await listSnapshots(account.id).catch(() => []);
       const rows = snapshots.map(item => ({ ...item.session, revision: item.revision }));
       return rows;
     }
