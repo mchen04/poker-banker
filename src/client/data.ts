@@ -942,12 +942,35 @@ export async function storeSnapshot(banker: string, state: SessionState): Promis
   store.put({ key, banker_id: banker, state: newerSnapshot(existing?.state, state) } satisfies SnapshotRecord);
   await done;
 }
+function snapshotState(record: unknown): SessionState | undefined {
+  if (!record || typeof record !== 'object') return;
+  const state = (record as { state?: unknown }).state;
+  if (!state || typeof state !== 'object') return;
+  const value = state as { revision?: unknown; session?: unknown; players?: unknown; entries?: unknown; totals?: unknown };
+  const session = value.session;
+  if (typeof value.revision !== 'string' || !session || typeof session !== 'object') return;
+  const fields = session as { id?: unknown; name?: unknown; played_on?: unknown; currency?: unknown; status?: unknown };
+  if (typeof fields.id !== 'string' || typeof fields.name !== 'string' || typeof fields.played_on !== 'string' || typeof fields.currency !== 'string') return;
+  if (fields.status !== 'open' && fields.status !== 'closed') return;
+  if (!Array.isArray(value.players) || !Array.isArray(value.entries) || !value.totals || typeof value.totals !== 'object') return;
+  return state as SessionState;
+}
 export async function listSnapshots(banker: string): Promise<SessionState[]> {
-  return (await all<SnapshotRecord>('snapshots')).filter(record => record.banker_id === banker && !record.state.session.deleted_at).map(record => record.state);
+  const states: SessionState[] = [];
+  for (const record of await all<SnapshotRecord>('snapshots')) {
+    if (!record || record.banker_id !== banker) continue;
+    const state = snapshotState(record);
+    if (state && !state.session.deleted_at) states.push(state);
+  }
+  return states;
 }
 export type DeletedSession = { id: string; name: string; played_on: string; currency: string; status: 'open' | 'closed'; revision: string; deleted_at: string };
-export function listDeletedSessions(client: BankerClient): Promise<{ sessions: DeletedSession[] }> {
-  return client.api<{ sessions: DeletedSession[] }>('/api/sessions/deleted');
+export type DeletedPlayer = { id: string; display_name: string; deleted_at: string };
+export function listDeletedSessions(client: BankerClient, before?: string | null): Promise<{ sessions: DeletedSession[]; next: string | null }> {
+  return client.api<{ sessions: DeletedSession[]; next: string | null }>(`/api/sessions/deleted${before ? `?before=${encodeURIComponent(before)}` : ''}`);
+}
+export function listDeletedPlayers(client: BankerClient, before?: string | null): Promise<{ players: DeletedPlayer[]; next: string | null }> {
+  return client.api<{ players: DeletedPlayer[]; next: string | null }>(`/api/players/deleted${before ? `?before=${encodeURIComponent(before)}` : ''}`);
 }
 export async function listOutbox(banker: string): Promise<OutboxItem[]> {
   return (await all<OutboxItem>('outbox')).filter(item => item.banker_id === banker).sort((a, b) => a.order - b.order);

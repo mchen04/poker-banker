@@ -66,7 +66,7 @@ export type PlayerState = PlayerAmounts & (
   | { state: 'playing' }
   | { state: 'cashed_out'; result_minor: string }
 );
-export type RemovedPlayer = { id: string; display_name: string; removed_at: string };
+export type RemovedPlayer = { id: string; display_name: string; removed_at?: string };
 export type SessionState = {
   session: SessionSettings;
   revision: string;
@@ -154,5 +154,5 @@ export function deriveSession(
 
 export function viewerState(state: SessionState) {
   const { share_token: _, ...session } = state.session;
-  return { ...state, session, removed_players: [] };
+  return { ...state, session, removed_players: state.removed_players.map(({ id, display_name }) => ({ id, display_name })) };
 }

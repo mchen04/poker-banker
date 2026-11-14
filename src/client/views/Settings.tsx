@@ -47,26 +47,40 @@ export function SessionForm({ creating, created }: { creating: boolean; created:
 export function DeletedSessions({ choose }: { choose: (id: string | null, notice?: string) => void }) {
   const { client, online, update } = useClient();
   const [deleted, setDeleted] = useState<DeletedSession[]>([]);
+  const [next, setNext] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [error, setError] = useState('');
   useFormBusy(restoring !== null);
   useEffect(() => {
     let active = true;
     if (!online || !client) return;
-    void listDeletedSessions(client).then(result => { if (active && client.isCurrent()) setDeleted(result.sessions); }).catch(() => {});
+    void listDeletedSessions(client).then(result => { if (active && client.isCurrent()) { setDeleted(result.sessions); setNext(result.next); } }).catch(() => {});
     return () => { active = false; };
   }, [online, client]);
+  async function more() {
+    if (!client || !next || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const result = await listDeletedSessions(client, next);
+      if (!client.isCurrent()) return;
+      setDeleted(current => [...current, ...result.sessions]);
+      setNext(result.next);
+    } catch (problem) { if (client.isCurrent()) setError(problem instanceof Error ? problem.message : 'Could not load deleted sessions'); }
+    finally { if (client.isCurrent()) setLoadingMore(false); }
+  }
   async function restore(session: DeletedSession) {
     if (restoring) return;
     setRestoring(session.id); setError('');
     try {
       const result = await client!.api<SessionState>(`/api/sessions/${session.id}/restore`, 'POST', { op_id: crypto.randomUUID() });
       if (!client!.isCurrent()) return;
+      setDeleted(current => current.filter(item => item.id !== session.id));
       update(result); choose(session.id, `Restored ${session.name}`);
     } catch (problem) { if (client!.isCurrent()) { setError(problem instanceof Error ? problem.message : 'Could not restore session'); setRestoring(null); } }
   }
   if (!deleted.length) return null;
-  return <details className="recover-list" data-testid="recently-deleted-sessions"><summary>Recently deleted ({deleted.length})</summary><ul>{deleted.map(session => <li key={session.id}><span className="recover-name" title={session.name}>{sessionLabel(session)}</span><button type="button" aria-label={`Restore ${session.name}`} disabled={restoring !== null || !online} onClick={() => { void restore(session); }}>{restoring === session.id ? 'Restoring…' : 'Restore'}</button></li>)}</ul><ErrorText text={error} /></details>;
+  return <details className="recover-list" data-testid="recently-deleted-sessions"><summary>{next ? 'Recently deleted' : `Recently deleted (${deleted.length})`}</summary><ul>{deleted.map(session => <li key={session.id}><span className="recover-name" title={session.name}>{sessionLabel(session)}</span><button type="button" aria-label={`Restore ${session.name}`} disabled={restoring !== null || !online} onClick={() => { void restore(session); }}>{restoring === session.id ? 'Restoring…' : 'Restore'}</button></li>)}</ul>{next && <button type="button" className="text-button" disabled={loadingMore || !online} onClick={() => { void more(); }}>{loadingMore ? 'Loading…' : 'Load more deleted sessions'}</button>}<ErrorText text={error} /></details>;
 }
 export function HistorySheet({ choose }: { choose: (id: string | null, notice?: string) => void }) {
   const { banker, client, open, state, online } = useClient();

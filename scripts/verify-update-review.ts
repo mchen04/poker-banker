@@ -728,7 +728,11 @@ export async function verifyUpdateReviewCases(options: UpdateJourneyOptions & { 
     });
     const result = { mode, rows, errors, builds, origin: proxy.origin, upstream: baseURL, bankerId: banker, actualForwarding: true, limitations: ['Loopback TLS, owned PostgreSQL and real HTTP bodies; no production writes.', 'Desktop/phone browser emulation does not prove physical iOS suspension or Home Screen behavior.', 'Legacy activation is explicitly deferred until all legacy documents close.'] };
     await writeFile(join(evidence, 'review-cases-summary.json'), JSON.stringify(result, null, 2));
-    if (errors.length) throw new AggregateError(errors.map(error => new Error(`${error.case}: ${error.error}`)), `Update review proof failed in ${errors.map(error => error.case).join(', ')}`);
+    if (errors.length) {
+      const details = errors.map(error => `${error.case}: ${error.error}`).join('\n\n');
+      process.stderr.write(`Update review proof failed\n${details}\n`);
+      throw new AggregateError(errors.map(error => new Error(`${error.case}: ${error.error}`)), `Update review proof failed in ${errors.map(error => error.case).join(', ')}\n\n${details}`);
+    }
     return result;
   });
 }
