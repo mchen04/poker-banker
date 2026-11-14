@@ -49,21 +49,24 @@ export function DeletedSessions({ choose }: { choose: (id: string | null, notice
   const [deleted, setDeleted] = useState<DeletedSession[]>([]);
   const [next, setNext] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const deletedGeneration = useRef(0);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [error, setError] = useState('');
   useFormBusy(restoring !== null);
   useEffect(() => {
     let active = true;
     if (!online || !client) return;
-    void listDeletedSessions(client).then(result => { if (active && client.isCurrent()) { setDeleted(result.sessions); setNext(result.next); } }).catch(() => {});
+    const generation = ++deletedGeneration.current;
+    void listDeletedSessions(client).then(result => { if (active && client.isCurrent() && generation === deletedGeneration.current) { setDeleted(result.sessions); setNext(result.next); } }).catch(() => {});
     return () => { active = false; };
   }, [online, client]);
   async function more() {
     if (!client || !next || loadingMore) return;
+    const generation = deletedGeneration.current;
     setLoadingMore(true);
     try {
       const result = await listDeletedSessions(client, next);
-      if (!client.isCurrent()) return;
+      if (!client.isCurrent() || generation !== deletedGeneration.current) return;
       setDeleted(current => [...current, ...result.sessions]);
       setNext(result.next);
     } catch (problem) { if (client.isCurrent()) setError(problem instanceof Error ? problem.message : 'Could not load deleted sessions'); }
@@ -71,6 +74,7 @@ export function DeletedSessions({ choose }: { choose: (id: string | null, notice
   }
   async function restore(session: DeletedSession) {
     if (restoring) return;
+    deletedGeneration.current++;
     setRestoring(session.id); setError('');
     try {
       const result = await client!.api<SessionState>(`/api/sessions/${session.id}/restore`, 'POST', { op_id: crypto.randomUUID() });

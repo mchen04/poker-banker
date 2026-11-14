@@ -20,6 +20,7 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
   const [deleted, setDeleted] = useState<DeletedPlayer[]>([]);
   const [deletedNext, setDeletedNext] = useState<string | null>(null);
   const [loadingMoreDeleted, setLoadingMoreDeleted] = useState(false);
+  const deletedGeneration = useRef(0);
   const [restoring, setRestoring] = useState<string | null>(null);
   useFormBusy(restoring !== null);
   useEffect(() => {
@@ -30,6 +31,7 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
 
   async function restore(player: { id: string; display_name: string }) {
     if (restoring) return;
+    deletedGeneration.current++;
     setRestoring(player.id); setError('');
     try { await api(`/api/players/${player.id}/restore`, 'POST', { op_id: crypto.randomUUID() }); setRefresh(value => value + 1); notify(`Restored ${player.display_name}`); }
     catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not restore player'); }
@@ -51,13 +53,15 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
   const [returnToSearch, setReturnToSearch] = useState(false);
   async function moreDeleted() {
     if (!client || !deletedNext || loadingMoreDeleted) return;
+    const generation = deletedGeneration.current;
     setLoadingMoreDeleted(true);
     try {
       const result = await listDeletedPlayers(client, deletedNext);
-      if (!client.isCurrent()) return;
+      if (!client.isCurrent() || generation !== deletedGeneration.current) return;
       setDeleted(current => [...current, ...result.players]);
       setDeletedNext(result.next);
-    } catch {} finally { setLoadingMoreDeleted(false); }
+    } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not load deleted players'); }
+    finally { setLoadingMoreDeleted(false); }
   }
   useEffect(() => { if (!selected && returnToSearch) { searchField.current?.focus(); setReturnToSearch(false); } }, [selected, returnToSearch]);
   function showDialog(next: 'rename' | 'filter' | 'delete' | null) { setDialog(next); dialogChange(next !== null); }
@@ -70,7 +74,8 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
   useEffect(() => {
     let active = true;
     if (!online || !loaded) return;
-    void listDeletedPlayers(client!).then(result => { if (active) { setDeleted(result.players); setDeletedNext(result.next); } }).catch(() => {});
+    const generation = ++deletedGeneration.current;
+    void listDeletedPlayers(client!).then(result => { if (active && generation === deletedGeneration.current) { setDeleted(result.players); setDeletedNext(result.next); } }).catch(() => {});
     return () => { active = false; };
   }, [refresh, online, loaded]);
   useEffect(() => {
