@@ -59,6 +59,7 @@ test.describe("Money precision and reachable fields", () => {
     const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
     await expect.poll(async () => (await storedDraft<{ amount: string }>(page, key))?.amount).toBe('12.005');
     await typeInput(amount, '$12.50');
+    await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
