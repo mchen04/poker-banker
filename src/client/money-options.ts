@@ -8,6 +8,7 @@ export function moneyOptions(entries: LedgerEntry[], playerId: string) {
   let typicalBuy: string | undefined;
   let lastBuy: string | undefined;
   let method: PaymentMethod = 'cash';
+  let lastBuyEntry: LedgerEntry | undefined;
   for (const entry of effective) {
     if (entry.kind === 'buy_in') {
       const count = (counts.get(entry.amount_minor) ?? 0) + 1;
@@ -16,7 +17,17 @@ export function moneyOptions(entries: LedgerEntry[], playerId: string) {
     }
     if (entry.player_id !== playerId) continue;
     if (entry.method) method = entry.method;
-    if (entry.kind === 'buy_in') lastBuy = entry.amount_minor;
+    if (entry.kind === 'buy_in') { lastBuy = entry.amount_minor; lastBuyEntry = entry; }
   }
-  return { typicalBuy, lastBuy, method };
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const savedRevision = (entry: LedgerEntry) => {
+    const seen = new Set<string>();
+    let source: LedgerEntry | undefined = entry;
+    while (source?.restores_entry_id && !seen.has(source.id)) { seen.add(source.id); source = byId.get(source.restores_entry_id); }
+    return source && !source.restores_entry_id ? source.revision : undefined;
+  };
+  const lastBuySaved = lastBuyEntry && savedRevision(lastBuyEntry);
+  const lastBuyPayment = lastBuySaved === undefined ? undefined : effective.find(entry => entry.player_id === playerId && entry.kind === 'payment_in' && savedRevision(entry) === lastBuySaved);
+  const lastBuyMethod: PaymentMethod | undefined = lastBuyPayment ? lastBuyPayment.method ?? 'cash' : undefined;
+  return { typicalBuy, lastBuy, lastBuyMethod, method };
 }

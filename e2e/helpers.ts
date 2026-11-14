@@ -177,6 +177,10 @@ export async function money(page: Page, player: string, amount: string, options:
       if (options.paid !== undefined) await page.getByLabel(kind === 'Buy-in' ? 'Paid now' : 'Paid out now', { exact: true }).setChecked(options.paid);
     } else if (options.paid === false) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Unpaid', exact: true }).click();
     else if (options.paid === true && !options.method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
+    else if (options.paid === undefined && kind === 'Buy-in' && !options.method) {
+      const unpaid = page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Unpaid', exact: true });
+      if (await unpaid.getAttribute('aria-pressed') === 'true') await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
+    }
   }
   if (options.method) await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: options.method[0]!.toUpperCase() + options.method.slice(1), exact: true }).click();
   if (options.testInfo) await screen(page, options.testInfo, kind === 'Buy-in' ? 'buy-in' : kind === 'Cash out' ? 'cash-out' : kind === 'Record payment' ? 'payment' : 'expense');

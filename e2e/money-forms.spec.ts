@@ -59,6 +59,7 @@ test.describe("Money precision and reachable fields", () => {
     const key = `${account.banker.id}/${session.session.id}/buy_in/${player.id}`;
     await expect.poll(async () => (await storedDraft<{ amount: string }>(page, key))?.amount).toBe('12.005');
     await typeInput(amount, '$12.50');
+    await page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Cash', exact: true }).click();
     await page.getByRole('button', { name: 'Save entry', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByText('Not saved yet', { exact: true })).toHaveCount(0);
@@ -264,6 +265,35 @@ test.describe("Draft cancellation and remembered buy-ins", () => {
       expect(fits, `${name} is a single line at 375px`).toBe(true);
     }
 
+  });
+  test('a buy-in preselects received money only after a paid buy-in while the player owes nothing', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await createAccount(page);
+    await newSession(page, 'Paid defaults');
+    const methods = page.getByRole('group', { name: 'Payment method', exact: true });
+    const pressed = (name: string) => expect(methods.getByRole('button', { name, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    const fresh = await addPlayer(page, 'Newcomer');
+    await page.getByTestId(`buy-in-${fresh.id}`).click();
+    await pressed('Unpaid');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await money(page, fresh.id, '20', { method: 'venmo' });
+    await page.getByTestId(`repeat-buy-in-${fresh.id}`).click();
+    await pressed('Venmo');
+    await expect(page.getByTestId('payment-default')).toHaveText('Venmo, same as their last buy-in');
+    await methods.getByRole('button', { name: 'Cash', exact: true }).click();
+    await expect(page.getByTestId('payment-default')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
+    await money(page, fresh.id, '20', { paid: false });
+    await page.getByTestId(`repeat-buy-in-${fresh.id}`).click();
+    await pressed('Unpaid');
+    await expect(page.getByTestId('payment-default')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
+    await money(page, fresh.id, '20', { method: 'cash' });
+    expect((await current(page)).players.find(player => player.id === fresh.id)!.balance_minor).toBe('2000');
+    await page.getByTestId(`repeat-buy-in-${fresh.id}`).click();
+    await pressed('Unpaid');
   });
 });
 

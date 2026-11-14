@@ -715,7 +715,7 @@ async function finishDraftSubmission(key: string, request: DraftRequest, replayI
   if (matched) {
     if (acknowledge) rememberOperation(store, key.split('/')[0]!, request, operation, true);
     if (editable && recoveredSource) {
-      const fresh = recoverOperation(operationSource(operation)?.value, request, recoveredSnapshot?.state.session.currency);
+      const fresh = recoverOperation(operationSource(operation)?.value, request, snapshotState(recoveredSnapshot)?.session.currency);
       nextRecord = recoveredExisting ?? { key: recoveredSource, banker_id: key.split('/')[0]!, value: fresh, updated_at: Date.now() };
       if (!recoveredExisting) store.put(nextRecord);
       else store.put({ key: `${key.split('/')[0]}/_operations/recovered/${String(request.body.op_id)}/${String(fresh.op_id)}`, banker_id: key.split('/')[0]!, kind: 'recovered_edit', value: { source_key: recoveredSource, editable: fresh }, updated_at: Date.now() } satisfies DraftRecord);
@@ -770,7 +770,7 @@ export async function listRecoveredDrafts(banker: string): Promise<RecoveredDraf
     const source = byKey.get(sourceKey);
     const savedRequest = value.__recovery_request;
     const session = savedRequest ? /^\/api\/sessions\/([^/]+)/.exec(savedRequest.path)?.[1] : sourceKey.split('/')[1];
-    const currency = value.__recovery_currency ?? snapshots.find(snapshot => snapshot.banker_id === banker && snapshot.state.session.id === session)?.state.session.currency;
+    const currency = value.__recovery_currency ?? snapshotFor(snapshots, banker, session)?.session.currency;
     let request: DraftRequest | undefined;
     let requestError: string | undefined;
     if (savedRequest && typeof savedRequest.path === 'string' && ['POST', 'PATCH'].includes(savedRequest.method) && savedRequest.body && typeof savedRequest.body === 'object' && !Array.isArray(savedRequest.body)) {
@@ -922,7 +922,7 @@ const snapshotKey = (banker: string, session: string) => `${banker}/${session}`;
 export async function readSnapshot(banker: string, session: string): Promise<SessionState | undefined> {
   const db = await storage();
   const record = await req(db.transaction('snapshots').objectStore('snapshots').get(snapshotKey(banker, session))) as SnapshotRecord | undefined;
-  return record?.state;
+  return snapshotState(record);
 }
 export function newerSnapshot(existing: SessionState | undefined, incoming: SessionState): SessionState {
   if (!existing) return incoming;
@@ -939,15 +939,44 @@ export async function storeSnapshot(banker: string, state: SessionState): Promis
   const key = snapshotKey(banker, state.session.id);
   const existing = await req(store.get(key)) as SnapshotRecord | undefined;
   if (blockedOwners.has(banker) || generation(banker) !== epoch) { await done; return; }
-  store.put({ key, banker_id: banker, state: newerSnapshot(existing?.state, state) } satisfies SnapshotRecord);
+  store.put({ key, banker_id: banker, state: newerSnapshot(snapshotState(existing), state) } satisfies SnapshotRecord);
   await done;
 }
+function snapshotState(record: unknown): SessionState | undefined {
+  if (!record || typeof record !== 'object') return;
+  const state = (record as { state?: unknown }).state;
+  if (!state || typeof state !== 'object') return;
+  const value = state as { revision?: unknown; session?: unknown; players?: unknown; entries?: unknown; totals?: unknown };
+  const session = value.session;
+  if (typeof value.revision !== 'string' || !/^(?:0|[1-9]\d*)$/.test(value.revision) || !session || typeof session !== 'object') return;
+  const fields = session as { id?: unknown; name?: unknown; played_on?: unknown; currency?: unknown; status?: unknown };
+  if (typeof fields.id !== 'string' || typeof fields.name !== 'string' || typeof fields.played_on !== 'string' || typeof fields.currency !== 'string') return;
+  if (fields.status !== 'open' && fields.status !== 'closed') return;
+  if (!Array.isArray(value.players) || !Array.isArray(value.entries) || !value.totals || typeof value.totals !== 'object') return;
+  return state as SessionState;
+}
+function snapshotFor(records: SnapshotRecord[], banker: string, session: string | undefined): SessionState | undefined {
+  for (const record of records) {
+    const state = snapshotState(record);
+    if (state && record.banker_id === banker && state.session.id === session) return state;
+  }
+}
 export async function listSnapshots(banker: string): Promise<SessionState[]> {
-  return (await all<SnapshotRecord>('snapshots')).filter(record => record.banker_id === banker && !record.state.session.deleted_at).map(record => record.state);
+  const states: SessionState[] = [];
+  for (const record of await all<SnapshotRecord>('snapshots')) {
+    if (!record || record.banker_id !== banker) continue;
+    const state = snapshotState(record);
+    if (state && !state.session.deleted_at) states.push(state);
+  }
+  return states;
 }
 export type DeletedSession = { id: string; name: string; played_on: string; currency: string; status: 'open' | 'closed'; revision: string; deleted_at: string };
-export function listDeletedSessions(client: BankerClient): Promise<{ sessions: DeletedSession[] }> {
-  return client.api<{ sessions: DeletedSession[] }>('/api/sessions/deleted');
+export type DeletedPlayer = { id: string; display_name: string; deleted_at: string };
+export function listDeletedSessions(client: BankerClient, before?: string | null): Promise<{ sessions: DeletedSession[]; next: string | null }> {
+  return client.api<{ sessions: DeletedSession[]; next: string | null }>(`/api/sessions/deleted${before ? `?before=${encodeURIComponent(before)}` : ''}`);
+}
+export function listDeletedPlayers(client: BankerClient, before?: string | null): Promise<{ players: DeletedPlayer[]; next: string | null }> {
+  return client.api<{ players: DeletedPlayer[]; next: string | null }>(`/api/players/deleted${before ? `?before=${encodeURIComponent(before)}` : ''}`);
 }
 export async function listOutbox(banker: string): Promise<OutboxItem[]> {
   return (await all<OutboxItem>('outbox')).filter(item => item.banker_id === banker).sort((a, b) => a.order - b.order);
@@ -997,7 +1026,7 @@ async function enqueueRecord(input: EnqueueInput): Promise<OutboxItem | DraftCon
     const snapshot = await req(transaction.objectStore('snapshots').get(snapshotKey(input.banker_id, input.session_id))) as SnapshotRecord | undefined;
     const currentDraft = input.draft_key ? draft : await req(drafts.get(key)) as DraftRecord | undefined;
     if (epoch !== generation(input.banker_id)) { await done; throw new AccountChangedError(input.banker_id); }
-    const fresh = recoverOperation(input.draft_value ?? draft?.value, request, snapshot?.state.session.currency);
+    const fresh = recoverOperation(input.draft_value ?? draft?.value, request, snapshotState(snapshot)?.session.currency);
     const next = !input.draft_key && currentDraft ? currentDraft : { key, banker_id: input.banker_id, value: fresh, updated_at: Date.now() } satisfies DraftRecord;
     if (!input.draft_key && currentDraft) drafts.put({ key: `${input.banker_id}/_operations/recovered/${op}/${String(fresh.op_id)}`, banker_id: input.banker_id, kind: 'recovered_edit', value: { source_key: key, editable: fresh }, updated_at: Date.now() } satisfies DraftRecord);
     else drafts.put(next);
@@ -1103,7 +1132,7 @@ export async function clearBankerData(banker: string, consent?: BankerWork): Pro
     const accepted = [...draftIntents].filter(([key]) => key.split('/')[0] === banker);
     for (const record of drafts) if (record.banker_id === banker) transaction.objectStore('drafts').delete(record.key);
     for (const item of outbox) if (item.banker_id === banker) transaction.objectStore('outbox').delete(item.op_id);
-    for (const record of snapshots) if (record.banker_id === banker) transaction.objectStore('snapshots').delete(record.key);
+    for (const record of snapshots) if (record?.banker_id === banker) transaction.objectStore('snapshots').delete(record.key);
     await done;
     for (const [key, intent] of accepted) if (draftIntents.get(key) === intent) draftIntents.delete(key);
     invalidateBankerWork(banker);
@@ -1158,7 +1187,7 @@ async function settleClaim(item: OutboxItem, isCurrent: () => boolean, error?: u
     const earlierKey = `${item.banker_id}/_operations/uncertain/${item.op_id}`;
     const retained = earlier && !sameRequest(earlier, request) && operation?.kind !== 'acknowledged_operation' ? await req(drafts.get(earlierKey)) : undefined;
     if (!isCurrent()) { await done; return; }
-    const fresh = recoverOperation(item.draft_value, request, snapshot?.state.session.currency);
+    const fresh = recoverOperation(item.draft_value, request, snapshotState(snapshot)?.session.currency);
     const next = existing ?? { key, banker_id: item.banker_id, value: fresh, updated_at: Date.now() } satisfies DraftRecord;
     if (!existing) drafts.put(next);
     else drafts.put({ key: `${item.banker_id}/_operations/recovered/${item.op_id}/${String(fresh.op_id)}`, banker_id: item.banker_id, kind: 'recovered_edit', value: { source_key: key, editable: fresh }, updated_at: Date.now() } satisfies DraftRecord);
@@ -1201,7 +1230,7 @@ async function acknowledge(banker: string, item: OutboxItem, response: unknown, 
     const key = snapshotKey(banker, state.session.id);
     const existing = await req(store.get(key)) as SnapshotRecord | undefined;
     if (!isCurrent()) { await done; return undefined; }
-    latest = newerSnapshot(existing?.state, state);
+    latest = newerSnapshot(snapshotState(existing), state);
     store.put({ key, banker_id: banker, state: latest } satisfies SnapshotRecord);
   }
   const request = { path: item.path, method: item.method, body: item.body };

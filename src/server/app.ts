@@ -95,11 +95,17 @@ export function createApp(pool: Database, config: Config = {}) {
     return c.json({ sessions, next: result.rows.length > 30 && last ? `${last.played_on},${last.id}` : null });
   });
   app.get('/api/sessions/deleted', async c => {
-    z.strictObject({}).parse(c.req.query());
+    const query = v.deletedQuery.parse(c.req.query());
+    const before = query.before ? v.deletedCursor.parse(query.before.split(',')) : undefined;
     const result = await pool.query<{ id: string; name: string; played_on: string; currency: string; status: string; deleted_at: string; revision: string }>(
-      `SELECT id, name, to_char(played_on,'YYYY-MM-DD') AS played_on, currency, status, deleted_at::text, revision::text
-       FROM game_sessions WHERE banker_id = $1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC LIMIT 30`, [c.get('banker').id]);
-    return c.json({ sessions: result.rows });
+      `SELECT id, name, to_char(played_on,'YYYY-MM-DD') AS played_on, currency, status,
+       to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS deleted_at, revision::text
+       FROM game_sessions WHERE banker_id = $1 AND deleted_at IS NOT NULL
+       AND ($2::timestamptz IS NULL OR (deleted_at,id) < ($2::timestamptz,$3::uuid))
+       ORDER BY deleted_at DESC, id DESC LIMIT 31`, [c.get('banker').id, before?.[0] ?? null, before?.[1] ?? null]);
+    const sessions = result.rows.slice(0, 30);
+    const last = sessions.at(-1);
+    return c.json({ sessions, next: result.rows.length > 30 && last ? `${last.deleted_at},${last.id}` : null });
   });
   app.post('/api/sessions', c => mutate(c, pool, v.sessionCreate, async (db, banker, input) => {
     const id = randomUUID();
@@ -391,10 +397,16 @@ export function createApp(pool: Database, config: Config = {}) {
     return { player: await playerRecord(db, banker, id) };
   }));
   app.get('/api/players/deleted', async c => {
-    z.strictObject({}).parse(c.req.query());
+    const query = v.deletedQuery.parse(c.req.query());
+    const before = query.before ? v.deletedCursor.parse(query.before.split(',')) : undefined;
     const result = await pool.query<{ id: string; display_name: string; deleted_at: string }>(
-      'SELECT id, display_name, deleted_at::text FROM players WHERE banker_id = $1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC LIMIT 30', [c.get('banker').id]);
-    return c.json({ players: result.rows });
+      `SELECT id, display_name, to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS deleted_at
+       FROM players WHERE banker_id = $1 AND deleted_at IS NOT NULL
+       AND ($2::timestamptz IS NULL OR (deleted_at,id) < ($2::timestamptz,$3::uuid))
+       ORDER BY deleted_at DESC, id DESC LIMIT 31`, [c.get('banker').id, before?.[0] ?? null, before?.[1] ?? null]);
+    const players = result.rows.slice(0, 30);
+    const last = players.at(-1);
+    return c.json({ players, next: result.rows.length > 30 && last ? `${last.deleted_at},${last.id}` : null });
   });
   app.get('/api/players/:id', async c => {
     const id = v.id.parse(c.req.param('id'));

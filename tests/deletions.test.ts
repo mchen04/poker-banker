@@ -113,7 +113,11 @@ it('removes a player with every effective entry and restores exactly those entri
   const shared = await write(owner, removed, '/share', { action: 'enable' });
   const viewer = await ok<SessionState>(await request(null, `/view/${shared.session.share_token}`));
   expect(viewer.players.map(player => player.id)).toEqual([b]);
-  expect(viewer.removed_players).toEqual([]);
+  expect(viewer.removed_players).toEqual([{ id: a, display_name: 'A' }]);
+  expect(Object.keys(viewer.removed_players[0]!).sort()).toEqual(['display_name', 'id']);
+  expect(viewer.session).not.toHaveProperty('share_token');
+  expect(JSON.stringify(viewer)).not.toContain('removed_at');
+  expect(viewer.entries.some(entry => entry.player_id === a && entry.removal_id)).toBe(true);
   const restored = await ok<SessionState>(await request(owner, `/sessions/${state.session.id}/players/${a}/restore`, 'POST', { op_id: randomUUID() }));
   expect(restored.players.map(player => player.id).sort()).toEqual([a, b].sort());
   expect(restored.removed_players).toEqual([]);
@@ -271,6 +275,104 @@ it('restoring a removed player brings back a deleted roster player and their deb
   expect(roster.players.find(row => row.id === playerId)).toMatchObject({ outstanding: [{ currency: 'USD', owed_to_banker_minor: '10000' }] });
   expect((await ok<{ player: { deleted_at: string | null } }>(await request(owner, `/players/${playerId}`))).player.deleted_at).toBeNull();
   expect((await request(owner, `/players/${playerId}/report`)).status).toBe(200);
+});
+
+it('pages every deleted session to the end and restores the oldest', async () => {
+  const owner = await account();
+  const ids: string[] = [];
+  for (let index = 0; index < 32; index++) {
+    const state = await createSession(owner, { name: `Deleted session ${index}` });
+    await ok(await request(owner, `/sessions/${state.session.id}/delete`, 'POST', { op_id: randomUUID() }));
+    ids.push(state.session.id);
+  }
+  const first = await ok<{ sessions: { id: string }[]; next: string | null }>(await request(owner, '/sessions/deleted'));
+  expect(first.sessions).toHaveLength(30);
+  expect(first.next).not.toBeNull();
+  const second = await ok<{ sessions: { id: string }[]; next: string | null }>(await request(owner, `/sessions/deleted?before=${encodeURIComponent(first.next!)}`));
+  expect(second.sessions).toHaveLength(2);
+  expect(second.next).toBeNull();
+  expect(new Set([...first.sessions, ...second.sessions].map(row => row.id)).size).toBe(32);
+  expect(second.sessions.map(row => row.id)).toContain(ids[0]);
+  const restored = await ok<SessionState>(await request(owner, `/sessions/${ids[0]}/restore`, 'POST', { op_id: randomUUID() }));
+  expect(restored.session.id).toBe(ids[0]);
+  const remaining = await ok<{ sessions: { id: string }[]; next: string | null }>(await request(owner, '/sessions/deleted'));
+  expect(remaining.sessions.map(row => row.id)).not.toContain(ids[0]);
+  expect(remaining.next).not.toBeNull();
+});
+
+it('pages every deleted player to the end and restores the oldest', async () => {
+  const owner = await account();
+  const ids: string[] = [];
+  for (let index = 0; index < 32; index++) {
+    const created = await ok<{ player: { id: string } }>(await request(owner, '/players', 'POST', { op_id: randomUUID(), display_name: `Deleted player ${index}` }));
+    await ok(await request(owner, `/players/${created.player.id}/delete`, 'POST', { op_id: randomUUID() }));
+    ids.push(created.player.id);
+  }
+  const first = await ok<{ players: { id: string }[]; next: string | null }>(await request(owner, '/players/deleted'));
+  expect(first.players).toHaveLength(30);
+  expect(first.next).not.toBeNull();
+  const second = await ok<{ players: { id: string }[]; next: string | null }>(await request(owner, `/players/deleted?before=${encodeURIComponent(first.next!)}`));
+  expect(second.players).toHaveLength(2);
+  expect(second.next).toBeNull();
+  expect(new Set([...first.players, ...second.players].map(row => row.id)).size).toBe(32);
+  expect(second.players.map(row => row.id)).toContain(ids[0]);
+  const restored = await ok<{ player: { id: string; deleted_at: string | null } }>(await request(owner, `/players/${ids[0]}/restore`, 'POST', { op_id: randomUUID() }));
+  expect(restored.player).toMatchObject({ id: ids[0], deleted_at: null });
+  const remaining = await ok<{ players: { id: string }[]; next: string | null }>(await request(owner, '/players/deleted'));
+  expect(remaining.players.map(row => row.id)).not.toContain(ids[0]);
+  expect(remaining.next).not.toBeNull();
+});
+
+it('pages deleted sessions at microsecond precision without skipping or repeating', async () => {
+  const owner = await account();
+  const ids: string[] = [];
+  for (let index = 0; index < 32; index++) {
+    const state = await createSession(owner, { name: `Microsecond session ${index}` });
+    await ok(await request(owner, `/sessions/${state.session.id}/delete`, 'POST', { op_id: randomUUID() }));
+    ids.push(state.session.id);
+  }
+  for (const [index, id] of ids.entries()) {
+    await database.pool.query("UPDATE game_sessions SET deleted_at = $2::timestamptz + ($3::text || ' microseconds')::interval WHERE id = $1", [id, '2026-11-10T10:00:00.123000Z', index]);
+  }
+  const seen: string[] = [];
+  let before: string | null = null;
+  do {
+    const page: { sessions: { id: string }[]; next: string | null } = await ok(await request(owner, `/sessions/deleted${before ? `?before=${encodeURIComponent(before)}` : ''}`));
+    seen.push(...page.sessions.map(row => row.id));
+    before = page.next;
+  } while (before);
+  expect(seen).toHaveLength(32);
+  expect(new Set(seen)).toEqual(new Set(ids));
+});
+
+it('pages deleted players at microsecond precision without skipping or repeating', async () => {
+  const owner = await account();
+  const ids: string[] = [];
+  for (let index = 0; index < 32; index++) {
+    const created = await ok<{ player: { id: string } }>(await request(owner, '/players', 'POST', { op_id: randomUUID(), display_name: `Microsecond player ${index}` }));
+    await ok(await request(owner, `/players/${created.player.id}/delete`, 'POST', { op_id: randomUUID() }));
+    ids.push(created.player.id);
+  }
+  for (const [index, id] of ids.entries()) {
+    await database.pool.query("UPDATE players SET deleted_at = $2::timestamptz + ($3::text || ' microseconds')::interval WHERE id = $1", [id, '2026-11-10T10:00:00.123000Z', index]);
+  }
+  const seen: string[] = [];
+  let before: string | null = null;
+  do {
+    const page: { players: { id: string }[]; next: string | null } = await ok(await request(owner, `/players/deleted${before ? `?before=${encodeURIComponent(before)}` : ''}`));
+    seen.push(...page.players.map(row => row.id));
+    before = page.next;
+  } while (before);
+  expect(seen).toHaveLength(32);
+  expect(new Set(seen)).toEqual(new Set(ids));
+});
+
+it('rejects out-of-range cursor dates on every paged list', async () => {
+  const owner = await account();
+  const id = randomUUID();
+  await rejects(await request(owner, `/sessions?before=0000-01-01,${id}`), 400, 'invalid_request');
+  await rejects(await request(owner, `/sessions/deleted?before=0000-01-01T00:00:00.000000Z,${id}`), 400, 'invalid_request');
+  await rejects(await request(owner, `/players/deleted?before=0000-01-01T00:00:00.000000Z,${id}`), 400, 'invalid_request');
 });
 
 describe('ledger integrity for restores', () => {

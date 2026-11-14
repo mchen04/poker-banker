@@ -68,21 +68,36 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
   const [actionsBelow, setActionsBelow] = useState('');
   useLayoutEffect(() => {
     const section = playersRef.current;
-    if (!section || !actions) { setActionsBelow(''); return; }
+    if (!section) { setActionsBelow(''); return; }
     const measure = () => {
       const cards = [...section.querySelectorAll<HTMLElement>('.player-card')];
       const was = cards.map(card => card.classList.contains('actions-below'));
       for (const card of cards) card.classList.remove('actions-below');
+      const clippedAmounts = new Set(cards.filter(card => {
+        const amount = card.querySelector<HTMLElement>('.player-detail .fit-text');
+        if (!amount) return false;
+        const fitted = amount.style.fontSize;
+        const wrapped = amount.classList.contains('fit-wrap');
+        amount.style.fontSize = '';
+        amount.classList.remove('fit-wrap');
+        const clipped = amount.scrollWidth > amount.clientWidth + 1;
+        amount.style.fontSize = fitted;
+        amount.classList.toggle('fit-wrap', wrapped);
+        return clipped;
+      }));
       section.classList.add('measuring');
       const crowded = cards.filter(card => {
         const name = card.querySelector<HTMLElement>('.player-name strong');
-        if (!name || !card.querySelector('.player-actions button')) return false;
+        if (clippedAmounts.has(card)) return true;
+        const status = card.querySelector<HTMLElement>('.player-state');
+        if (section.classList.contains('with-actions') && status && status.scrollWidth > status.clientWidth + 1) return true;
+        if (!name) return false;
         const line = Number.parseFloat(getComputedStyle(name).lineHeight);
         return name.scrollWidth > name.clientWidth + 1 || name.getBoundingClientRect().height > line * 2 + 1;
       }).map(card => card.dataset.player ?? '');
       section.classList.remove('measuring');
       cards.forEach((card, index) => card.classList.toggle('actions-below', was[index]!));
-      setActionsBelow(crowded.join(' '));
+      setActionsBelow(crowded.length ? cards.map(card => card.dataset.player ?? '').join(' ') : '');
     };
     measure();
     let last = -1;
@@ -119,11 +134,11 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
         const content = <>
           <span className="player-name"><strong title={player.display_name}>{player.display_name}</strong><span className="player-state"><span data-testid={player.state !== 'cashed_out' ? `result-${player.id}` : undefined}>{player.state === 'seated' ? 'Not bought in' : player.state === 'playing' ? 'Playing' : 'Cashed out'}</span>{(player.state !== 'seated' || balance !== 0n) && <><span className="state-separator"> · </span>{balance === 0n ? <span className="player-paid">Paid up</span> : <span className={`player-balance ${balance > 0n ? 'owe' : 'owed'}`}>{balance > 0n ? 'Owes' : 'Owed'} <span className="money-value">{money(String(balance > 0n ? balance : -balance), currency)}</span></span>}</>}</span></span>
           <span className="player-detail">
-            {player.state === 'cashed_out' ? <FitText className={`money-value player-position tone-${resultTone(player, mode)}`} testId={`result-${player.id}`} text={resultText(player, currency, mode)} refit={actionsBelow.split(' ').includes(player.id)} /> : player.state === 'playing' ? <span className="player-position-wrap"><span className="position-label" aria-hidden="true">in </span><span className="sr-only">Bought </span><FitText className="money-value player-position" text={money(player.bought_in_minor, currency)} refit={actionsBelow.split(' ').includes(player.id)} /></span> : null}
+            {player.state === 'cashed_out' ? <span className="player-position-wrap">{!resultText(player, currency, mode).startsWith('No ') && <span className="position-label">Result </span>}<FitText className={`money-value player-position tone-${resultTone(player, mode)}`} testId={`result-${player.id}`} text={resultText(player, currency, mode)} refit={actionsBelow.split(' ').includes(player.id)} /></span> : player.state === 'playing' ? <span className="player-position-wrap bought"><span className="position-label" aria-hidden="true">In </span><span className="sr-only">Bought </span><FitText className="money-value player-position" text={money(player.bought_in_minor, currency)} refit={actionsBelow.split(' ').includes(player.id)} /></span> : null}
           </span>
         </>;
         const controls = actions && <div className="player-actions">{player.state === 'seated' ? <button data-testid={`buy-in-${player.id}`} aria-label={`Buy-in for ${player.display_name}`} onClick={() => open({ kind: 'money', player: player.id })}>Buy-in</button> : player.state === 'playing' ? <><button data-testid={`cash-out-${player.id}`} aria-label={`Cash out ${player.display_name}`} onClick={() => open({ kind: 'cash_out', player: player.id })}>Cash out</button>{lastBuy && <button data-testid={`repeat-buy-in-${player.id}`} aria-label={`Repeat last buy-in for ${player.display_name}`} title={`Rebuy ${money(lastBuy, currency)}`} onClick={() => open({ kind: 'money', player: player.id, amount: lastBuy })}>Rebuy</button>}</> : balance !== 0n ? <button data-testid={`settle-${player.id}`} aria-label={`Settle ${player.display_name}`} onClick={() => open({ kind: balance < 0n ? 'payment_out' : 'payment_in', player: player.id, amount: String(balance < 0n ? -balance : balance) })}>Settle</button> : null}</div>;
-        return viewer ? <div className="player-card" key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className={`player-card${actionsBelow.split(' ').includes(player.id) ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
+        return viewer ? <div className={`player-card${actionsBelow.split(' ').includes(player.id) ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className={`player-card${actionsBelow.split(' ').includes(player.id) ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
       })}</section>
       {!viewer && <RemovedPlayers state={state} />}
     </div>
@@ -194,7 +209,13 @@ function RemovePlayer({ playerId }: { playerId: string }) {
   const [error, setError] = useState('');
   const panel = useRef<HTMLElement>(null);
   useFormBusy(busy);
-  useEffect(() => { if (confirming) panel.current?.focus(); }, [confirming]);
+  useEffect(() => {
+    if (!confirming) return;
+    const reveal = () => panel.current?.scrollIntoView({ block: 'nearest' });
+    panel.current?.focus({ preventScroll: true }); reveal();
+    window.addEventListener('resize', reveal);
+    return () => window.removeEventListener('resize', reveal);
+  }, [confirming]);
   const path = `/api/sessions/${state!.session.id}/players/${playerId}/remove`;
   const voided = new Set(state!.entries.flatMap(entry => entry.voids_entry_id ? [entry.voids_entry_id] : []));
   const count = state!.entries.filter(entry => entry.player_id === playerId && !entry.voids_entry_id && !voided.has(entry.id)).length;
@@ -233,11 +254,12 @@ export function MoneySheet({ title, playerId, kind: initialKind, initialAmount }
   const { banker, state, notify, open } = useClient();
   const currency = state!.session.currency;
   const player = state!.players.find(player => player.id === playerId)!;
-  const { lastBuy, typicalBuy, method: lastMethod } = moneyOptions(state!.entries, playerId);
+  const { lastBuy, typicalBuy, lastBuyMethod, method: lastMethod } = moneyOptions(state!.entries, playerId);
   const key = draftKey(banker!.id, state!.session.id, initialKind, playerId);
   const balance = BigInt(state!.players.find(player => player.id === playerId)!.balance_minor);
   const suggestedKind = initialKind === 'payment_in' && balance < 0n ? 'payment_out' : initialKind;
-  const draft = useDraft<MoneyDraft>(key, { op_id: crypto.randomUUID(), amount: initialAmount !== undefined ? decimal(initialAmount, currency) : '', paid_now: initialKind === 'buy_in', method: lastMethod, occurred_at: '', note: '', kind: suggestedKind });
+  const remembered = initialKind === 'buy_in' && lastBuyMethod !== undefined && balance <= 0n;
+  const draft = useDraft<MoneyDraft>(key, { op_id: crypto.randomUUID(), amount: initialAmount !== undefined ? decimal(initialAmount, currency) : '', paid_now: remembered, method: (remembered && lastBuyMethod) || lastMethod, occurred_at: '', note: '', kind: suggestedKind });
   const [error, setError] = useState('');
   const [amountError, setAmountError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -301,6 +323,7 @@ export function MoneySheet({ title, playerId, kind: initialKind, initialAmount }
   }
   return <Sheet title={title} leadingClose closeLabel="Cancel" className="money-sheet" close={cancel}>{canceling ? <section className="cancel-draft" role="alertdialog" aria-label="Keep or discard this draft" tabIndex={-1} ref={cancelPanel}><h3>Discard this typed amount?</h3><p>Your typed amount has not been saved to the ledger.</p><button type="button" className="wide" disabled={saving || !draft.ready} onClick={() => { void keep(); }}>Keep draft and close</button><button type="button" className="danger wide" onClick={() => { void discard(); }}>Discard draft</button><button type="button" className="primary wide" onClick={() => setCanceling(false)}>Keep editing</button><ErrorText text={draft.error || error} /></section> : <form className="money-form" noValidate onSubmit={submit}><div className="money-fields"><p className="money-player" data-testid="money-player">{player.display_name}</p><label className="amount-field"><span>Amount <span className="field-currency">({currency})</span></span><input aria-label="Amount" aria-invalid={!!amountError} aria-describedby={amountError ? 'money-amount-error' : amountFeedback ? 'money-amount-preview' : undefined} ref={amountInput} data-testid="money-amount" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.value.amount} onChange={event => { draft.update({ ...draft.value, amount: event.target.value }); setAmountError(''); setError(''); }} disabled={!draft.ready} required /></label>{amountError && <p id="money-amount-error" className="error field-error money-amount-error" role="alert">{amountError}</p>}{amountFeedback && !amountError && <p id="money-amount-preview" className="hint amount-preview" role="status">{amountFeedback}</p>}
     {chip && <fieldset className="payment-methods payment-choice" aria-label="Payment method"><legend>{draft.value.kind === 'buy_in' ? 'Received from player' : 'Paid to player'}</legend><div><button type="button" aria-pressed={!draft.value.paid_now} onClick={() => draft.update({ ...draft.value, paid_now: false })}>Unpaid</button>{(['cash', 'venmo', 'zelle'] as const).map(method => <button key={method} type="button" aria-pressed={draft.value.paid_now && draft.value.method === method} onClick={() => draft.update({ ...draft.value, paid_now: true, method })}>{methodLabel(method)}</button>)}</div></fieldset>}
+    {remembered && draft.value.kind === 'buy_in' && draft.value.paid_now && draft.value.method === lastBuyMethod && <p className="hint payment-default" data-testid="payment-default">{methodLabel(lastBuyMethod)}, same as their last buy-in</p>}
     {payment && <><fieldset className="payment-methods payment-directions" aria-label="Payment direction"><legend>Payment direction</legend><div><button type="button" aria-pressed={draft.value.kind === 'payment_in'} onClick={() => draft.update({ ...draft.value, kind: 'payment_in' })}>Player pays bank</button><button type="button" aria-pressed={draft.value.kind === 'payment_out'} onClick={() => draft.update({ ...draft.value, kind: 'payment_out' })}>Bank pays player</button></div></fieldset><PaymentMethods value={draft.value.method} change={method => draft.update({ ...draft.value, method })} /></>}
     {(initialKind === 'buy_in' && (lastBuy || typicalBuy || doubleAmount) || initialKind === 'cash_out') && <div className="quick-amounts" aria-label="Quick amounts">{initialKind === 'buy_in' && lastBuy && <button type="button" disabled={!draft.ready} onClick={() => quick(lastBuy)}>Last <span className="money-value">{money(lastBuy, currency)}</span></button>}{initialKind === 'buy_in' && typicalBuy && typicalBuy !== lastBuy && <button type="button" disabled={!draft.ready} onClick={() => quick(typicalBuy)}>Typical <span className="money-value">{money(typicalBuy, currency)}</span></button>}{initialKind === 'buy_in' && doubleAmount && <button type="button" disabled={!draft.ready} onClick={() => quick(doubleAmount!)}>×2 <span className="money-value">{money(doubleAmount, currency)}</span></button>}{initialKind === 'cash_out' && <button type="button" disabled={!draft.ready} onClick={() => quick('0')}>No chips left · <span className="money-value">{money('0', currency)}</span></button>}</div>}
     {initialKind === 'cash_out' && <p className="hint amount-guidance">Enter the actual chips returned. Unpaid means you will pay later.</p>}

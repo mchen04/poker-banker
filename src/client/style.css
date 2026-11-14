@@ -108,9 +108,10 @@ span.session-title { display: block; padding-block: 6px; }
 .players { display: grid; margin: 0; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-card); }
 .player-card { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; min-width: 0; background: var(--surface); border-top: 1px solid var(--line); }
 .player-card:first-child { border-top-color: transparent; margin-top: -1px; }
-.player-row { grid-area: 1 / 1; display: grid; grid-template-columns: minmax(40%, 1fr) minmax(0, auto); align-items: center; column-gap: 8px; width: 100%; min-width: 0; min-height: 64px; padding: 8px 16px; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: left; font-weight: 400; overflow-wrap: normal; }
+.player-row { grid-area: 1 / 1; display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; column-gap: 8px; width: 100%; min-width: 0; min-height: 64px; padding: 8px 16px; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: left; font-weight: 400; overflow-wrap: normal; }
 button.player-row:active { background: var(--subtle); }
 .with-actions .player-row { padding-right: calc(var(--actions-w) + 16px); }
+.with-actions .player-card:has(> .player-actions:empty) .player-row { padding-right: 16px; }
 .player-name { display: contents; }
 .player-name strong { grid-area: 1 / 1; display: block; min-width: 0; overflow-wrap: break-word; font-size: 1rem; line-height: 1.375rem; font-weight: 600; }
 .measuring .player-name strong { overflow: hidden; overflow-wrap: normal; }
@@ -119,10 +120,13 @@ button.player-row:active { background: var(--subtle); }
 .measuring .player-state { overflow: hidden; white-space: nowrap; }
 .player-detail { grid-area: 1 / 2; justify-self: end; display: flex; flex-direction: column; align-items: flex-end; min-width: 0; max-width: 100%; text-align: right; }
 .player-position-wrap { display: flex; align-items: baseline; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 100%; }
-.position-label { flex: none; color: var(--muted); font-size: .75rem; line-height: 1rem; }
+.position-label { flex: none; color: var(--muted); font-size: 1rem; line-height: 1.375rem; font-weight: 400; white-space: nowrap; }
 .player-card > div.player-row .player-detail { align-self: start; }
+.players:not(.with-actions) .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; }
+.players:not(.with-actions) .player-card.actions-below .player-detail { grid-area: 3 / 1 / 4 / 3; }
 .player-position { font-size: 1rem; line-height: 1.375rem; font-weight: 600; }
-.player-position-wrap .player-position { color: var(--muted); font-weight: 500; }
+.player-position-wrap.bought .player-position { color: var(--muted); font-weight: 500; }
+.player-position.tone-up, .player-position.tone-down { color: var(--text); }
 .player-paid, .player-balance { font-size: .875rem; line-height: 1.25rem; }
 .player-paid { color: var(--muted); }
 .player-balance { font-weight: 650; }
@@ -133,6 +137,7 @@ button.player-row:active { background: var(--subtle); }
 .player-actions { grid-area: 1 / 1; justify-self: end; display: flex; justify-content: flex-end; gap: 4px; width: var(--actions-w); padding-right: 10px; pointer-events: none; position: relative; z-index: 1; box-sizing: content-box; }
 .player-actions button { width: 76px; height: 44px; min-height: 44px; padding: 0; border: 0; border-radius: var(--radius-control); background: var(--accent-soft); color: var(--accent); font-size: .875rem; white-space: nowrap; pointer-events: auto; overflow-wrap: normal; }
 .player-actions button + button { width: 56px; }
+.player-actions button:only-child { width: var(--actions-w); }
 .player-actions button:active { filter: brightness(.95); }
 .empty-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 10px 16px; color: var(--muted); font-size: .875rem; }
 .empty-row button { min-height: 44px; }
@@ -205,6 +210,7 @@ button.entry-row:active { background: var(--subtle); }
 .money-amount-error { margin: -8px 0 12px; padding: 6px 8px; }
 .amount-guidance { margin: 0 0 12px; }
 .payment-methods { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }
+.payment-default { margin: -4px 0 8px; }
 .payment-methods legend { padding: 0; margin-bottom: 4px; font-size: .875rem; line-height: 1.25rem; font-weight: 600; }
 .payment-methods > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .payment-methods.payment-choice > div { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -266,8 +272,10 @@ button.roster-row:active { background: var(--subtle); }
 .report-heading .icon-button { margin-left: -12px; }
 .report-title { display: flex; flex: 1; flex-wrap: wrap; align-items: flex-start; gap: 0 4px; min-width: 0; }
 .report-heading h1 { flex: 1 1 auto; min-width: 0; margin: 0; padding: 6px 0; overflow-wrap: break-word; }
-.report-actions { display: flex; align-items: center; gap: 4px; }
-.secondary-small { flex: none; min-height: 44px; padding: 0 12px; border: 0; background: var(--subtle); font-size: .875rem; }
+.report-actions { display: flex; align-items: center; gap: 8px; }
+.report-action { min-height: 44px; padding: 0 8px; font-weight: 500; }
+button.report-action.danger { color: var(--danger); }
+.workspace:has([data-testid='player-report']) .account-section { display: none; }
 .report-summary { margin: 0 0 16px; }
 .summary-value { font-size: 2rem; line-height: 2.5rem; font-weight: 700; letter-spacing: -.02em; }
 .report h2, .report + section h2 { margin-bottom: 8px; }
@@ -318,7 +326,6 @@ button.quiet-danger { display: block; width: 100%; min-height: 48px; margin: 16p
 .menu-danger { margin-top: 16px; }
 .menu-list button.danger { color: var(--danger); }
 .menu-danger .hint { display: flex; align-items: center; min-height: 52px; margin: 0; padding: 0 16px; }
-.quiet-icon { color: var(--muted); }
 .correction-summary { margin-bottom: 12px; padding: 12px 16px; border-radius: var(--radius-card); background: var(--subtle); font-size: .875rem; overflow-wrap: anywhere; }
 select { appearance: none; -webkit-appearance: none; padding-right: 40px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%23808891' stroke-width='2'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
 select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtle); border-style: dashed; cursor: default; }
@@ -353,6 +360,7 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
 .sheet-backdrop[data-compact='true'] .money-sheet .payment-methods { margin-bottom: 4px; }
 .sheet-backdrop[data-compact='true'] .money-sheet .payment-methods legend { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
 .sheet-backdrop[data-compact='true'] .money-sheet .quick-amounts { margin-bottom: 4px; }
+.sheet-backdrop[data-compact='true'] .money-sheet .payment-default { margin: -2px 0 4px; font-size: .75rem; line-height: 1rem; }
 .sheet-backdrop[data-compact='true'] .money-sheet .money-actions { padding: 4px 0 calc(4px + env(safe-area-inset-bottom)); }
 
 @media (max-width: 699px) {
@@ -360,8 +368,8 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
 }
 @media (min-width: 375px) {
   .with-actions .player-card.actions-below .player-row { grid-template-rows: auto auto minmax(44px, auto); }
-  .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; margin-right: calc(0px - var(--actions-w)); }
-  .player-card.actions-below .player-state { grid-area: 2 / 1 / 3 / 3; margin-right: calc(0px - var(--actions-w)); }
+  .with-actions .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; margin-right: calc(0px - var(--actions-w)); }
+  .with-actions .player-card.actions-below .player-state { grid-area: 2 / 1 / 3 / 3; margin-right: calc(0px - var(--actions-w)); }
   .player-card.actions-below .player-detail { grid-area: 3 / 1 / 4 / 3; }
   .player-card.actions-below .player-actions { align-self: end; padding-bottom: 8px; }
 }

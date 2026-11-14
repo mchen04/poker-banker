@@ -62,3 +62,5 @@ export const sinceQuery = z.strictObject({ since: revision.optional() });
 export const searchQuery = z.strictObject({ q: z.string().max(100).optional() });
 export const listQuery = z.strictObject({ q: z.string().max(100).optional(), before: z.string().max(100).optional(), status: z.enum(['open', 'closed']).optional() });
 export const cursor = z.tuple([date, id]);
+export const deletedQuery = z.strictObject({ before: z.string().max(100).optional() });
+export const deletedCursor = z.tuple([z.iso.datetime({ precision: 6 }).refine(value => !value.startsWith('0000-'), 'Use a UTC year from 0001 through 9999'), id]);

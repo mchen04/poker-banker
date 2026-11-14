@@ -240,7 +240,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
   }
   await page.setViewportSize({ width: 393, height: 659 }); await page.emulateMedia({ colorScheme: 'light' });
   await page.getByTestId(`repeat-buy-in-${playerId}`).click();
-  await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Venmo', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('group', { name: 'Payment method', exact: true }).getByRole('button', { name: 'Unpaid', exact: true }), 'A player who still owes is not preselected as paid').toHaveAttribute('aria-pressed', 'true');
   await typeInput(page.getByTestId('money-amount'), '12.50'); await sheets('buy-in');
   await typeInput(page.getByTestId('money-amount'), '12.505'); await page.getByRole('button', { name: 'Save entry', exact: true }).click();
   await expect(page.getByTestId('money-amount')).toHaveAttribute('aria-invalid', 'true');
