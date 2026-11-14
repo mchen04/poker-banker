@@ -273,6 +273,53 @@ test.describe('deleted-player paging with routed responses', () => {
   });
 });
 
+test.describe('session-list paging with routed responses', () => {
+  test.use({ serviceWorkers: 'block' });
+  async function friSessions(page: Page, count: number) {
+    for (let index = 0; index < count; index++) await call(page, '/sessions', 'POST', { op_id: randomUUID(), name: `Fri game ${index}`, played_on: '2026-11-10', currency: 'USD' });
+  }
+  test('discards a session page that started before a search change', async ({ page }) => {
+    await createAccount(page);
+    await newSession(page, 'Friday current');
+    await friSessions(page, 40);
+    await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Sessions', exact: true });
+    let release!: () => void;
+    const stale = new Promise<void>(resolve => { release = resolve; });
+    await page.route(url => url.pathname === '/api/sessions' && url.searchParams.get('q') === '' && url.searchParams.has('before'), async route => {
+      await new Promise(resolve => setTimeout(resolve, 600));
+      await route.continue();
+      release();
+    });
+    await picker.getByRole('button', { name: 'Load more sessions', exact: true }).click();
+    await picker.getByLabel('Search sessions', { exact: true }).fill('Fri');
+    await expect(picker.getByText(/Fri game 39/)).toBeVisible();
+    await stale;
+    await page.waitForTimeout(200);
+    await expect(picker.getByRole('button', { name: 'Load more sessions', exact: true })).toBeVisible();
+  });
+  test('ignores a session page failure from before a search change', async ({ page }) => {
+    const account = await createAccount(page);
+    await newSession(page, 'Friday current');
+    await friSessions(page, 40);
+    await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Sessions', exact: true });
+    let release!: () => void;
+    const stale = new Promise<void>(resolve => { release = resolve; });
+    await page.route(url => url.pathname === '/api/sessions' && url.searchParams.get('q') === '' && url.searchParams.has('before'), async route => {
+      await new Promise(resolve => setTimeout(resolve, 600));
+      await route.fulfill({ status: 500, contentType: 'application/json', headers: { 'X-PB-Banker-ID': account.banker.id }, body: JSON.stringify({ error: { code: 'request_failed', message: 'Stale session error' } }) });
+      release();
+    });
+    await picker.getByRole('button', { name: 'Load more sessions', exact: true }).click();
+    await picker.getByLabel('Search sessions', { exact: true }).fill('Fri');
+    await expect(picker.getByText(/Fri game 39/)).toBeVisible();
+    await stale;
+    await page.waitForTimeout(200);
+    await expect(picker.getByText('Stale session error', { exact: true })).toHaveCount(0);
+  });
+});
+
 
 test('an offline buy-in for a session deleted on another device stays listed until discarded', async ({ page }) => {
   await createAccount(page);
