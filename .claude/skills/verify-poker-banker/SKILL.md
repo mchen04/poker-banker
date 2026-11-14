@@ -17,7 +17,7 @@ From the repository root, run:
 .claude/skills/verify-poker-banker/scripts/verify.sh launch --local
 ```
 
-Keep the returned run ID. Local launch builds production assets, starts a fresh embedded Postgres with migrations and the same local Hono server used by `pnpm start:local`, and starts an owned headless WebKit browser. Ready means the helper has signed up its own banker, acknowledged the recovery codes and loaded Table. Ready requires the active Table navigation plus the selected Switch session control or the empty table’s Create your first session action. A listening port alone is insufficient.
+Keep the returned run ID. Local launch builds production assets, starts a fresh embedded Postgres with migrations and the same local Hono server used by `pnpm start:local`, and starts an owned headless WebKit browser. Ready means the helper has signed up its own banker, acknowledged the recovery codes and loaded Table. Ready requires the active Table navigation plus the selected Switch session control or the empty table’s No active sessions heading. A listening port alone is insufficient.
 
 For a deployed URL, explicitly select live mode:
 
@@ -66,20 +66,13 @@ Run the complete ledger recipe once per desired context:
 
 For local automatic-update verification, follow the pinned previous-source setup in [offline and app updates](features/offline-and-app-updates.md), launch with its fixture metadata, then run `drive updates --run RUN_ID --context iphone-standalone`. It uses the same shared five-case journey plus seven update-review cases as the focused browser test. Run it last because it changes the shared build; cleanup preserves its release table and compatibility evidence.
 
-The other feature files contain copyable Playwright recipes. Save each supplied block at its named `.cache/verify-*.ts` path, then invoke it through the same run:
+Recipes for the screen tour, deletion and recovery, close/reopen, offline replay and sessions/drafts live in this skill's `scripts/` folder (`tour.ts`, `deletions.ts`, `close.ts`, `offline.ts`, `sessions.ts`). The mini runner syncs them, so invoke them directly:
 
 ```sh
-.claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-sessions.ts --run RUN_ID --context iphone-webkit
+./scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh recipe .claude/skills/verify-poker-banker/scripts/sessions.ts --run RUN_ID --context iphone-webkit
 ```
 
-The mini runner deliberately excludes `.cache/`. After writing a recipe on this Mac, copy only that new file explicitly before running it, for example:
-
-```sh
-rsync -az .cache/verify-sessions.ts mini:worktrees/poker-banker/.cache/verify-sessions.ts
-./scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh recipe .cache/verify-sessions.ts --run RUN_ID --context iphone-webkit
-```
-
-Alternatively write the shown recipe inside the mini checkout. Do not synchronize other cache content.
+The remaining feature files contain copyable Playwright recipes. Save each supplied block at its named `.cache/verify-*.ts` path. The mini runner deliberately excludes `.cache/`, so copy only that new file explicitly before running it, for example `rsync -az .cache/verify-payments.ts mini:worktrees/poker-banker/.cache/verify-payments.ts`, then `recipe .cache/verify-payments.ts`. Do not synchronize other cache content.
 
 A recipe exports an async default function receiving `RecipeContext` from `.claude/skills/verify-poker-banker/scripts/control.ts`. Its `page` is already signed into this run's banker. `step(name)` captures the primary page's action/result evidence. `checkState()` reads the selected session through the public API. Use `expect`, ARIA names and repository test IDs. Navigate through `workspaceReady`, `openNewSession` and `switchSession` from `e2e/helpers.ts`; session choices live in the History dialog opened by Switch session. Do not set application state, edit IndexedDB or call test-only endpoints to manufacture a pass. Fresh contexts created by a recipe must be closed in `finally`.
 

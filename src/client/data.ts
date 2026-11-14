@@ -312,6 +312,7 @@ function recoverySourceKey(banker: string, session: string, request: DraftReques
     [/^\/api\/sessions$/, 'new-session'], [/^\/api\/sessions\/[^/]+$/, 'settings'],
     [/\/players$/, 'add-player'], [/\/timing$/, 'timing'], [/\/close$/, 'close'], [/\/reopen$/, 'reopen'],
     [/\/share$/, 'share'], [/\/start$/, 'start'], [/\/void$/, 'correction'], [/^\/api\/players\/[^/]+$/, 'rename'],
+    [/\/delete$/, 'delete'], [/\/remove$/, 'remove'], [/\/restore$/, 'restore'],
   ];
   return draftKey(banker, session, routes.find(([pattern]) => pattern.test(request.path))?.[1] ?? 'legacy-command', String(request.body.op_id));
 }
@@ -942,7 +943,11 @@ export async function storeSnapshot(banker: string, state: SessionState): Promis
   await done;
 }
 export async function listSnapshots(banker: string): Promise<SessionState[]> {
-  return (await all<SnapshotRecord>('snapshots')).filter(record => record.banker_id === banker).map(record => record.state);
+  return (await all<SnapshotRecord>('snapshots')).filter(record => record.banker_id === banker && !record.state.session.deleted_at).map(record => record.state);
+}
+export type DeletedSession = { id: string; name: string; played_on: string; currency: string; status: 'open' | 'closed'; revision: string; deleted_at: string };
+export function listDeletedSessions(client: BankerClient): Promise<{ sessions: DeletedSession[] }> {
+  return client.api<{ sessions: DeletedSession[] }>('/api/sessions/deleted');
 }
 export async function listOutbox(banker: string): Promise<OutboxItem[]> {
   return (await all<OutboxItem>('outbox')).filter(item => item.banker_id === banker).sort((a, b) => a.order - b.order);
@@ -1177,21 +1182,31 @@ async function settleClaim(item: OutboxItem, isCurrent: () => boolean, error?: u
   await done;
   changed();
 }
-async function acknowledge(banker: string, item: OutboxItem, state: SessionState, isCurrent: () => boolean) {
+function sessionResponse(value: unknown): SessionState | undefined {
+  if (!value || typeof value !== 'object' || !('session' in value)) return;
+  const session = (value as { session?: unknown }).session;
+  return session && typeof session === 'object' && 'id' in session && typeof (session as { id?: unknown }).id === 'string' ? value as SessionState : undefined;
+}
+async function acknowledge(banker: string, item: OutboxItem, response: unknown, isCurrent: () => boolean) {
   const db = await storage();
   if (!isCurrent()) return;
   const transaction = db.transaction(['snapshots', 'outbox', 'drafts'], 'readwrite');
   const done = complete(transaction);
   const queued = await req(transaction.objectStore('outbox').get(item.op_id)) as OutboxItem | undefined;
   if (!isCurrent() || !sameClaim(queued, item)) { await done; return undefined; }
-  const store = transaction.objectStore('snapshots');
-  const key = snapshotKey(banker, state.session.id);
-  const existing = await req(store.get(key)) as SnapshotRecord | undefined;
+  const state = sessionResponse(response);
+  let latest: SessionState | undefined;
+  if (state) {
+    const store = transaction.objectStore('snapshots');
+    const key = snapshotKey(banker, state.session.id);
+    const existing = await req(store.get(key)) as SnapshotRecord | undefined;
+    if (!isCurrent()) { await done; return undefined; }
+    latest = newerSnapshot(existing?.state, state);
+    store.put({ key, banker_id: banker, state: latest } satisfies SnapshotRecord);
+  }
   const request = { path: item.path, method: item.method, body: item.body };
   const operation = await operationRecord(transaction.objectStore('drafts'), banker, request);
   if (!isCurrent()) { await done; return undefined; }
-  const latest = newerSnapshot(existing?.state, state);
-  store.put({ key, banker_id: banker, state: latest } satisfies SnapshotRecord);
   rememberOperation(transaction.objectStore('drafts'), banker, request, operation, true, item.draft_key ? { key: item.draft_key, value: item.draft_value } : undefined);
   transaction.objectStore('outbox').delete(item.op_id);
   await done;
@@ -1219,19 +1234,18 @@ export function syncOutbox(banker: string, onSaved: (state: SessionState, item: 
         if (!isCurrent()) { await settleClaim(item, isCurrent); break; }
         onChange();
         if (!isCurrent()) { await settleClaim(item, isCurrent); break; }
-        let state: SessionState;
+        let response: unknown;
         try {
-          state = await ownerApi<SessionState>(banker, item, isCurrent);
+          response = await ownerApi<unknown>(banker, item, isCurrent);
         } catch (error) {
           await settleClaim(item, isCurrent, error);
           if (!isCurrent()) break;
-          onChange();
           continue;
         }
         if (!isCurrent()) { await settleClaim(item, isCurrent); break; }
-        const latest = await acknowledge(banker, item, state, isCurrent);
+        const latest = await acknowledge(banker, item, response, isCurrent);
         if (!isCurrent()) { await settleClaim(item, isCurrent); break; }
-        if (latest) { onSaved(latest, item, state); if (isCurrent()) onChange(); }
+        if (latest) onSaved(latest, item, response as SessionState);
       }
     } finally { running = false; }
   };

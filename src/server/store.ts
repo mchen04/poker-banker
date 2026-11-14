@@ -3,7 +3,7 @@ import type { Database, Transaction } from './db.js';
 import { transaction } from './db.js';
 import { conflict, notFound } from './errors.js';
 import { effectiveEntries } from '../domain/timing.js';
-import { deriveSession, type LedgerEntry, type PaymentMethod, type SessionEvent, type SessionSettings } from '../domain/session.js';
+import { deriveSession, type LedgerEntry, type PaymentMethod, type RemovedPlayer, type SessionEvent, type SessionSettings } from '../domain/session.js';
 
 type SessionRow = SessionSettings & { banker_id: string; revision: string };
 type Queryable = Pick<Transaction, 'query'>;
@@ -11,32 +11,41 @@ type Queryable = Pick<Transaction, 'query'>;
 const isoTime = (column: string) => `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 const sessionColumns = `s.id, s.banker_id, s.name, to_char(s.played_on, 'YYYY-MM-DD') AS played_on, s.currency, s.status,
   s.location, s.game, s.big_blind_minor::text, ${isoTime('s.started_at')} AS started_at, ${isoTime('s.ended_at')} AS ended_at,
-  s.closed_balanced, s.closed_at::text, s.share_token, s.revision::text, s.created_at::text, s.updated_at::text`;
+  s.closed_balanced, s.closed_at::text, s.share_token, s.deleted_at::text, s.revision::text, s.created_at::text, s.updated_at::text`;
 
 export async function serverTime(db: Queryable): Promise<string> {
   const result = await db.query<{ server_now: string }>(`SELECT ${isoTime('clock_timestamp()')} AS server_now`);
   return result.rows[0]!.server_now;
 }
 
-export async function sessionRow(db: Queryable, banker: string, session: string, lock = false): Promise<SessionRow> {
+export async function sessionRow(db: Queryable, banker: string, session: string, lock = false, includeDeleted = false): Promise<SessionRow> {
   const result = await db.query<SessionRow>(
-    `SELECT ${sessionColumns} FROM game_sessions s WHERE s.id = $1 AND s.banker_id = $2${lock ? ' FOR UPDATE' : ''}`, [session, banker]);
+    `SELECT ${sessionColumns} FROM game_sessions s WHERE s.id = $1 AND s.banker_id = $2${includeDeleted ? '' : ' AND s.deleted_at IS NULL'}${lock ? ' FOR UPDATE' : ''}`, [session, banker]);
   return result.rows[0] ?? notFound();
 }
 
-export async function loadSession(db: Queryable, banker: string, session: string) {
-  const row = await sessionRow(db, banker, session);
+export async function lockPlayers(db: Queryable, banker: string, players: string[]) {
+  for (const player of [...new Set(players)].sort()) {
+    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`player:${banker}/${player}`]);
+  }
+}
+
+export async function loadSession(db: Queryable, banker: string, session: string, includeDeleted = false) {
+  const row = await sessionRow(db, banker, session, false, includeDeleted);
   const players = await db.query<{ id: string; display_name: string }>(
     `SELECT p.id, p.display_name FROM session_players sp JOIN players p ON p.id = sp.player_id AND p.banker_id = sp.banker_id
-     WHERE sp.session_id = $1 AND sp.banker_id = $2 ORDER BY sp.added_at, p.id`, [session, banker]);
+     WHERE sp.session_id = $1 AND sp.banker_id = $2 AND sp.removed_at IS NULL ORDER BY sp.added_at, p.id`, [session, banker]);
+  const removed = await db.query<RemovedPlayer>(
+    `SELECT p.id, p.display_name, ${isoTime('sp.removed_at')} AS removed_at FROM session_players sp JOIN players p ON p.id = sp.player_id AND p.banker_id = sp.banker_id
+     WHERE sp.session_id = $1 AND sp.banker_id = $2 AND sp.removed_at IS NOT NULL ORDER BY sp.removed_at, p.id`, [session, banker]);
   const entries = await db.query<LedgerEntry>(
-    `SELECT id, player_id, kind, amount_minor::text, note, method, ${isoTime('occurred_at')} AS occurred_at, voids_entry_id, created_at::text, revision::text
+    `SELECT id, player_id, kind, amount_minor::text, note, method, ${isoTime('occurred_at')} AS occurred_at, voids_entry_id, restores_entry_id, removal_id, created_at::text, revision::text
      FROM ledger_entries WHERE session_id = $1 AND banker_id = $2 ORDER BY ledger_entries.revision, created_at, id`, [session, banker]);
   const events = await db.query<SessionEvent>(
     `SELECT id, kind, detail, created_at::text, revision::text FROM session_events
      WHERE session_id = $1 AND banker_id = $2 ORDER BY session_events.revision DESC, id`, [session, banker]);
   const { banker_id: _, revision, ...settings } = row;
-  return deriveSession(settings, revision, players.rows, entries.rows, events.rows, await serverTime(db));
+  return deriveSession(settings, revision, players.rows, entries.rows, events.rows, await serverTime(db), removed.rows);
 }
 
 export async function readSnapshot<T>(pool: Database, action: (db: Transaction) => Promise<T>): Promise<T> {
@@ -60,12 +69,31 @@ export function assertOpen(row: SessionRow) {
 }
 
 export async function insertEntry(db: Transaction, banker: string, session: string, revision: string, entry: {
-  player_id: string; kind: LedgerEntry['kind']; amount_minor: string; note?: string | null; voids_entry_id?: string;
-  method?: PaymentMethod | null; occurred_at: string | null;
+  player_id: string; kind: LedgerEntry['kind']; amount_minor: string; note?: string | null; voids_entry_id?: string | null;
+  restores_entry_id?: string | null; removal_id?: string | null; method?: PaymentMethod | null; occurred_at: string | null;
 }) {
-  await db.query(`INSERT INTO ledger_entries(id,banker_id,session_id,player_id,kind,amount_minor,note,voids_entry_id,revision,method,occurred_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-  [randomUUID(), banker, session, entry.player_id, entry.kind, entry.amount_minor, entry.note ?? null, entry.voids_entry_id ?? null, revision, entry.method ?? null, entry.occurred_at]);
+  await db.query(`INSERT INTO ledger_entries(id,banker_id,session_id,player_id,kind,amount_minor,note,voids_entry_id,revision,method,occurred_at,restores_entry_id,removal_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+  [randomUUID(), banker, session, entry.player_id, entry.kind, entry.amount_minor, entry.note ?? null, entry.voids_entry_id ?? null, revision, entry.method ?? null, entry.occurred_at, entry.restores_entry_id ?? null, entry.removal_id ?? null]);
+}
+
+export async function effectivePlayerEntries(db: Queryable, banker: string, session: string, player: string): Promise<LedgerEntry[]> {
+  const result = await db.query<LedgerEntry>(`SELECT e.id, e.player_id, e.kind, e.amount_minor::text, e.note, e.method, ${isoTime('e.occurred_at')} AS occurred_at,
+    e.voids_entry_id, e.restores_entry_id, e.removal_id, e.created_at::text, e.revision::text
+    FROM ledger_entries e WHERE e.session_id = $1 AND e.banker_id = $2 AND e.player_id = $3 AND e.voids_entry_id IS NULL
+    AND NOT EXISTS (SELECT 1 FROM ledger_entries v WHERE v.voids_entry_id = e.id AND v.session_id = $1 AND v.banker_id = $2)
+    ORDER BY e.revision, e.id`, [session, banker, player]);
+  return result.rows;
+}
+
+export async function removalEntries(db: Queryable, banker: string, session: string, removal: string): Promise<LedgerEntry[]> {
+  const result = await db.query<LedgerEntry>(`SELECT e.id, e.player_id, e.kind, e.amount_minor::text, e.note, e.method, ${isoTime('e.occurred_at')} AS occurred_at,
+    e.voids_entry_id, e.restores_entry_id, e.removal_id, e.created_at::text, e.revision::text
+    FROM ledger_entries v JOIN ledger_entries e ON e.id = v.voids_entry_id AND e.session_id = v.session_id AND e.banker_id = v.banker_id
+    WHERE v.removal_id = $1 AND v.session_id = $2 AND v.banker_id = $3
+    AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.restores_entry_id = e.id AND r.session_id = $2 AND r.banker_id = $3)
+    ORDER BY e.revision, e.id`, [removal, session, banker]);
+  return result.rows;
 }
 
 function canonical(value: unknown): string {
@@ -90,8 +118,9 @@ export async function command<T>(pool: Database, banker: string, op: string, req
   });
 }
 
-export async function playerRecord(db: Queryable, banker: string, player: string) {
-  const result = await db.query<{ id: string; display_name: string; created_at: string }>('SELECT id, display_name, created_at::text FROM players WHERE id = $1 AND banker_id = $2', [player, banker]);
+export async function playerRecord(db: Queryable, banker: string, player: string, includeDeleted = false) {
+  const result = await db.query<{ id: string; display_name: string; created_at: string; deleted_at: string | null }>(
+    `SELECT id, display_name, created_at::text, deleted_at::text FROM players WHERE id = $1 AND banker_id = $2${includeDeleted ? '' : ' AND deleted_at IS NULL'}`, [player, banker]);
   return result.rows[0] ?? notFound();
 }
 
@@ -103,11 +132,12 @@ async function playerSessionHistories(db: Queryable, banker: string, players: { 
     coalesce(jsonb_agg(jsonb_build_object(
       'id', e.id, 'player_id', e.player_id, 'kind', e.kind, 'amount_minor', e.amount_minor::text,
       'note', e.note, 'method', e.method, 'occurred_at', ${isoTime('e.occurred_at')},
-      'voids_entry_id', e.voids_entry_id, 'created_at', e.created_at::text, 'revision', e.revision::text
+      'voids_entry_id', e.voids_entry_id, 'restores_entry_id', e.restores_entry_id, 'removal_id', e.removal_id,
+      'created_at', e.created_at::text, 'revision', e.revision::text
     )) FILTER (WHERE e.id IS NOT NULL), '[]'::jsonb) AS entries
     FROM session_players sp JOIN game_sessions s ON s.id = sp.session_id AND s.banker_id = sp.banker_id
     LEFT JOIN ledger_entries e ON e.session_id = sp.session_id AND e.player_id = sp.player_id AND e.banker_id = sp.banker_id
-    WHERE sp.banker_id = $1 AND sp.player_id = ANY($2::uuid[]) GROUP BY s.id,sp.player_id ORDER BY s.played_on DESC,s.id DESC`, [banker, players.map(player => player.id)]);
+    WHERE sp.banker_id = $1 AND sp.player_id = ANY($2::uuid[]) AND sp.removed_at IS NULL AND s.deleted_at IS NULL GROUP BY s.id,sp.player_id ORDER BY s.played_on DESC,s.id DESC`, [banker, players.map(player => player.id)]);
   const now = await serverTime(db);
   for (const row of rows.rows) {
     const { banker_id: _, owner_player_id, entries, revision, ...session } = row;
@@ -147,33 +177,47 @@ export async function playerHistory(db: Queryable, banker: string, player: strin
 }
 
 export async function playerRoster(db: Queryable, banker: string, search: string) {
-  const players = await db.query<{ id: string; display_name: string; created_at: string }>(
-    'SELECT id,display_name,created_at::text FROM players WHERE banker_id=$1 AND position($2 in name_key)>0 ORDER BY name_key,id', [banker, search]);
+  const players = await db.query<{ id: string; display_name: string; created_at: string; deleted_at: string | null }>(
+    'SELECT id,display_name,created_at::text,deleted_at::text FROM players WHERE banker_id=$1 AND deleted_at IS NULL AND position($2 in name_key)>0 ORDER BY name_key,id', [banker, search]);
   if (!players.rows.length) return [];
   const summaries = await db.query<{
     player_id: string; currency: string; result_minor: string | null;
     owed_to_banker_minor: string; owed_by_banker_minor: string;
   }>(`WITH RECURSIVE entries AS MATERIALIZED (
     SELECT id, session_id, player_id, kind, amount_minor::numeric AS amount_minor,
-      occurred_at, voids_entry_id, revision
+      occurred_at, voids_entry_id, restores_entry_id, revision, created_at
     FROM ledger_entries WHERE banker_id = $1 AND player_id = ANY($2::uuid[])
   ), live AS (
     SELECT e.* FROM entries e WHERE e.voids_entry_id IS NULL
       AND NOT EXISTS (SELECT 1 FROM entries v WHERE v.voids_entry_id = e.id)
+  ), restore_parent AS (
+    SELECT id, restores_entry_id AS parent_id FROM entries WHERE restores_entry_id IS NOT NULL
+  ), correction_parent AS (
+    SELECT DISTINCT ON (e.id) e.id, correction.voids_entry_id AS parent_id
+    FROM entries e JOIN entries correction ON correction.session_id = e.session_id
+      AND correction.player_id = e.player_id AND correction.kind = e.kind
+      AND correction.revision = e.revision AND correction.voids_entry_id IS NOT NULL
+    WHERE e.voids_entry_id IS NULL AND e.restores_entry_id IS NULL
+    ORDER BY e.id, correction.created_at DESC, correction.id DESC
+  ), parents AS (
+    SELECT id, parent_id FROM restore_parent
+    UNION ALL
+    SELECT id, parent_id FROM correction_parent
   ), ancestry AS (
-    SELECT id, session_id, player_id, kind, revision AS original_revision
+    SELECT id, id AS current_id, session_id, player_id, kind, revision AS original_revision
     FROM live WHERE kind IN ('buy_in', 'cash_out')
     UNION ALL
-    SELECT a.id, a.session_id, a.player_id, a.kind, original.revision
-    FROM ancestry a JOIN entries correction ON correction.session_id = a.session_id
-      AND correction.player_id = a.player_id AND correction.kind = a.kind
-      AND correction.revision = a.original_revision AND correction.voids_entry_id IS NOT NULL
-    JOIN entries original ON original.id = correction.voids_entry_id AND original.revision < a.original_revision
+    SELECT a.id, parent.id, a.session_id, a.player_id, a.kind, parent.revision
+    FROM ancestry a JOIN parents p ON p.id = a.current_id
+    JOIN entries parent ON parent.id = p.parent_id AND parent.session_id = a.session_id
+      AND parent.player_id = a.player_id AND parent.kind = a.kind
+      AND parent.revision < a.original_revision
   ), chip_order AS (
-    SELECT e.*, min(a.original_revision) AS original_revision,
+    SELECT e.id, e.session_id, e.player_id, e.kind, e.occurred_at, e.revision,
+      min(a.original_revision) AS original_revision,
       bool_or(e.occurred_at IS NULL) OVER (PARTITION BY e.session_id, e.player_id) AS unknown_time
     FROM live e JOIN ancestry a ON a.id = e.id
-    GROUP BY e.id, e.session_id, e.player_id, e.kind, e.amount_minor, e.occurred_at, e.voids_entry_id, e.revision
+    GROUP BY e.id, e.session_id, e.player_id, e.kind, e.occurred_at, e.revision
   ), last_chip AS (
     SELECT DISTINCT ON (session_id, player_id) session_id, player_id, kind
     FROM chip_order ORDER BY session_id, player_id,
@@ -194,7 +238,7 @@ export async function playerRoster(db: Queryable, banker: string, search: string
   FROM session_players sp JOIN game_sessions s ON s.id = sp.session_id AND s.banker_id = sp.banker_id
     LEFT JOIN amounts a ON a.session_id = sp.session_id AND a.player_id = sp.player_id
     LEFT JOIN last_chip chip ON chip.session_id = sp.session_id AND chip.player_id = sp.player_id
-  WHERE sp.banker_id = $1 AND sp.player_id = ANY($2::uuid[])
+  WHERE sp.banker_id = $1 AND sp.player_id = ANY($2::uuid[]) AND sp.removed_at IS NULL AND s.deleted_at IS NULL
   GROUP BY sp.player_id, s.currency`, [banker, players.rows.map(player => player.id)]);
   const byPlayer = new Map(players.rows.map(player => [player.id, [] as typeof summaries.rows]));
   for (const summary of summaries.rows) byPlayer.get(summary.player_id)!.push(summary);

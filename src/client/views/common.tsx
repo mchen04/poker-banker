@@ -4,8 +4,10 @@ import { deleteDraft, dismissDraftConflict, DraftConflictError, draftConflict, d
 import type { LedgerEntry, SessionState } from '../../domain/session';
 import { currencyExponent, formatMoney } from '../../domain/money';
 import { formatRational, formatSquareRoot, type Rational } from '../../domain/rational';
+import { CloseIcon } from './ui';
 
 export type SheetState = { kind: string; player?: string; entry?: string; amount?: string } | null;
+export type RestoreUndo = { path: string; done: string; sessionId: string | null; reopen?: string };
 export type ClientState = {
   banker: Banker | null;
   client: BankerClient | null;
@@ -20,6 +22,8 @@ export type ClientState = {
   setFormBusy: (busy: boolean) => void;
   isCurrent?: () => boolean;
   mutate: (path: string, body: Record<string, unknown>, method?: string) => Promise<SessionState>;
+  offerUndo: (text: string, undo: RestoreUndo) => void;
+  choose: (id: string | null, notice?: string) => void;
 };
 export const ClientContext = createContext<ClientState | null>(null);
 export function useClient() {
@@ -64,7 +68,8 @@ export function duration(value: string | null, showSeconds = false) {
 export function sessionLabel(session: { played_on: string; name: string }) {
   return `${new Date(`${session.played_on}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${session.name}`;
 }
-export const entryLabels: Record<LedgerEntry['kind'], string> = { buy_in: 'Buy-in', cash_out: 'Cash-out', payment_in: 'Payment received', payment_out: 'Payment paid', expense: 'Tips and meals' };
+export const entryLabels: Record<LedgerEntry['kind'], string> = { buy_in: 'Buy-in', cash_out: 'Cash-out', payment_in: 'Player paid bank', payment_out: 'Bank paid player', expense: 'Tips and meals' };
+export const entryNouns: Record<LedgerEntry['kind'], string> = { buy_in: 'buy-in', cash_out: 'cash-out', payment_in: 'payment', payment_out: 'payout', expense: 'tips and meals' };
 export function methodLabel(method: string | null) { return method ? method.charAt(0).toUpperCase() + method.slice(1) : ''; }
 export function useDraft<T extends object>(key: string, initial: T, options: { requireConflictReview?: boolean } = {}) {
   const client = useContext(ClientContext);
@@ -441,7 +446,7 @@ export function DraftSaveStatus() {
     <ErrorText text={recoveryError} />{failed && <div className="warning" role="status" aria-live="polite"><p>Not saved on this device. Keep this page open until your draft is saved or explicitly discarded.</p><button type="button" disabled={busy} onClick={() => { setBusy(true); void flushDraftWrites().then(() => window.dispatchEvent(new Event('pb-storage-saved'))).catch(storageFailure).finally(() => setBusy(false)); }}>{busy ? 'Saving draft…' : 'Retry saving draft'}</button></div>}</>;
 }
 export function ErrorText({ text, id }: { text: string; id?: string }) { return text ? <p id={id} role="alert" aria-live="polite" className="error" tabIndex={-1}>{text}</p> : null; }
-export function Sheet({ title, children, close, leadingClose = true, closeLabel = 'Cancel', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
+export function Sheet({ title, children, close, closeLabel = 'Cancel', className = '' }: { title: string; children: ReactNode; close: () => void; leadingClose?: boolean; closeLabel?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const client = useContext(ClientContext);
   const updateBanner = client?.updateBanner;
@@ -461,6 +466,8 @@ export function Sheet({ title, children, close, leadingClose = true, closeLabel 
       const editor = editors.find(editor => editor.dataset.testid === 'money-amount') ?? editors[0];
       if (editor) { editor.focus(); focused = document.activeElement === editor; }
     }
+    const initial = panel?.querySelector<HTMLElement>('[data-initial-focus]');
+    if (initial) { initial.focus(); focused = document.activeElement === initial; }
     focusEditor();
     if (!focused) [...panel?.querySelectorAll<HTMLElement>('button,summary') ?? []].find(available)?.focus();
     const observer = new MutationObserver(() => { focusEditor(); if (focused) observer.disconnect(); });
@@ -478,7 +485,7 @@ export function Sheet({ title, children, close, leadingClose = true, closeLabel 
     document.addEventListener('keydown', keyboard);
     const oldOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    return () => { observer.disconnect(); document.removeEventListener('keydown', keyboard); document.body.style.overflow = oldOverflow; previous?.focus(); };
+    return () => { observer.disconnect(); document.removeEventListener('keydown', keyboard); document.body.style.overflow = oldOverflow; const fallback = document.querySelector<HTMLElement>('.notice button') ?? document.querySelector<HTMLElement>('main'); if (previous?.isConnected) previous.focus(); else if (fallback) { if (fallback.tagName === 'MAIN') fallback.tabIndex = -1; fallback.focus(); } };
   }, []);
   useLayoutEffect(() => {
     const panel = ref.current;
@@ -518,8 +525,8 @@ export function Sheet({ title, children, close, leadingClose = true, closeLabel 
       panel?.removeEventListener('focusin', keepVisible);
     };
   }, []);
-  const closeButton = <button type="button" aria-label={className.includes('money-sheet') ? closeLabel : 'Close sheet'} disabled={busy} onClick={close}>{closeLabel}</button>;
+  const closeButton = <button type="button" className="icon-button sheet-close" aria-label={className.includes('money-sheet') ? closeLabel : 'Close sheet'} title={closeLabel} disabled={busy} onClick={close}><CloseIcon /></button>;
   return <div className="sheet-backdrop"><div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
-    <div className="sheet-status">{updateBanner}<DraftSaveStatus /></div><div className="sheet-handle" /><header className={`sheet-header${leadingClose ? ' leading-close' : ''}`}>{leadingClose && closeButton}<h2>{title}</h2>{!leadingClose && closeButton}</header><div className="sheet-fields"><fieldset className="sheet-controls" disabled={busy}>{children}</fieldset></div>
+    <div className="sheet-status">{updateBanner}<DraftSaveStatus /></div><header className="sheet-header"><h2 title={title}>{title}</h2>{closeButton}</header><div className="sheet-fields"><fieldset className="sheet-controls" disabled={busy}>{children}</fieldset></div>
   </div></div>;
 }

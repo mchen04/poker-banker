@@ -17,13 +17,15 @@ Read [SKILL.md](../SKILL.md), launch from the repository root and require Doctor
 | --- | --- |
 | [Accounts and recovery](accounts-and-recovery.md) | Signup acknowledgement, signin/signout, one-use recovery, revocation and isolation. |
 | [Sessions and drafts](sessions-and-drafts.md) | Creation/settings, suggestions, picker/history/pagination, player reuse and scoped drafts. |
-| [Ledger and corrections](ledger-and-corrections.md) | Row/footer buy-ins, re-entry, expenses, full Activity, correction/void. |
+| [Ledger and corrections](ledger-and-corrections.md) | Row/footer buy-ins, re-entry, expenses, full Activity, correction/delete. |
 | [Payments and methods](payments-and-methods.md) | Paid/unpaid, late settlements, directions, methods and correction. |
 | [Timer](timer.md) | Auto/manual start, reload/another context, correction and close-stop. |
 | [Close/reopen/cumulative](close-reopen-and-cumulative.md) | Blockers, exact discrepancy consent and closed-session counting. |
 | [Sharing/live viewer](sharing-and-live-viewer.md) | Enable/copy, updates, rotate/disable and read-only access. |
 | [Player reports](player-reports.md) | Roster/rename, five groupings, six filters and display-only rates. |
 | [Offline and updates](offline-and-app-updates.md) | Snapshots, pending/rejected writes, replay, automatic adoption, pinned legacy compatibility, skew and storage bounds. |
+| [Deletion and recovery](deletion-and-recovery.md) | Delete entry, remove player, delete session and delete roster player, each with Undo, later Restore, offline queueing and exact totals. |
+| [Screen tour and layout](screen-tour-and-layout.md) | Every screen at 393, 375 and 320 wide, including deletion confirms and toasts, automatic alignment/wrapping/target checks and load-flicker filmstrips. |
 | [Performance](performance.md) | Isolated datasets, current transport, baseline, profiles and interleaved comparison. |
 
 ## Layout and control-count capture

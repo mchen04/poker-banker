@@ -24,6 +24,7 @@ export const sessionCreate = z.strictObject({ op_id: opId, name, played_on: date
 export const sessionPatch = z.strictObject({ op_id: opId, name: name.optional(), played_on: date.optional(), ...details })
   .refine(value => Object.keys(value).some(key => key !== 'op_id'));
 export const startTimer = z.strictObject({ op_id: opId });
+export const commandOnly = z.strictObject({ op_id: opId });
 export const timingPatch = z.strictObject({ op_id: opId, started_at: timestamp, ended_at: timestamp.nullable() })
   .refine(value => value.ended_at === null || Date.parse(value.ended_at) >= Date.parse(value.started_at), 'End must be at or after start');
 export const playerCreate = z.strictObject({ op_id: opId, display_name: name });

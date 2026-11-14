@@ -37,6 +37,14 @@ async function lifecycle(page: Page) {
 
 type CacheInventory = { key: string; entries: { url: string; path: string; method: string; bytes: number; sha256: string }[]; bodyBytes: number };
 async function cacheInventory(page: Page): Promise<CacheInventory[]> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await cacheSnapshot(page); } catch (error) {
+      if (attempt >= 5 || !String(error).includes('Cache entry disappeared during proof snapshot')) throw error;
+      await page.waitForTimeout(250);
+    }
+  }
+}
+async function cacheSnapshot(page: Page): Promise<CacheInventory[]> {
   return page.evaluate(async () => {
     const result = [];
     for (const key of (await caches.keys()).filter(key => key.startsWith('poker-banker-') && !key.includes('metadata')).sort()) {
