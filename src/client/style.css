@@ -361,6 +361,10 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
   .player-card.actions-below .player-actions { align-self: end; padding-bottom: 8px; }
 }
 @media (max-width: 374px) {
+  .session-heading h1 { font-size: 1.25rem; line-height: 1.75rem; }
+  .totals { gap: 6px; padding: 10px 12px; }
+  .totals-hero { font-size: 1.5rem; line-height: 2rem; margin-top: 2px; }
+  .totals-amount { font-size: 1.125rem; line-height: 1.5rem; }
   .with-actions .player-row { padding-right: 16px; }
   .player-actions { grid-area: 2 / 1; width: auto; padding: 0 16px 8px; }
   .player-actions:empty { display: none; }
