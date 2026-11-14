@@ -205,6 +205,25 @@ test('deleting a session moves to the next session, kills its viewer link and re
   expect((await call<{ sessions: unknown[] }>(page, '/sessions/deleted')).sessions).toHaveLength(0);
 });
 
+test('restores a deleted session from the second page of Recently deleted', async ({ page }) => {
+  await createAccount(page);
+  await newSession(page, 'Current game');
+  let oldest = '';
+  for (let index = 0; index < 32; index++) {
+    const created = await call<SessionState>(page, '/sessions', 'POST', { op_id: randomUUID(), name: index === 0 ? 'Oldest deleted' : `Deleted page ${index}`, played_on: '2026-11-10', currency: 'USD' });
+    if (index === 0) oldest = created.session.id;
+    await call(page, `/sessions/${created.session.id}/delete`, 'POST', { op_id: randomUUID() });
+  }
+  await page.getByRole('button', { name: 'Switch session', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: 'Sessions', exact: true });
+  await picker.getByText('Recently deleted', { exact: true }).click();
+  await expect(picker.getByRole('button', { name: 'Restore Oldest deleted', exact: true })).toHaveCount(0);
+  await picker.getByRole('button', { name: 'Load more deleted sessions', exact: true }).click();
+  await picker.getByRole('button', { name: 'Restore Oldest deleted', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Oldest deleted', exact: true })).toBeVisible();
+  expect((await current(page)).session.id).toBe(oldest);
+});
+
 test('an offline buy-in for a session deleted on another device stays listed until discarded', async ({ page }) => {
   await createAccount(page);
   await newSession(page, 'Older game');
