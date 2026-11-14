@@ -90,7 +90,7 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
         const name = card.querySelector<HTMLElement>('.player-name strong');
         if (clippedAmounts.has(card)) return true;
         const status = card.querySelector<HTMLElement>('.player-state');
-        if (status && status.scrollWidth > status.clientWidth + 1) return true;
+        if (section.classList.contains('with-actions') && status && status.scrollWidth > status.clientWidth + 1) return true;
         if (!name) return false;
         const line = Number.parseFloat(getComputedStyle(name).lineHeight);
         return name.scrollWidth > name.clientWidth + 1 || name.getBoundingClientRect().height > line * 2 + 1;
@@ -209,7 +209,13 @@ function RemovePlayer({ playerId }: { playerId: string }) {
   const [error, setError] = useState('');
   const panel = useRef<HTMLElement>(null);
   useFormBusy(busy);
-  useEffect(() => { if (confirming) panel.current?.focus(); }, [confirming]);
+  useEffect(() => {
+    if (!confirming) return;
+    const reveal = () => panel.current?.scrollIntoView({ block: 'nearest' });
+    panel.current?.focus({ preventScroll: true }); reveal();
+    window.addEventListener('resize', reveal);
+    return () => window.removeEventListener('resize', reveal);
+  }, [confirming]);
   const path = `/api/sessions/${state!.session.id}/players/${playerId}/remove`;
   const voided = new Set(state!.entries.flatMap(entry => entry.voids_entry_id ? [entry.voids_entry_id] : []));
   const count = state!.entries.filter(entry => entry.player_id === playerId && !entry.voids_entry_id && !voided.has(entry.id)).length;

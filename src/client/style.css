@@ -111,6 +111,7 @@ span.session-title { display: block; padding-block: 6px; }
 .player-row { grid-area: 1 / 1; display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; column-gap: 8px; width: 100%; min-width: 0; min-height: 64px; padding: 8px 16px; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: left; font-weight: 400; overflow-wrap: normal; }
 button.player-row:active { background: var(--subtle); }
 .with-actions .player-row { padding-right: calc(var(--actions-w) + 16px); }
+.with-actions .player-card:has(> .player-actions:empty) .player-row { padding-right: 16px; }
 .player-name { display: contents; }
 .player-name strong { grid-area: 1 / 1; display: block; min-width: 0; overflow-wrap: break-word; font-size: 1rem; line-height: 1.375rem; font-weight: 600; }
 .measuring .player-name strong { overflow: hidden; overflow-wrap: normal; }
@@ -136,6 +137,7 @@ button.player-row:active { background: var(--subtle); }
 .player-actions { grid-area: 1 / 1; justify-self: end; display: flex; justify-content: flex-end; gap: 4px; width: var(--actions-w); padding-right: 10px; pointer-events: none; position: relative; z-index: 1; box-sizing: content-box; }
 .player-actions button { width: 76px; height: 44px; min-height: 44px; padding: 0; border: 0; border-radius: var(--radius-control); background: var(--accent-soft); color: var(--accent); font-size: .875rem; white-space: nowrap; pointer-events: auto; overflow-wrap: normal; }
 .player-actions button + button { width: 56px; }
+.player-actions button:only-child { width: var(--actions-w); }
 .player-actions button:active { filter: brightness(.95); }
 .empty-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 10px 16px; color: var(--muted); font-size: .875rem; }
 .empty-row button { min-height: 44px; }
