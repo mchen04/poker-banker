@@ -367,6 +367,14 @@ it('pages deleted players at microsecond precision without skipping or repeating
   expect(new Set(seen)).toEqual(new Set(ids));
 });
 
+it('rejects out-of-range cursor dates on every paged list', async () => {
+  const owner = await account();
+  const id = randomUUID();
+  await rejects(await request(owner, `/sessions?before=0000-01-01,${id}`), 400, 'invalid_request');
+  await rejects(await request(owner, `/sessions/deleted?before=0000-01-01T00:00:00.000000Z,${id}`), 400, 'invalid_request');
+  await rejects(await request(owner, `/players/deleted?before=0000-01-01T00:00:00.000000Z,${id}`), 400, 'invalid_request');
+});
+
 describe('ledger integrity for restores', () => {
   it('rejects a direct insert that restores a live entry or double-restores a voided one', async () => {
     const owner = await account();
