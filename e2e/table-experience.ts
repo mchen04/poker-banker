@@ -138,7 +138,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
     await tap(page.getByTestId('ready-to-close'));
     await tap(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })); await saved();
   });
-  const secondName = `Eight at Justin’s ${tag}`;
+  const secondName = `Justin’s ${short}`;
   await measure('Create another session', async tap => {
     const headerAction = page.locator('.session-heading').getByRole('button', { name: 'New session', exact: true });
     await tap(await headerAction.isVisible() ? headerAction : page.getByTestId('session-bottom-bar').getByRole('button', { name: 'New session', exact: true }));
