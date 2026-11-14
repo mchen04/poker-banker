@@ -68,15 +68,28 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
   const [actionsBelow, setActionsBelow] = useState('');
   useLayoutEffect(() => {
     const section = playersRef.current;
-    if (!section || !actions) { setActionsBelow(''); return; }
+    if (!section) { setActionsBelow(''); return; }
     const measure = () => {
       const cards = [...section.querySelectorAll<HTMLElement>('.player-card')];
       const was = cards.map(card => card.classList.contains('actions-below'));
       for (const card of cards) card.classList.remove('actions-below');
+      const clippedAmounts = new Set(cards.filter(card => {
+        const amount = card.querySelector<HTMLElement>('.player-detail .fit-text');
+        if (!amount) return false;
+        const fitted = amount.style.fontSize;
+        const wrapped = amount.classList.contains('fit-wrap');
+        amount.style.fontSize = '';
+        amount.classList.remove('fit-wrap');
+        const clipped = amount.scrollWidth > amount.clientWidth + 1;
+        amount.style.fontSize = fitted;
+        amount.classList.toggle('fit-wrap', wrapped);
+        return clipped;
+      }));
       section.classList.add('measuring');
       const crowded = cards.filter(card => {
         const name = card.querySelector<HTMLElement>('.player-name strong');
-        if (!name || !card.querySelector('.player-actions button')) return false;
+        if (clippedAmounts.has(card)) return true;
+        if (!name || (actions && !card.querySelector('.player-actions button'))) return false;
         const line = Number.parseFloat(getComputedStyle(name).lineHeight);
         return name.scrollWidth > name.clientWidth + 1 || name.getBoundingClientRect().height > line * 2 + 1;
       }).map(card => card.dataset.player ?? '');
@@ -119,11 +132,11 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
         const content = <>
           <span className="player-name"><strong title={player.display_name}>{player.display_name}</strong><span className="player-state"><span data-testid={player.state !== 'cashed_out' ? `result-${player.id}` : undefined}>{player.state === 'seated' ? 'Not bought in' : player.state === 'playing' ? 'Playing' : 'Cashed out'}</span>{(player.state !== 'seated' || balance !== 0n) && <><span className="state-separator"> · </span>{balance === 0n ? <span className="player-paid">Paid up</span> : <span className={`player-balance ${balance > 0n ? 'owe' : 'owed'}`}>{balance > 0n ? 'Owes' : 'Owed'} <span className="money-value">{money(String(balance > 0n ? balance : -balance), currency)}</span></span>}</>}</span></span>
           <span className="player-detail">
-            {player.state === 'cashed_out' ? <FitText className={`money-value player-position tone-${resultTone(player, mode)}`} testId={`result-${player.id}`} text={resultText(player, currency, mode)} refit={actionsBelow.split(' ').includes(player.id)} /> : player.state === 'playing' ? <span className="player-position-wrap"><span className="position-label" aria-hidden="true">in </span><span className="sr-only">Bought </span><FitText className="money-value player-position" text={money(player.bought_in_minor, currency)} refit={actionsBelow.split(' ').includes(player.id)} /></span> : null}
+            {player.state === 'cashed_out' ? <span className="player-position-wrap">{!resultText(player, currency, mode).startsWith('No ') && <span className="position-label">Result </span>}<FitText className={`money-value player-position tone-${resultTone(player, mode)}`} testId={`result-${player.id}`} text={resultText(player, currency, mode)} refit={actionsBelow.split(' ').includes(player.id)} /></span> : player.state === 'playing' ? <span className="player-position-wrap bought"><span className="position-label">Bought </span><FitText className="money-value player-position" text={money(player.bought_in_minor, currency)} refit={actionsBelow.split(' ').includes(player.id)} /></span> : null}
           </span>
         </>;
         const controls = actions && <div className="player-actions">{player.state === 'seated' ? <button data-testid={`buy-in-${player.id}`} aria-label={`Buy-in for ${player.display_name}`} onClick={() => open({ kind: 'money', player: player.id })}>Buy-in</button> : player.state === 'playing' ? <><button data-testid={`cash-out-${player.id}`} aria-label={`Cash out ${player.display_name}`} onClick={() => open({ kind: 'cash_out', player: player.id })}>Cash out</button>{lastBuy && <button data-testid={`repeat-buy-in-${player.id}`} aria-label={`Repeat last buy-in for ${player.display_name}`} title={`Rebuy ${money(lastBuy, currency)}`} onClick={() => open({ kind: 'money', player: player.id, amount: lastBuy })}>Rebuy</button>}</> : balance !== 0n ? <button data-testid={`settle-${player.id}`} aria-label={`Settle ${player.display_name}`} onClick={() => open({ kind: balance < 0n ? 'payment_out' : 'payment_in', player: player.id, amount: String(balance < 0n ? -balance : balance) })}>Settle</button> : null}</div>;
-        return viewer ? <div className="player-card" key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className={`player-card${actionsBelow.split(' ').includes(player.id) ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
+        return viewer ? <div className={`player-card${actionsBelow.split(' ').includes(player.id) ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><div data-testid={`player-${player.id}`} className="player-row">{content}</div></div> : <div className={`player-card${actionsBelow.split(' ').includes(player.id) ? ' actions-below' : ''}`} data-player={player.id} key={player.id}><button data-testid={`player-${player.id}`} className="player-row" onClick={() => open({ kind: 'player', player: player.id })}>{content}</button>{controls}</div>;
       })}</section>
       {!viewer && <RemovedPlayers state={state} />}
     </div>
@@ -233,11 +246,11 @@ export function MoneySheet({ title, playerId, kind: initialKind, initialAmount }
   const { banker, state, notify, open } = useClient();
   const currency = state!.session.currency;
   const player = state!.players.find(player => player.id === playerId)!;
-  const { lastBuy, typicalBuy, method: lastMethod } = moneyOptions(state!.entries, playerId);
+  const { lastBuy, typicalBuy, lastBuyPaid, method: lastMethod } = moneyOptions(state!.entries, playerId);
   const key = draftKey(banker!.id, state!.session.id, initialKind, playerId);
   const balance = BigInt(state!.players.find(player => player.id === playerId)!.balance_minor);
   const suggestedKind = initialKind === 'payment_in' && balance < 0n ? 'payment_out' : initialKind;
-  const draft = useDraft<MoneyDraft>(key, { op_id: crypto.randomUUID(), amount: initialAmount !== undefined ? decimal(initialAmount, currency) : '', paid_now: initialKind === 'buy_in', method: lastMethod, occurred_at: '', note: '', kind: suggestedKind });
+  const draft = useDraft<MoneyDraft>(key, { op_id: crypto.randomUUID(), amount: initialAmount !== undefined ? decimal(initialAmount, currency) : '', paid_now: initialKind === 'buy_in' && lastBuyPaid && balance <= 0n, method: lastMethod, occurred_at: '', note: '', kind: suggestedKind });
   const [error, setError] = useState('');
   const [amountError, setAmountError] = useState('');
   const [saving, setSaving] = useState(false);

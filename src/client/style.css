@@ -108,7 +108,7 @@ span.session-title { display: block; padding-block: 6px; }
 .players { display: grid; margin: 0; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-card); }
 .player-card { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; min-width: 0; background: var(--surface); border-top: 1px solid var(--line); }
 .player-card:first-child { border-top-color: transparent; margin-top: -1px; }
-.player-row { grid-area: 1 / 1; display: grid; grid-template-columns: minmax(40%, 1fr) minmax(0, auto); align-items: center; column-gap: 8px; width: 100%; min-width: 0; min-height: 64px; padding: 8px 16px; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: left; font-weight: 400; overflow-wrap: normal; }
+.player-row { grid-area: 1 / 1; display: grid; grid-template-columns: minmax(min-content, 1fr) minmax(0, auto); align-items: center; column-gap: 8px; width: 100%; min-width: 0; min-height: 64px; padding: 8px 16px; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: left; font-weight: 400; overflow-wrap: normal; }
 button.player-row:active { background: var(--subtle); }
 .with-actions .player-row { padding-right: calc(var(--actions-w) + 16px); }
 .player-name { display: contents; }
@@ -119,10 +119,12 @@ button.player-row:active { background: var(--subtle); }
 .measuring .player-state { overflow: hidden; white-space: nowrap; }
 .player-detail { grid-area: 1 / 2; justify-self: end; display: flex; flex-direction: column; align-items: flex-end; min-width: 0; max-width: 100%; text-align: right; }
 .player-position-wrap { display: flex; align-items: baseline; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 100%; }
-.position-label { flex: none; color: var(--muted); font-size: .75rem; line-height: 1rem; }
+.position-label { flex: none; color: var(--muted); font-size: 1rem; line-height: 1.375rem; font-weight: 400; white-space: nowrap; }
 .player-card > div.player-row .player-detail { align-self: start; }
+.players:not(.with-actions) .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; }
+.players:not(.with-actions) .player-card.actions-below .player-detail { grid-area: 3 / 1 / 4 / 3; }
 .player-position { font-size: 1rem; line-height: 1.375rem; font-weight: 600; }
-.player-position-wrap .player-position { color: var(--muted); font-weight: 500; }
+.player-position-wrap.bought .player-position { color: var(--muted); font-weight: 500; }
 .player-paid, .player-balance { font-size: .875rem; line-height: 1.25rem; }
 .player-paid { color: var(--muted); }
 .player-balance { font-weight: 650; }
@@ -360,8 +362,8 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
 }
 @media (min-width: 375px) {
   .with-actions .player-card.actions-below .player-row { grid-template-rows: auto auto minmax(44px, auto); }
-  .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; margin-right: calc(0px - var(--actions-w)); }
-  .player-card.actions-below .player-state { grid-area: 2 / 1 / 3 / 3; margin-right: calc(0px - var(--actions-w)); }
+  .with-actions .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; margin-right: calc(0px - var(--actions-w)); }
+  .with-actions .player-card.actions-below .player-state { grid-area: 2 / 1 / 3 / 3; margin-right: calc(0px - var(--actions-w)); }
   .player-card.actions-below .player-detail { grid-area: 3 / 1 / 4 / 3; }
   .player-card.actions-below .player-actions { align-self: end; padding-bottom: 8px; }
 }
