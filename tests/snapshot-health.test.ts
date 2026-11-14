@@ -86,3 +86,46 @@ it('acknowledges an outbox item over a malformed stored snapshot', async () => {
   expect(await readSnapshot('banker', 'session')).toEqual(fresh);
   expect(stores.get('outbox')!.size).toBe(0);
 });
+
+it('treats a malformed stored snapshot as absent when read', async () => {
+  fakeStorage({ snapshots: [{ key: 'banker/session', banker_id: 'banker', state: { revision: '1', session: null } }] });
+  const { readSnapshot } = await import('../src/client/data');
+  expect(await readSnapshot('banker', 'session')).toBeUndefined();
+});
+
+it('recovers a changed retry when the stored snapshot is malformed', async () => {
+  const op = 'op-1';
+  fakeStorage({
+    snapshots: [{ key: 'banker/bad', banker_id: 'banker', state: { revision: '1', session: null } }],
+    drafts: [{ key: `banker/_operations/requests/${op}`, banker_id: 'banker', kind: 'operation_request', value: { request: { path: '/api/sessions/bad/entries', method: 'POST', body: { op_id: op, player_id: 'p', kind: 'buy_in', amount_minor: '1000' } } }, updated_at: 0 }],
+  });
+  vi.stubGlobal('window', { dispatchEvent: () => {} });
+  const { enqueue } = await import('../src/client/data');
+  const result = await enqueue({ banker_id: 'banker', session_id: 'bad', path: '/api/sessions/bad/entries', body: { op_id: op, player_id: 'p', kind: 'buy_in', amount_minor: '2000' }, label: 'Buy-in' });
+  expect('draft_conflict' in result).toBe(true);
+});
+
+it('keeps syncing after a conflicting retry over a malformed snapshot', async () => {
+  const bad = { op_id: 'op-bad', banker_id: 'banker', session_id: 'bad', path: '/api/sessions/bad/entries', method: 'POST', body: { op_id: 'op-bad', player_id: 'p', kind: 'buy_in', amount_minor: '1000', paid_now: false }, label: 'Buy-in', order: 0, status: 'pending', attempts: 0, next_attempt_at: 0 };
+  const good = { ...bad, op_id: 'op-good', session_id: 'good', path: '/api/sessions/good/entries', body: { ...bad.body, op_id: 'op-good', amount_minor: '2000' }, order: 1 };
+  const freshGood = deriveSession(settings('good'), '2', [], [], [], '2026-11-10T01:00:00.000Z');
+  fakeStorage({ snapshots: [{ key: 'banker/bad', banker_id: 'banker', state: { revision: '1', session: null } }], outbox: [bad, good] });
+  const bus = new EventTarget();
+  vi.stubGlobal('window', { setTimeout, clearTimeout, setInterval, clearInterval, addEventListener: bus.addEventListener.bind(bus), removeEventListener: bus.removeEventListener.bind(bus), dispatchEvent: bus.dispatchEvent.bind(bus) });
+  vi.stubGlobal('navigator', { onLine: true });
+  vi.stubGlobal('fetch', vi.fn(async (_path: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { op_id: string };
+    return body.op_id === 'op-bad'
+      ? Response.json({ error: { code: 'idempotency_mismatch', message: 'Changed' } }, { status: 409, headers: { 'X-PB-Banker-ID': 'banker' } })
+      : Response.json(freshGood, { headers: { 'X-PB-Banker-ID': 'banker' } });
+  }));
+  const { syncOutbox, listOutbox, listRecoveredDrafts, readSnapshot } = await import('../src/client/data');
+  const stop = syncOutbox('banker', () => {}, () => {});
+  try { await vi.waitFor(async () => expect(await listOutbox('banker')).toEqual([])); }
+  finally { stop(); }
+  const recovered = await listRecoveredDrafts('banker');
+  expect(recovered).toHaveLength(1);
+  expect(recovered[0]!.currency).toBeUndefined();
+  expect(await readSnapshot('banker', 'good')).toEqual(freshGood);
+  expect(await readSnapshot('banker', 'bad')).toBeUndefined();
+});
