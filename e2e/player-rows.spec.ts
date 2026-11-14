@@ -80,23 +80,31 @@ test('narrow phones stack only crowded rows and keep sheet actions in reach', as
   expect(shown.map(row => row.stacked)).toEqual([false, true, false]);
   expect(new Set(shown.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
 
+  await page.setViewportSize({ width: 320, height: 480 });
   await openMoney(page, long.id, 'Buy-in');
   const fields = page.locator('.money-fields');
   const footer = page.locator('.money-actions');
-  const state = () => fields.evaluate(element => ({ more: element.scrollTop + element.clientHeight < element.scrollHeight - 1, cue: element.closest('form')!.querySelector('.money-actions')!.classList.contains('content-below') }));
-  await expect.poll(async () => { const now = await state(); return now.more === now.cue; }).toBe(true);
-  await fields.evaluate(element => { element.scrollTop = 0; });
-  if ((await state()).more) {
-    await expect(footer).toHaveClass(/content-below/);
-    await fields.evaluate(element => { element.scrollTop = element.scrollHeight; });
-    await expect(footer).not.toHaveClass(/content-below/);
-  }
+  await expect.poll(() => fields.evaluate(element => element.scrollHeight > element.clientHeight + 1)).toBe(true);
+  await expect(footer).toHaveClass(/content-below/);
+  await expect(page.locator('.quick-amounts button').first()).toBeEnabled();
+  await expect.poll(async () => { await fields.evaluate(element => { element.scrollTop = element.scrollHeight; }); return footer.evaluate(element => element.classList.contains('content-below')); }).toBe(false);
+  await page.getByText('Record an earlier time or note', { exact: true }).click();
+  await expect(footer).toHaveClass(/content-below/);
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
   await menu(page, 'Close session');
+  const sheet = page.locator('.sheet-fields');
   const close = page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true });
+  await expect.poll(() => sheet.evaluate(element => element.scrollHeight > element.clientHeight + 1)).toBe(true);
   await expect(close).toBeDisabled();
   await expect(close).toBeInViewport({ ratio: 1 });
   await expect(close).toHaveAccessibleDescription('Cash out 3 players first');
+  const blockers = page.getByRole('dialog').locator('.close-blocker');
+  for (let index = 0; index < 3; index += 1) {
+    await blockers.nth(index).focus();
+    await expect(blockers.nth(index)).toBeFocused();
+    const clear = await blockers.nth(index).evaluate(element => element.getBoundingClientRect().bottom <= document.querySelector('.sticky-action')!.getBoundingClientRect().top + 1);
+    expect(clear, `focused blocker ${index} stays above the Close bar`).toBe(true);
+  }
 });

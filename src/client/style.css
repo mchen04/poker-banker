@@ -192,7 +192,7 @@ button.entry-row:active { background: var(--subtle); }
 .money-fields, .form-body { flex: 0 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 2px 8px; }
 .money-actions, .form-actions { flex: none; padding: 8px 0 calc(12px + env(safe-area-inset-bottom)); background: var(--surface); }
 .money-actions button.wide, .form-actions button.wide { margin: 0; }
-.sheet-fields:has(.sticky-action) { padding-bottom: 0; }
+.sheet-fields:has(.sticky-action) { padding-bottom: 0; scroll-padding-bottom: calc(128px + env(safe-area-inset-bottom)); }
 .sticky-action { position: sticky; bottom: 0; z-index: 1; margin-top: 8px; padding: 8px 0 calc(16px + env(safe-area-inset-bottom)); background: var(--surface); }
 .sticky-action button.wide { margin: 0; }
 .close-reason { margin: 0 0 8px; text-align: center; }
