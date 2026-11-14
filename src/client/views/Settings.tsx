@@ -98,6 +98,8 @@ export function HistorySheet({ choose }: { choose: (id: string | null, notice?: 
   const [openLoaded, setOpenLoaded] = useState(false);
   const [error, setError] = useState('');
   const [before, setBefore] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sessionGeneration = useRef(0);
   useEffect(() => {
     let active = true;
     void listSnapshots(banker!.id).then(saved => {
@@ -107,9 +109,10 @@ export function HistorySheet({ choose }: { choose: (id: string | null, notice?: 
   }, [banker!.id, client, online]);
   useEffect(() => {
     let active = true;
-    setHistoryLoaded(false); setBefore(null); setError('');
+    const generation = ++sessionGeneration.current;
+    setHistoryLoaded(false); setBefore(null); setError(''); setLoadingMore(false);
     if (!online) return;
-    void api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}`).then(result => { if (active && client!.isCurrent()) { setSessions(result.sessions); setBefore(result.next); setHistoryLoaded(true); } }).catch(error => { if (active && client!.isCurrent()) setError(error.message); });
+    void api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}`).then(result => { if (active && client!.isCurrent() && generation === sessionGeneration.current) { setSessions(result.sessions); setBefore(result.next); setHistoryLoaded(true); } }).catch(error => { if (active && client!.isCurrent() && generation === sessionGeneration.current) setError(error.message); });
     return () => { active = false; };
   }, [search, online, client]);
   useEffect(() => {
@@ -140,11 +143,22 @@ export function HistorySheet({ choose }: { choose: (id: string | null, notice?: 
   const pinned = choices.filter(session => session.id === current?.id || session.status === 'open').sort((left, right) => Number(right.id === current?.id) - Number(left.id === current?.id));
   const historical = choices.filter(session => !pinned.some(item => item.id === session.id));
   const months = [...new Set(historical.map(session => session.played_on.slice(0, 7)))];
-  async function more() { const result = await api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}&before=${encodeURIComponent(before!)}`); if (client!.isCurrent()) { setSessions(current => [...current, ...result.sessions]); setBefore(result.next); } }
+  async function more() {
+    if (!before || loadingMore) return;
+    const generation = sessionGeneration.current;
+    setLoadingMore(true); setError('');
+    try {
+      const result = await api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}&before=${encodeURIComponent(before)}`);
+      if (!client!.isCurrent() || generation !== sessionGeneration.current) return;
+      setSessions(current => [...current, ...result.sessions]);
+      setBefore(result.next);
+    } catch (problem) { if (client!.isCurrent() && generation === sessionGeneration.current) setError(problem instanceof Error ? problem.message : 'Could not load more sessions'); }
+    finally { setLoadingMore(false); }
+  }
   function choice(session: SessionSummary) {
     return <li key={session.id}><button data-testid={`session-tab-${session.id}`} aria-current={state?.session.id === session.id ? 'true' : undefined} onClick={() => choose(session.id)}><span>{sessionLabel(session)}</span><small>{state?.session.id === session.id ? 'Current · ' : ''}{session.status === 'closed' ? 'Closed' : 'Open'} · {session.currency}</small></button></li>;
   }
-  return <><button className="primary wide" onClick={() => open({ kind: 'new' })}>New session</button>{!online && <p className="hint" role="status">Offline · saved sessions on this device</p>}<label>Search sessions<input data-autofocus="false" value={search} onChange={event => setSearch(event.target.value)} /></label>{pinned.length > 0 && <section aria-label="Current and open sessions"><h3>Current and open sessions</h3><ul className="choice-list">{pinned.map(choice)}</ul></section>}{months.map(month => <section key={month}><h3>{new Date(`${month}-01T12:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h3><ul className="choice-list">{historical.filter(session => session.played_on.startsWith(month)).map(choice)}</ul></section>)}{!choices.length && <p>No matching sessions.</p>}{online && before && <button className="wide" onClick={() => { setError(''); void more().catch(error => setError(error.message)); }}>Load more sessions</button>}<ErrorText text={error} /><DeletedSessions choose={choose} /></>;
+  return <><button className="primary wide" onClick={() => open({ kind: 'new' })}>New session</button>{!online && <p className="hint" role="status">Offline · saved sessions on this device</p>}<label>Search sessions<input data-autofocus="false" value={search} onChange={event => setSearch(event.target.value)} /></label>{pinned.length > 0 && <section aria-label="Current and open sessions"><h3>Current and open sessions</h3><ul className="choice-list">{pinned.map(choice)}</ul></section>}{months.map(month => <section key={month}><h3>{new Date(`${month}-01T12:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h3><ul className="choice-list">{historical.filter(session => session.played_on.startsWith(month)).map(choice)}</ul></section>)}{!choices.length && <p>No matching sessions.</p>}{online && before && <button className="wide" disabled={loadingMore} onClick={() => { setError(''); void more(); }}>Load more sessions</button>}<ErrorText text={error} /><DeletedSessions choose={choose} /></>;
 
 }
 export function MenuSheet() {
