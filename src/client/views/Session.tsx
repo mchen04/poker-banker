@@ -97,7 +97,7 @@ export function SessionView({ state, viewer = false }: { state: SessionState; vi
       }).map(card => card.dataset.player ?? '');
       section.classList.remove('measuring');
       cards.forEach((card, index) => card.classList.toggle('actions-below', was[index]!));
-      setActionsBelow(crowded.join(' '));
+      setActionsBelow(crowded.length ? cards.map(card => card.dataset.player ?? '').join(' ') : '');
     };
     measure();
     let last = -1;
@@ -248,12 +248,12 @@ export function MoneySheet({ title, playerId, kind: initialKind, initialAmount }
   const { banker, state, notify, open } = useClient();
   const currency = state!.session.currency;
   const player = state!.players.find(player => player.id === playerId)!;
-  const { lastBuy, typicalBuy, lastBuyPaid, method: lastMethod } = moneyOptions(state!.entries, playerId);
+  const { lastBuy, typicalBuy, lastBuyMethod, method: lastMethod } = moneyOptions(state!.entries, playerId);
   const key = draftKey(banker!.id, state!.session.id, initialKind, playerId);
   const balance = BigInt(state!.players.find(player => player.id === playerId)!.balance_minor);
   const suggestedKind = initialKind === 'payment_in' && balance < 0n ? 'payment_out' : initialKind;
-  const remembered = initialKind === 'buy_in' && lastBuyPaid && balance <= 0n;
-  const draft = useDraft<MoneyDraft>(key, { op_id: crypto.randomUUID(), amount: initialAmount !== undefined ? decimal(initialAmount, currency) : '', paid_now: remembered, method: lastMethod, occurred_at: '', note: '', kind: suggestedKind });
+  const remembered = initialKind === 'buy_in' && lastBuyMethod !== undefined && balance <= 0n;
+  const draft = useDraft<MoneyDraft>(key, { op_id: crypto.randomUUID(), amount: initialAmount !== undefined ? decimal(initialAmount, currency) : '', paid_now: remembered, method: (remembered && lastBuyMethod) || lastMethod, occurred_at: '', note: '', kind: suggestedKind });
   const [error, setError] = useState('');
   const [amountError, setAmountError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -317,7 +317,7 @@ export function MoneySheet({ title, playerId, kind: initialKind, initialAmount }
   }
   return <Sheet title={title} leadingClose closeLabel="Cancel" className="money-sheet" close={cancel}>{canceling ? <section className="cancel-draft" role="alertdialog" aria-label="Keep or discard this draft" tabIndex={-1} ref={cancelPanel}><h3>Discard this typed amount?</h3><p>Your typed amount has not been saved to the ledger.</p><button type="button" className="wide" disabled={saving || !draft.ready} onClick={() => { void keep(); }}>Keep draft and close</button><button type="button" className="danger wide" onClick={() => { void discard(); }}>Discard draft</button><button type="button" className="primary wide" onClick={() => setCanceling(false)}>Keep editing</button><ErrorText text={draft.error || error} /></section> : <form className="money-form" noValidate onSubmit={submit}><div className="money-fields"><p className="money-player" data-testid="money-player">{player.display_name}</p><label className="amount-field"><span>Amount <span className="field-currency">({currency})</span></span><input aria-label="Amount" aria-invalid={!!amountError} aria-describedby={amountError ? 'money-amount-error' : amountFeedback ? 'money-amount-preview' : undefined} ref={amountInput} data-testid="money-amount" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.value.amount} onChange={event => { draft.update({ ...draft.value, amount: event.target.value }); setAmountError(''); setError(''); }} disabled={!draft.ready} required /></label>{amountError && <p id="money-amount-error" className="error field-error money-amount-error" role="alert">{amountError}</p>}{amountFeedback && !amountError && <p id="money-amount-preview" className="hint amount-preview" role="status">{amountFeedback}</p>}
     {chip && <fieldset className="payment-methods payment-choice" aria-label="Payment method"><legend>{draft.value.kind === 'buy_in' ? 'Received from player' : 'Paid to player'}</legend><div><button type="button" aria-pressed={!draft.value.paid_now} onClick={() => draft.update({ ...draft.value, paid_now: false })}>Unpaid</button>{(['cash', 'venmo', 'zelle'] as const).map(method => <button key={method} type="button" aria-pressed={draft.value.paid_now && draft.value.method === method} onClick={() => draft.update({ ...draft.value, paid_now: true, method })}>{methodLabel(method)}</button>)}</div></fieldset>}
-    {remembered && draft.value.kind === 'buy_in' && draft.value.paid_now && draft.value.method === lastMethod && <p className="hint payment-default" data-testid="payment-default">{methodLabel(lastMethod)}, same as their last buy-in</p>}
+    {remembered && draft.value.kind === 'buy_in' && draft.value.paid_now && draft.value.method === lastBuyMethod && <p className="hint payment-default" data-testid="payment-default">{methodLabel(lastBuyMethod)}, same as their last buy-in</p>}
     {payment && <><fieldset className="payment-methods payment-directions" aria-label="Payment direction"><legend>Payment direction</legend><div><button type="button" aria-pressed={draft.value.kind === 'payment_in'} onClick={() => draft.update({ ...draft.value, kind: 'payment_in' })}>Player pays bank</button><button type="button" aria-pressed={draft.value.kind === 'payment_out'} onClick={() => draft.update({ ...draft.value, kind: 'payment_out' })}>Bank pays player</button></div></fieldset><PaymentMethods value={draft.value.method} change={method => draft.update({ ...draft.value, method })} /></>}
     {(initialKind === 'buy_in' && (lastBuy || typicalBuy || doubleAmount) || initialKind === 'cash_out') && <div className="quick-amounts" aria-label="Quick amounts">{initialKind === 'buy_in' && lastBuy && <button type="button" disabled={!draft.ready} onClick={() => quick(lastBuy)}>Last <span className="money-value">{money(lastBuy, currency)}</span></button>}{initialKind === 'buy_in' && typicalBuy && typicalBuy !== lastBuy && <button type="button" disabled={!draft.ready} onClick={() => quick(typicalBuy)}>Typical <span className="money-value">{money(typicalBuy, currency)}</span></button>}{initialKind === 'buy_in' && doubleAmount && <button type="button" disabled={!draft.ready} onClick={() => quick(doubleAmount!)}>×2 <span className="money-value">{money(doubleAmount, currency)}</span></button>}{initialKind === 'cash_out' && <button type="button" disabled={!draft.ready} onClick={() => quick('0')}>No chips left · <span className="money-value">{money('0', currency)}</span></button>}</div>}
     {initialKind === 'cash_out' && <p className="hint amount-guidance">Enter the actual chips returned. Unpaid means you will pay later.</p>}

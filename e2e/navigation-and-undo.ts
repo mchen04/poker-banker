@@ -118,8 +118,8 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
       }
     } finally { await viewerContext.close(); }
     await nav.getByRole('button', { name: 'Players', exact: true }).click(); await expect(primary).toHaveText('Buy-in');
-    const rosterDebt = await page.getByTestId(`roster-player-${owing.id}`).getByText('Owes bank $50.00', { exact: true }).evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight), background: getComputedStyle(element.closest('.roster-list')!).backgroundColor }));
-    await expect(page.getByTestId(`roster-player-${owing.id}`)).not.toContainText('Bank owes');
+    const rosterDebt = await page.getByTestId(`roster-player-${owing.id}`).getByText('Owes $50.00', { exact: true }).evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight), background: getComputedStyle(element.closest('.roster-list')!).backgroundColor }));
+    await expect(page.getByTestId(`roster-player-${owing.id}`)).not.toContainText('Owed');
     const rosterZero = await page.getByTestId(`roster-player-${owing.id}`).locator('.roster-name > strong').evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight) }));
     expect(rosterDebt.color).not.toBe(rosterZero.color); expect(rosterDebt.weight).toBeGreaterThan(rosterZero.weight); expect(contrast(rosterDebt.color, rosterDebt.background)).toBeGreaterThanOrEqual(4.5);
     proofs.rosterDebt = { ...rosterDebt, zero: rosterZero, contrast: contrast(rosterDebt.color, rosterDebt.background) };

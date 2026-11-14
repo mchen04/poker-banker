@@ -19,6 +19,7 @@ export function moneyOptions(entries: LedgerEntry[], playerId: string) {
     if (entry.method) method = entry.method;
     if (entry.kind === 'buy_in') { lastBuy = entry.amount_minor; lastBuyRevision = entry.revision; }
   }
-  const lastBuyPaid = lastBuyRevision !== undefined && effective.some(entry => entry.player_id === playerId && entry.kind === 'payment_in' && entry.revision === lastBuyRevision);
-  return { typicalBuy, lastBuy, lastBuyPaid, method };
+  const lastBuyPayment = lastBuyRevision === undefined ? undefined : effective.find(entry => entry.player_id === playerId && entry.kind === 'payment_in' && entry.revision === lastBuyRevision);
+  const lastBuyMethod: PaymentMethod | undefined = lastBuyPayment ? lastBuyPayment.method ?? 'cash' : undefined;
+  return { typicalBuy, lastBuy, lastBuyMethod, method };
 }
