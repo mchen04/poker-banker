@@ -164,7 +164,7 @@ test('deleting a session moves to the next session, kills its viewer link and re
   const confirm = page.getByRole('alertdialog', { name: 'Delete session', exact: true });
   await expect(confirm).toContainText('Delete Friday home game?');
   await expect(confirm).toContainText('It disappears from history and reports, and its viewer link stops working.');
-  await expect(confirm).toContainText('Unsettled balances leave player balances until you restore it: $80.00 owed to you.');
+  await expect(confirm).toContainText('Not settled yet: $80.00 owed to you. These amounts leave player balances until you restore the session.');
   await screen(page, info, 'delete-session-confirm');
   await confirm.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Older game', exact: true })).toBeVisible();

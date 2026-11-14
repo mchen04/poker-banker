@@ -117,7 +117,9 @@ button.player-row:active { background: var(--subtle); }
 .player-state .player-paid, .player-state .player-balance { display: inline-block; max-width: 100%; vertical-align: top; }
 .measuring .player-state { overflow: hidden; white-space: nowrap; }
 .player-detail { grid-area: 1 / 2; justify-self: end; display: flex; flex-direction: column; align-items: flex-end; min-width: 0; max-width: 100%; text-align: right; }
-.player-position-wrap { display: block; min-width: 0; max-width: 100%; }
+.player-position-wrap { display: flex; align-items: baseline; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 100%; }
+.position-label { flex: none; color: var(--muted); font-size: .75rem; line-height: 1rem; }
+.player-card > div.player-row .player-detail { align-self: start; }
 .player-position { font-size: 1rem; line-height: 1.375rem; font-weight: 600; }
 .player-position-wrap .player-position { color: var(--muted); font-weight: 500; }
 .player-paid, .player-balance { font-size: .875rem; line-height: 1.25rem; }
