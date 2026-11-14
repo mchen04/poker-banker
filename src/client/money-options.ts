@@ -8,6 +8,7 @@ export function moneyOptions(entries: LedgerEntry[], playerId: string) {
   let typicalBuy: string | undefined;
   let lastBuy: string | undefined;
   let method: PaymentMethod = 'cash';
+  let lastBuyRevision: string | undefined;
   for (const entry of effective) {
     if (entry.kind === 'buy_in') {
       const count = (counts.get(entry.amount_minor) ?? 0) + 1;
@@ -16,7 +17,8 @@ export function moneyOptions(entries: LedgerEntry[], playerId: string) {
     }
     if (entry.player_id !== playerId) continue;
     if (entry.method) method = entry.method;
-    if (entry.kind === 'buy_in') lastBuy = entry.amount_minor;
+    if (entry.kind === 'buy_in') { lastBuy = entry.amount_minor; lastBuyRevision = entry.revision; }
   }
-  return { typicalBuy, lastBuy, method };
+  const lastBuyPaid = lastBuyRevision !== undefined && effective.some(entry => entry.player_id === playerId && entry.kind === 'payment_in' && entry.revision === lastBuyRevision);
+  return { typicalBuy, lastBuy, lastBuyPaid, method };
 }

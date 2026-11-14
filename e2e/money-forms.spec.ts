@@ -265,6 +265,31 @@ test.describe("Draft cancellation and remembered buy-ins", () => {
     }
 
   });
+  test('a buy-in preselects received money only after a paid buy-in while the player owes nothing', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await createAccount(page);
+    await newSession(page, 'Paid defaults');
+    const methods = page.getByRole('group', { name: 'Payment method', exact: true });
+    const pressed = (name: string) => expect(methods.getByRole('button', { name, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    const fresh = await addPlayer(page, 'Newcomer');
+    await page.getByTestId(`buy-in-${fresh.id}`).click();
+    await pressed('Unpaid');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await money(page, fresh.id, '20', { method: 'venmo' });
+    await page.getByTestId(`repeat-buy-in-${fresh.id}`).click();
+    await pressed('Venmo');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
+    await money(page, fresh.id, '20', { paid: false });
+    await page.getByTestId(`repeat-buy-in-${fresh.id}`).click();
+    await pressed('Unpaid');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
+    await money(page, fresh.id, '20', { method: 'cash' });
+    expect((await current(page)).players.find(player => player.id === fresh.id)!.balance_minor).toBe('2000');
+    await page.getByTestId(`repeat-buy-in-${fresh.id}`).click();
+    await pressed('Unpaid');
+  });
 });
 
 test.describe("Zero-loss cash-outs and corrections", () => {
