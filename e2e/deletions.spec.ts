@@ -259,9 +259,17 @@ test.describe('deleted-player paging with routed responses', () => {
     const list = page.getByTestId('recently-deleted-players');
     await expect(list).toBeVisible();
     await list.getByText('Recently deleted', { exact: true }).click();
-    await page.route(url => url.pathname === '/api/players/deleted' && url.searchParams.has('before'), route => route.fulfill({ status: 500, contentType: 'application/json', headers: { 'X-PB-Banker-ID': account.banker.id }, body: JSON.stringify({ error: { code: 'request_failed', message: 'Deleted players unavailable' } }) }));
+    let fail = true;
+    await page.route(url => url.pathname === '/api/players/deleted' && url.searchParams.has('before'), route => fail
+      ? route.fulfill({ status: 500, contentType: 'application/json', headers: { 'X-PB-Banker-ID': account.banker.id }, body: JSON.stringify({ error: { code: 'request_failed', message: 'Deleted players unavailable' } }) })
+      : route.continue());
     await list.getByRole('button', { name: 'Load more deleted players', exact: true }).click();
     await expect(list.getByText('Deleted players unavailable', { exact: true })).toBeVisible();
+    await list.getByRole('button', { name: /^Restore / }).first().click();
+    await expect(list.getByText('Deleted players unavailable', { exact: true })).toHaveCount(0);
+    fail = false;
+    await list.getByRole('button', { name: 'Load more deleted players', exact: true }).click();
+    await expect(list.locator('.recover-name')).toHaveCount(31);
   });
 });
 

@@ -61,7 +61,7 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
       if (!client.isCurrent() || generation !== deletedGeneration.current) return;
       setDeleted(current => [...current, ...result.players]);
       setDeletedNext(result.next);
-    } catch (problem) { setDeletedError(problem instanceof Error ? problem.message : 'Could not load deleted players'); }
+    } catch (problem) { if (generation === deletedGeneration.current) setDeletedError(problem instanceof Error ? problem.message : 'Could not load deleted players'); }
     finally { setLoadingMoreDeleted(false); }
   }
   useEffect(() => { if (!selected && returnToSearch) { searchField.current?.focus(); setReturnToSearch(false); } }, [selected, returnToSearch]);
@@ -76,6 +76,7 @@ export function PlayersScreen({ chooseSession, dialogChange }: { chooseSession: 
     let active = true;
     if (!online || !loaded) return;
     const generation = ++deletedGeneration.current;
+    setDeletedError('');
     void listDeletedPlayers(client!).then(result => { if (active && generation === deletedGeneration.current) { setDeleted(result.players); setDeletedNext(result.next); } }).catch(() => {});
     return () => { active = false; };
   }, [refresh, online, loaded]);

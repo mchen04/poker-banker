@@ -939,7 +939,7 @@ export async function storeSnapshot(banker: string, state: SessionState): Promis
   const key = snapshotKey(banker, state.session.id);
   const existing = await req(store.get(key)) as SnapshotRecord | undefined;
   if (blockedOwners.has(banker) || generation(banker) !== epoch) { await done; return; }
-  store.put({ key, banker_id: banker, state: newerSnapshot(existing?.state, state) } satisfies SnapshotRecord);
+  store.put({ key, banker_id: banker, state: newerSnapshot(snapshotState(existing), state) } satisfies SnapshotRecord);
   await done;
 }
 function snapshotState(record: unknown): SessionState | undefined {
@@ -948,7 +948,7 @@ function snapshotState(record: unknown): SessionState | undefined {
   if (!state || typeof state !== 'object') return;
   const value = state as { revision?: unknown; session?: unknown; players?: unknown; entries?: unknown; totals?: unknown };
   const session = value.session;
-  if (typeof value.revision !== 'string' || !session || typeof session !== 'object') return;
+  if (typeof value.revision !== 'string' || !/^(?:0|[1-9]\d*)$/.test(value.revision) || !session || typeof session !== 'object') return;
   const fields = session as { id?: unknown; name?: unknown; played_on?: unknown; currency?: unknown; status?: unknown };
   if (typeof fields.id !== 'string' || typeof fields.name !== 'string' || typeof fields.played_on !== 'string' || typeof fields.currency !== 'string') return;
   if (fields.status !== 'open' && fields.status !== 'closed') return;
@@ -1224,7 +1224,7 @@ async function acknowledge(banker: string, item: OutboxItem, response: unknown, 
     const key = snapshotKey(banker, state.session.id);
     const existing = await req(store.get(key)) as SnapshotRecord | undefined;
     if (!isCurrent()) { await done; return undefined; }
-    latest = newerSnapshot(existing?.state, state);
+    latest = newerSnapshot(snapshotState(existing), state);
     store.put({ key, banker_id: banker, state: latest } satisfies SnapshotRecord);
   }
   const request = { path: item.path, method: item.method, body: item.body };
