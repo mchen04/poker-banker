@@ -323,6 +323,50 @@ it('pages every deleted player to the end and restores the oldest', async () => 
   expect(remaining.next).not.toBeNull();
 });
 
+it('pages deleted sessions at microsecond precision without skipping or repeating', async () => {
+  const owner = await account();
+  const ids: string[] = [];
+  for (let index = 0; index < 32; index++) {
+    const state = await createSession(owner, { name: `Microsecond session ${index}` });
+    await ok(await request(owner, `/sessions/${state.session.id}/delete`, 'POST', { op_id: randomUUID() }));
+    ids.push(state.session.id);
+  }
+  for (const [index, id] of ids.entries()) {
+    await database.pool.query("UPDATE game_sessions SET deleted_at = $2::timestamptz + ($3::text || ' microseconds')::interval WHERE id = $1", [id, '2026-11-10T10:00:00.123000Z', index]);
+  }
+  const seen: string[] = [];
+  let before: string | null = null;
+  do {
+    const page: { sessions: { id: string }[]; next: string | null } = await ok(await request(owner, `/sessions/deleted${before ? `?before=${encodeURIComponent(before)}` : ''}`));
+    seen.push(...page.sessions.map(row => row.id));
+    before = page.next;
+  } while (before);
+  expect(seen).toHaveLength(32);
+  expect(new Set(seen)).toEqual(new Set(ids));
+});
+
+it('pages deleted players at microsecond precision without skipping or repeating', async () => {
+  const owner = await account();
+  const ids: string[] = [];
+  for (let index = 0; index < 32; index++) {
+    const created = await ok<{ player: { id: string } }>(await request(owner, '/players', 'POST', { op_id: randomUUID(), display_name: `Microsecond player ${index}` }));
+    await ok(await request(owner, `/players/${created.player.id}/delete`, 'POST', { op_id: randomUUID() }));
+    ids.push(created.player.id);
+  }
+  for (const [index, id] of ids.entries()) {
+    await database.pool.query("UPDATE players SET deleted_at = $2::timestamptz + ($3::text || ' microseconds')::interval WHERE id = $1", [id, '2026-11-10T10:00:00.123000Z', index]);
+  }
+  const seen: string[] = [];
+  let before: string | null = null;
+  do {
+    const page: { players: { id: string }[]; next: string | null } = await ok(await request(owner, `/players/deleted${before ? `?before=${encodeURIComponent(before)}` : ''}`));
+    seen.push(...page.players.map(row => row.id));
+    before = page.next;
+  } while (before);
+  expect(seen).toHaveLength(32);
+  expect(new Set(seen)).toEqual(new Set(ids));
+});
+
 describe('ledger integrity for restores', () => {
   it('rejects a direct insert that restores a live entry or double-restores a voided one', async () => {
     const owner = await account();
