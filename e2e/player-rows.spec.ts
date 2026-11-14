@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { addPlayer, createAccount, money, newSession, share } from './helpers';
+import { addPlayer, createAccount, menu, money, newSession, openMoney, share } from './helpers';
 
 async function rows(page: Page) {
   return page.locator('.players > .player-card').evaluateAll(cards => cards.map(card => {
@@ -12,8 +12,10 @@ async function rows(page: Page) {
       stacked: card.classList.contains('actions-below'),
       buttons: actions ? actions.querySelectorAll('button').length : 0,
       amountRight: Math.round(amount.right),
+      amountLeft: Math.round(card.querySelector('.player-position-wrap')!.getBoundingClientRect().left),
       cardRight: Math.round(card.getBoundingClientRect().right),
       actionsLeft: actions?.querySelector('button') ? Math.round(actions.querySelector('button')!.getBoundingClientRect().left) : null,
+      actionsRight: actions?.querySelector('button:last-child') ? Math.round(actions.querySelector('button:last-child')!.getBoundingClientRect().right) : null,
       label: card.querySelector('.position-label')?.textContent?.trim(),
       amountColor: getComputedStyle(card.querySelector('.player-position')!).color,
       nameColor: getComputedStyle(name).color,
@@ -21,7 +23,7 @@ async function rows(page: Page) {
   }));
 }
 
-test('player rows label amounts, keep them in one right-aligned column and switch layout together', async ({ page, browser, baseURL }) => {
+test('player rows label amounts and keep stacked amounts on one right edge with buttons beside them', async ({ page, browser, baseURL }) => {
   await page.setViewportSize({ width: 393, height: 852 });
   await createAccount(page);
   await newSession(page, 'Row layout');
@@ -46,9 +48,8 @@ test('player rows label amounts, keep them in one right-aligned column and switc
   const stacked = await rows(page);
   const withButtons = stacked.filter(row => row.buttons > 0);
   expect(withButtons.length).toBe(2);
-  expect(new Set(withButtons.map(row => row.amountRight)).size).toBe(1);
-  for (const row of withButtons) expect(row.amountRight).toBeLessThanOrEqual(row.actionsLeft!);
-  expect(stacked[0]!.amountRight).toBe(stacked[0]!.cardRight - 16);
+  expect(new Set(stacked.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
+  for (const row of withButtons) expect(row.amountLeft).toBeGreaterThan(row.actionsRight!);
   for (const row of stacked) expect(row.nameRight).toBeLessThanOrEqual(row.cardRight - 16);
 
   const link = await share(page);
@@ -62,4 +63,40 @@ test('player rows label amounts, keep them in one right-aligned column and switc
     expect(shown.map(row => row.label)).toEqual(['Result', 'In', 'In']);
     expect(new Set(shown.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
   } finally { await context.close(); }
+});
+
+test('narrow phones stack only crowded rows and keep sheet actions in reach', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await createAccount(page);
+  await newSession(page, 'Narrow');
+  const justin = await addPlayer(page, 'Justin');
+  const long = await addPlayer(page, 'Alexandria Montgomery-Vanderbilt the Third');
+  const priya = await addPlayer(page, 'Priya');
+  await money(page, justin.id, '200');
+  await money(page, long.id, '123456789.99');
+  await money(page, priya.id, '200');
+  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(1);
+  const shown = await rows(page);
+  expect(shown.map(row => row.stacked)).toEqual([false, true, false]);
+  expect(new Set(shown.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
+
+  await openMoney(page, long.id, 'Buy-in');
+  const fields = page.locator('.money-fields');
+  const footer = page.locator('.money-actions');
+  const state = () => fields.evaluate(element => ({ more: element.scrollTop + element.clientHeight < element.scrollHeight - 1, cue: element.closest('form')!.querySelector('.money-actions')!.classList.contains('content-below') }));
+  await expect.poll(async () => { const now = await state(); return now.more === now.cue; }).toBe(true);
+  await fields.evaluate(element => { element.scrollTop = 0; });
+  if ((await state()).more) {
+    await expect(footer).toHaveClass(/content-below/);
+    await fields.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await expect(footer).not.toHaveClass(/content-below/);
+  }
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  await menu(page, 'Close session');
+  const close = page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true });
+  await expect(close).toBeDisabled();
+  await expect(close).toBeInViewport({ ratio: 1 });
+  await expect(close).toHaveAccessibleDescription('Cash out 3 players first');
 });
