@@ -371,6 +371,8 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
 
 @media (max-width: 699px) {
   .app-bar { display: none; }
+  html:has(.notice) { scroll-padding-bottom: calc(var(--navigation-height) + 88px); }
+  body:has(.notice) .workspace { padding-bottom: calc(88px + var(--navigation-height)); }
 }
 @media (min-width: 375px) {
   .with-actions .player-card.actions-below .player-row { grid-template-rows: auto auto minmax(44px, auto); }

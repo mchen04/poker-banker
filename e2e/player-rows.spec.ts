@@ -50,6 +50,11 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
   await money(page, long.id, '123456789.99');
   await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(3);
   const stacked = await rows(page);
+  await expect(page.getByTestId('saved-confirmation')).toBeVisible();
+  await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+  const clearance = await page.evaluate(() => document.querySelector('.notice')!.getBoundingClientRect().top - (document.querySelector('.workspace')!.getBoundingClientRect().bottom - Number.parseFloat(getComputedStyle(document.querySelector('.workspace')!).paddingBottom)));
+  expect(clearance).toBeGreaterThanOrEqual(0);
+  await page.evaluate(() => scrollTo(0, 0));
   const withButtons = stacked.filter(row => row.buttons > 0);
   expect(withButtons.length).toBe(2);
   expect(new Set(stacked.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
