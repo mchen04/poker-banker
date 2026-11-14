@@ -8,6 +8,7 @@ async function rows(page: Page) {
     const actions = card.querySelector('.player-actions');
     const name = card.querySelector('.player-name strong')!;
     return {
+      nameRight: Math.round(name.getBoundingClientRect().right),
       stacked: card.classList.contains('actions-below'),
       buttons: actions ? actions.querySelectorAll('button').length : 0,
       amountRight: Math.round(amount.right),
@@ -48,6 +49,7 @@ test('player rows label amounts, keep them in one right-aligned column and switc
   expect(new Set(withButtons.map(row => row.amountRight)).size).toBe(1);
   for (const row of withButtons) expect(row.amountRight).toBeLessThanOrEqual(row.actionsLeft!);
   expect(stacked[0]!.amountRight).toBe(stacked[0]!.cardRight - 16);
+  for (const row of stacked) expect(row.nameRight).toBeLessThanOrEqual(row.cardRight - 16);
 
   const link = await share(page);
   const context = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: { width: 393, height: 852 }, locale: 'en-US', timezoneId: 'UTC' });

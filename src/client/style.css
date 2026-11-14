@@ -370,6 +370,7 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
   .with-actions .player-card.actions-below .player-row { grid-template-rows: auto auto minmax(44px, auto); }
   .with-actions .player-card.actions-below .player-name strong { grid-area: 1 / 1 / 2 / 3; margin-right: calc(0px - var(--actions-w)); }
   .with-actions .player-card.actions-below .player-state { grid-area: 2 / 1 / 3 / 3; margin-right: calc(0px - var(--actions-w)); }
+  .with-actions .player-card.actions-below:has(> .player-actions:empty) .player-name strong, .with-actions .player-card.actions-below:has(> .player-actions:empty) .player-state { margin-right: 0; }
   .player-card.actions-below .player-detail { grid-area: 3 / 1 / 4 / 3; }
   .player-card.actions-below .player-actions { align-self: end; padding-bottom: 8px; }
 }
