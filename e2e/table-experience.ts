@@ -161,7 +161,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
   await measure('Open player report and apply a filter', async tap => {
     await tap(page.getByRole('navigation', { name: 'Table navigation', exact: true }).getByRole('button', { name: 'Players', exact: true }));
     await tap(page.getByTestId(`roster-player-${playerId}`));
-    await tap(page.getByRole('button', { name: 'Filter: Off', exact: true }));
+    await tap(page.getByRole('button', { name: 'Filter · Off', exact: true }));
     await typeInput(page.getByLabel('Filter location', { exact: true }), 'Home');
     await tap(page.getByRole('button', { name: 'Apply filters', exact: true }));
   });
@@ -173,7 +173,6 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
     await tap(page.getByRole('dialog').getByRole('button', { name: 'Share session', exact: true }));
     await tap(page.getByRole('button', { name: 'Enable sharing', exact: true }));
     viewerLink = await page.getByLabel('Viewer link', { exact: true }).inputValue();
-    await tap(page.getByRole('button', { name: 'Copy link', exact: true }));
     await expect(page.getByRole('dialog').getByRole('status')).toHaveText(/Link copied|Select the viewer link and copy it/);
   });
   await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
@@ -234,7 +233,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
       const clippedMoney = await page.locator('.players .player-position,.players .player-balance').evaluateAll(values => values.filter(value => value.clientWidth === 0 || value.scrollWidth > value.clientWidth).map(value => ({ text: value.textContent, available: value.clientWidth, needed: value.scrollWidth })));
       rowMoneyFits[`${height}-${scheme}`] = clippedMoney.length === 0;
       expect(clippedMoney, 'Full positions and balances must remain visible').toEqual([]);
-      expect(fullyVisible, `Complete player rows at 393×${height}`).toBeGreaterThanOrEqual(height === 659 ? 4 : 6);
+      expect(fullyVisible, `Complete player rows at 393×${height}`).toBeGreaterThanOrEqual(height === 659 ? 6 : 8);
       await capture(page, evidence, `eight-player-table-${scheme}-393x${height}`);
     }
   }

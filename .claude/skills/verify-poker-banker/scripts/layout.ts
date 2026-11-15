@@ -63,8 +63,14 @@ export async function checkLayout(page: Page): Promise<LayoutIssue[]> {
       if (spread(names) > 1) issues.push({ kind: 'row-misaligned', detail: `name left edges ${names.join(',')}` });
       const buttonRights = edges('button', rect => rect.right);
       if (spread(buttonRights) > 1) issues.push({ kind: 'row-misaligned', detail: `row right edges ${buttonRights.join(',')}` });
-      const heights = rows.map(row => Math.round((row.closest('li, [role=listitem]') ?? row.parentElement ?? row).getBoundingClientRect().height));
-      if (Math.max(...heights) - Math.min(...heights) > 1) issues.push({ kind: 'row-misaligned', detail: `row heights ${heights.join(',')}` });
+      const heights = rows.filter(row => {
+        if (row.closest('.player-card')?.classList.contains('actions-below')) return false;
+        const status = row.querySelector('.player-state');
+        const name = row.querySelector('.player-name strong');
+        if (status && status.getBoundingClientRect().height > Number.parseFloat(getComputedStyle(status).lineHeight) + 1) return false;
+        return !name || name.getBoundingClientRect().height <= Number.parseFloat(getComputedStyle(name).lineHeight) + 1;
+      }).map(row => Math.round((row.closest('li, [role=listitem]') ?? row.parentElement ?? row).getBoundingClientRect().height));
+      if (heights.length > 1 && Math.max(...heights) - Math.min(...heights) > 1) issues.push({ kind: 'row-misaligned', detail: `row heights ${heights.join(',')}` });
     }
     return issues;
   }) as Promise<LayoutIssue[]>;

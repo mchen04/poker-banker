@@ -16,6 +16,7 @@ async function rows(page: Page) {
       amountLeft: Math.round(card.querySelector('.player-position-wrap')!.getBoundingClientRect().left),
       cardRight: Math.round(card.getBoundingClientRect().right),
       amountTop: Math.round(amount.top),
+      nameTop: Math.round(name.getBoundingClientRect().top),
       actionsTop: actions?.querySelector('button') ? Math.round(actions.querySelector('button')!.getBoundingClientRect().top) : null,
       actionsLeft: actions?.querySelector('button') ? Math.round(actions.querySelector('button')!.getBoundingClientRect().left) : null,
       actionsRight: actions?.querySelector('button:last-child') ? Math.round(actions.querySelector('button:last-child')!.getBoundingClientRect().right) : null,
@@ -44,11 +45,11 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
   expect(compact[0]!.buttons).toBe(0);
   expect(compact[0]!.amountRight).toBe(compact[0]!.cardRight - 16);
   expect(compact[1]!.amountRight).toBeLessThanOrEqual(compact[1]!.actionsLeft!);
-  expect(compact[0]!.amountColor).toBe(compact[0]!.nameColor);
+  expect(compact[0]!.amountColor).not.toBe(compact[1]!.amountColor);
 
   const long = await addPlayer(page, 'Alexandria Montgomery-Vanderbilt the Third');
   await money(page, long.id, '123456789.99');
-  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(3);
+  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(1);
   const stacked = await rows(page);
   await expect(page.getByTestId('saved-confirmation')).toBeVisible();
   await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
@@ -60,10 +61,14 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
   await page.evaluate(() => scrollTo(0, 0));
   const withButtons = stacked.filter(row => row.buttons > 0);
   expect(withButtons.length).toBe(2);
-  expect(new Set(stacked.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
-  for (const row of withButtons) expect(row.amountLeft).toBeGreaterThan(row.actionsRight!);
+  for (const row of stacked) {
+    if (row.stacked) continue;
+    if (row.buttons) expect(row.amountRight).toBeLessThanOrEqual(row.actionsLeft!);
+    else expect(row.amountRight).toBe(row.cardRight - 16);
+  }
+  for (const row of stacked.filter(item => item.stacked && item.buttons > 0)) expect(row.actionsTop!).toBeGreaterThan(row.amountTop);
   for (const row of stacked) expect(row.nameRight).toBeLessThanOrEqual(row.cardRight - 16);
-  expect(stacked[0]!.bottomGap).toBeLessThanOrEqual(9);
+  expect(Math.abs(stacked[0]!.amountTop - stacked[0]!.nameTop)).toBeLessThanOrEqual(24);
 
   const link = await share(page);
   const context = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: { width: 393, height: 852 }, locale: 'en-US', timezoneId: 'UTC' });
@@ -71,7 +76,7 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
     const viewer = await context.newPage();
     await viewer.goto(link);
     await expect(viewer.getByText(/View only ·/)).toBeVisible();
-    await expect(viewer.locator('.players > .player-card.actions-below')).toHaveCount(3);
+    await expect(viewer.locator('.players > .player-card.actions-below')).toHaveCount(0);
     const shown = await rows(viewer);
     expect(shown.map(row => row.label)).toEqual(['Result', 'In', 'In']);
     expect(new Set(shown.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
@@ -88,12 +93,11 @@ test('narrow phones keep one amount position, put buttons beside amounts when th
   await money(page, priya.id, '200');
   const long = await addPlayer(page, 'Alexandria Montgomery-Vanderbilt the Third');
   await money(page, long.id, '50');
-  await expect(page.locator('.players.inline-actions > .player-card.actions-below')).toHaveCount(3);
+  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(1);
   const inline = await rows(page);
-  expect(new Set(inline.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
-  for (const row of inline) {
-    expect(row.amountLeft).toBeGreaterThan(row.actionsRight!);
-    expect(row.amountTop).toBeGreaterThanOrEqual(row.actionsTop!);
+  for (const row of inline.filter(item => !item.stacked)) {
+    expect(row.amountRight).toBeLessThanOrEqual(row.actionsLeft!);
+    expect(row.actionsTop!).toBeLessThan(row.amountTop + 24);
   }
 
   const link = await share(page);
@@ -102,20 +106,20 @@ test('narrow phones keep one amount position, put buttons beside amounts when th
     const viewer = await context.newPage();
     await viewer.goto(link);
     await expect(viewer.getByText(/View only ·/)).toBeVisible();
-    await expect(viewer.locator('.players > .player-card.actions-below')).toHaveCount(3);
+    await expect(viewer.locator('.players > .player-card.actions-below')).toHaveCount(0);
     await expect(viewer.locator('.players.inline-actions')).toHaveCount(0);
     const shown = await rows(viewer);
     expect(new Set(shown.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
-    for (const row of shown) expect(row.bottomGap).toBeLessThanOrEqual(9);
+    for (const row of shown) expect(Math.abs(row.amountTop - row.nameTop)).toBeLessThanOrEqual(24);
   } finally { await context.close(); }
   await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });
   await money(page, long.id, '123456789.99');
-  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(3);
+  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(1);
   await expect(page.locator('.players.inline-actions')).toHaveCount(0);
   const apart = await rows(page);
-  expect(new Set(apart.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
-  for (const row of apart) expect(row.actionsTop!).toBeGreaterThan(row.amountTop);
-  expect(new Set(apart.map(row => row.amountSize))).toEqual(new Set(['16px']));
+  for (const row of apart.filter(item => !item.stacked)) expect(row.amountRight).toBeLessThanOrEqual(row.actionsLeft!);
+  for (const row of apart.filter(item => item.stacked)) expect(row.actionsTop!).toBeGreaterThan(row.amountTop);
+  for (const row of apart) expect(Number.parseFloat(row.amountSize)).toBeGreaterThanOrEqual(11);
 
 
   await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });

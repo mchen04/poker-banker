@@ -276,7 +276,7 @@ test('two-session player reports show hand-computed results in every grouping an
     await expect(page.getByTestId('report-profit_loss_minor')).toContainText('2 sessions');
   }
   await screen(page, testInfo, 'player-report');
-  await page.getByRole('button', { name: 'Filter: Off', exact: true }).click();
+  await page.getByRole('button', { name: 'Filter · Off', exact: true }).click();
   await typeInput(page.getByLabel('From date', { exact: true }), '2026-11-17');
   await screen(page, testInfo, 'report-filter');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
