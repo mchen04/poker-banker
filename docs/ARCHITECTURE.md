@@ -129,7 +129,7 @@ POST /api/auth/recovery-codes    {password} -> {recovery_codes}
 POST /api/auth/password          {current_password, new_password}
 
 GET  /api/sessions               ?before=<played_on,id cursor>&q=&status=<open|closed optional> -> {sessions[], next}
-GET  /api/sessions/deleted       -> {sessions[] with deleted_at}
+GET  /api/sessions/deleted       ?before=<deleted_at,id cursor> -> {sessions[] with deleted_at, next}
 POST /api/sessions               {op_id, name, played_on, currency, location?, game?, big_blind_minor?} -> SessionState
 GET  /api/sessions/:id           ?since=<revision> -> SessionState | 304
 PATCH /api/sessions/:id          {op_id, name?, played_on?, location?, game?, big_blind_minor?} -> SessionState
@@ -149,7 +149,7 @@ POST /api/sessions/:id/reopen    {op_id, reason} -> SessionState
 POST /api/sessions/:id/share     {op_id, action: 'enable'|'rotate'|'disable'} -> SessionState
 
 GET  /api/players                ?q= -> {players[] with per-currency cumulative and outstanding}
-GET  /api/players/deleted        -> {players[] with deleted_at}
+GET  /api/players/deleted        ?before=<deleted_at,id cursor> -> {players[] with deleted_at, next}
 POST /api/players                {op_id, display_name}
 PATCH /api/players/:id           {op_id, display_name}
 POST /api/players/:id/delete     {op_id} -> {player} | 409 player_seated
@@ -161,7 +161,7 @@ GET  /api/suggestions            -> {locations[], games[]}
 GET  /api/view/:token            ?since=<revision> -> ViewerState | 304 | 404
 ```
 
-`SessionState` is the whole session: settings, seated players with derived values, removed players with their removal time, entries newest first, totals, events and `revision`. Mutations return it so the client never merges partial updates. The viewer receives an empty `removed_players` list and no `share_token`.
+`SessionState` is the whole session: settings, seated players with derived values, removed players with their removal time, entries newest first, totals, events and `revision`. Mutations return it so the client never merges partial updates. The viewer receives `removed_players` as `{id, display_name}` pairs only, without the removal time, and no `share_token`.
 
 ## Live updates
 
