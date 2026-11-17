@@ -45,7 +45,7 @@ export default async function ({ page, browser, baseURL, runId, evidence, step }
   try {
     const viewer = await viewerContext.newPage();
     await viewer.goto(link);
-    await expect(viewer.getByText(/View only, updated/)).toBeVisible();
+    await expect(viewer.getByText(/View only · /)).toBeVisible();
     await expect(viewer.getByTestId('activity')).toContainText('Venmo');
     await expect(viewer.getByText('Verify private other game', { exact: false })).toHaveCount(0);
     for (const name of ['Add player', 'Buy-in', 'Session menu', 'Players', 'Switch session', 'Sessions']) await expect(viewer.getByRole('button', { name, exact: true })).toHaveCount(0);

@@ -45,13 +45,15 @@ export async function uxCloseReadiness({ page, evidence, runId }: UxApprovalOpti
     const activityBox = await page.getByTestId('activity').boundingBox();
     expect(toastBox && activityBox).toBeTruthy();
     if (!phone) {
-      expect(toastBox!.width).toBeLessThanOrEqual(420);
-      expect(toastBox!.x + toastBox!.width).toBeLessThanOrEqual(activityBox!.x);
+      expect(Math.abs(toastBox!.y + toastBox!.height - await page.evaluate(() => innerHeight))).toBeLessThanOrEqual(1);
+      expect(toastBox!.width).toBeGreaterThanOrEqual(await page.evaluate(() => innerWidth) - 1);
       await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
       const lastPlayer = await page.locator('.players .player-card').last().boundingBox();
       const currentToast = await toast.boundingBox();
       expect(lastPlayer && currentToast && lastPlayer.y + lastPlayer.height <= currentToast.y).toBe(true);
-      proofs.lastRowClearance = { lastPlayer, toast: currentToast };
+      const lastActivity = await page.locator('.activity li:last-child').boundingBox();
+      expect(lastActivity && currentToast && lastActivity.y + lastActivity.height <= currentToast.y).toBe(true);
+      proofs.lastRowClearance = { lastPlayer, lastActivity, toast: currentToast };
     }
     proofs.toast = { toastBox, activityBox, setup: 'Six extra reusable seats and eight $10 unpaid rebuys seeded through the public API; first and last $10 entries saved through UI. Ten buy-ins total $100.' };
     await both('narrow-toast-and-activity');

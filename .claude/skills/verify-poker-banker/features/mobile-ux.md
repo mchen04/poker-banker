@@ -1,6 +1,6 @@
 # Mobile UX
 
-Use after any change to tokens, layout, sheets, navigation, safe areas or PWA chrome. The recipe walks the real UI from the inventory in [docs/UX.md](../../../../docs/UX.md): empty table, playing and mixed tables, player sheets, every financial sheet, add player, correction, deleted entry, session menu, picker, settings, close, share, players, player report, filter, sign-out, viewer and offline. It ends on the auth and recovery-code screens by signing out and creating a disposable account.
+Use after any change to tokens, layout, sheets, navigation, safe areas or PWA chrome. The recipe walks the real UI from the inventory in [docs/UX.md](../../../../docs/UX.md): empty table, playing and mixed tables, player sheets, every financial sheet, add player, correction, deleted entry, session menu, picker, settings, close, share, players, player report, filter, sign-out, viewer and offline. It runs on its own disposable account in a separate browser context, so the run's banker is never signed out or changed: it opens on the auth screen, signs up, captures the recovery-code screen with every code masked, then walks the app and closes the context.
 
 ## Run
 
@@ -33,6 +33,7 @@ At 393×852 and 320×568 in light and dark, for every state:
 - Focused-field and pinned-primary visibility with the visual viewport reduced to 380px, matching the keyboard emulation in `e2e/table-experience.ts`.
 - Pinned primary action centre in the lower 40% of the viewport.
 - Safe-area clearance with `--safe-top: 59px` and `--safe-bottom: 34px`; the bottom bar, sheet actions and controls must clear the home indicator.
+- The docked toast: flush above the bottom bar and spanning the viewport wherever it is visible, the just-changed row fully visible after a save, the last row's money and buttons clear of the chrome at max scroll, and `scrollY` unchanged for two seconds after the one permitted adjustment.
 - 200% text plus WCAG 1.4.12 spacing without clipped text, lost controls or horizontal overflow.
 - Reduced-motion durations at or below 20ms.
 - A 44px back or close control on every non-root view.
@@ -40,4 +41,4 @@ At 393×852 and 320×568 in light and dark, for every state:
 
 ## Limits
 
-The recipe drives the real UI and uses only the run's seeded account and a second disposable signup for the recovery-code screen. Emulation does not prove a physical keyboard, Home Screen installation, iOS suspension or a physical safe-area inset. Contrast is computed from rendered colours; gradients, images and pseudo-elements are not sampled. Content-level choices that are not pinned, such as the player sheet's action grid, are recorded but are not treated as a pinned primary. Run layout recipes serially and clean up every run.
+The recipe drives the real UI on a disposable account and leaves the run's seeded banker untouched and signed in, so later recipes on the same run start correctly. Recovery-code captures are masked to solid blocks and `mobile-ux.json` records only element counts, never code text. Emulation does not prove a physical keyboard, Home Screen installation, iOS suspension or a physical safe-area inset. Contrast is computed from rendered colours; gradients, images and pseudo-elements are not sampled. Content-level choices that are not pinned, such as the player sheet's action grid, are recorded but are not treated as a pinned primary. Run layout recipes serially and clean up every run.

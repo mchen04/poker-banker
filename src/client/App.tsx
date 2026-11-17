@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SessionState } from '../domain/session';
-import { bankerClient, blockBankerWork, clearBankerData, discoverAccount, discardItem, draftKey, outboxUncertain, invalidateBankerWork, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readBankerWork, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, resumeBankerWork, retryItem, storeSnapshot, syncOutbox, verifyBankerWork, type Banker, type BankerWork, type DraftCursor, type OutboxItem, type SubmittedDraft } from './data';
+import { bankerClient, blockBankerWork, clearBankerData, discoverAccount, discardItem, draftKey, enqueuedAt, outboxUncertain, invalidateBankerWork, listOutbox, listSubmittedDrafts, listSnapshots, pollSession, readBankerWork, readDraft, readSnapshot, replaySubmittedDraft, requestPersistence, resumeBankerWork, retryItem, storeSnapshot, syncOutbox, verifyBankerWork, type Banker, type BankerWork, type DraftCursor, type OutboxItem, type SubmittedDraft } from './data';
 import { usePwaUpdate } from './pwa';
 import { autoStartedTimer, retainedTimerAfterUndo } from './undo-timing';
 import { Auth, type PendingRecoveryCodes } from './views/Auth';
@@ -12,7 +12,7 @@ import { TableSkeleton } from './views/ui';
 
 type UndoSave = { bankerId: string; sessionId: string; entryId: string; revision: string; opId: string; timerStartedAt: string | null };
 type PendingRestore = RestoreUndo & { bankerId: string; opId: string };
-type Deletion = { text: string; undo: RestoreUndo; leave?: string };
+type Deletion = { text: string; undo: RestoreUndo; leave?: string; entryId?: string; selector?: string };
 function deletionReceipt(item: OutboxItem, receipt: SessionState): Deletion | null {
   const id = receipt.session.id;
   const entry = /^\/api\/sessions\/[^/]+\/entries\/([^/]+)\/void$/.exec(item.path);
@@ -21,12 +21,12 @@ function deletionReceipt(item: OutboxItem, receipt: SessionState): Deletion | nu
     const original = receipt.entries.find(row => row.id === entry[1]);
     if (!original) return null;
     const summary = `${entryNouns[original.kind]} · ${names.get(original.player_id) ?? 'Player'} · ${money(original.amount_minor, receipt.session.currency)}`;
-    return { text: `Deleted ${summary}`, undo: { path: `/api/sessions/${id}/entries/${original.id}/restore`, done: `Restored ${summary}`, sessionId: id } };
+    return { text: `Deleted ${summary}`, undo: { path: `/api/sessions/${id}/entries/${original.id}/restore`, done: `Restored ${summary}`, sessionId: id }, entryId: original.id };
   }
   const removal = /^\/api\/sessions\/[^/]+\/players\/([^/]+)\/remove$/.exec(item.path);
   if (removal) {
     const name = names.get(removal[1]!) ?? 'player';
-    return { text: `Removed ${name}`, undo: { path: `/api/sessions/${id}/players/${removal[1]}/restore`, done: `Restored ${name}`, sessionId: id } };
+    return { text: `Removed ${name}`, undo: { path: `/api/sessions/${id}/players/${removal[1]}/restore`, done: `Restored ${name}`, sessionId: id }, selector: '[data-testid="removed-players"]' };
   }
   if (/^\/api\/sessions\/[^/]+\/delete$/.test(item.path)) return { text: `Deleted ${receipt.session.name}`, undo: { path: `/api/sessions/${id}/restore`, done: `Restored ${receipt.session.name}`, sessionId: null, reopen: id }, leave: id };
   return null;
@@ -36,6 +36,7 @@ const viewerToken = location.pathname.startsWith('/v/') ? location.pathname.spli
 export function App() {
   const [banker, setBanker] = useState<Banker | null>(null);
   const [checking, setChecking] = useState(!viewerToken);
+  const [viewerRevoked, setViewerRevoked] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [sessionId, setSessionId] = useState<string | null>(new URLSearchParams(location.search).get('session'));
   const [state, setState] = useState<SessionState | null>(null);
@@ -53,7 +54,12 @@ export function App() {
   const [noticePressed, setNoticePressed] = useState(false);
   const [noticeTiming, setNoticeTiming] = useState(false);
   const noticeElement = useRef<HTMLDivElement>(null);
+  const noticeTarget = useRef<{ playerId?: string; entryId?: string; selector?: string; scrollY: number } | null>(null);
+  const sheetOpen = useRef(false);
+  sheetOpen.current = sheet !== null;
   const noticeBudget = useRef({ sequence: 0, remaining: 8000 });
+  const noticeParts = notice.split(' · ');
+  const noticeSplit = noticeParts.length === 3 && /^(Saved|Deleted|Restored) /.test(notice);
   const [undoSave, setUndoSave] = useState<UndoSave | null>(null);
   const [restoreUndo, setRestoreUndo] = useState<PendingRestore | null>(null);
   const carryNotice = useRef(false);
@@ -80,8 +86,8 @@ export function App() {
   current.current = state; chosen.current = sessionId; activeBanker.current = banker;
   const pwa = usePwaUpdate({ sheetOpen: sheet !== null || childDialog || checking || loggingOut || formBusy || recovery !== null || authCodesVisible || accountChanged || checkingForm || (!banker && !viewerToken), outboxCount: pending.length, busy: checking || loggingOut || formBusy || undoBusy || reloadingAccount || checkingForm });
   const dialogChange = useCallback((open: boolean) => { if (epoch.current === renderEpoch) setChildDialog(open); }, [renderEpoch]);
-  const notify = useCallback((text: string) => { setNotice(text); setNoticeSequence(value => value + 1); setUndoSave(null); setRestoreUndo(null); setNoticeTiming(false); }, []);
-  const offerUndo = useCallback((text: string, undo: RestoreUndo) => { const account = activeBanker.current; notify(text); if (account) setRestoreUndo({ ...undo, bankerId: account.id, opId: crypto.randomUUID() }); }, [notify]);
+  const notify = useCallback((text: string, target?: { playerId?: string; entryId?: string }, scrollY = window.scrollY) => { setNotice(text); setNoticeSequence(value => value + 1); setUndoSave(null); setRestoreUndo(null); setNoticeTiming(false); noticeTarget.current = target ? { ...target, scrollY } : null; }, []);
+  const offerUndo = useCallback((text: string, undo: RestoreUndo, target?: { playerId?: string; entryId?: string; selector?: string }, scrollY?: number) => { const account = activeBanker.current; notify(text, target, scrollY); if (account) setRestoreUndo({ ...undo, bankerId: account.id, opId: crypto.randomUUID() }); }, [notify]);
   const noticePaused = !!sheet || childDialog || noticeHovered || noticeFocused || noticePressed || undoBusy;
   useEffect(() => {
     if (!notice) { setNoticeHovered(false); setNoticeFocused(false); setNoticePressed(false); return; }
@@ -93,6 +99,25 @@ export function App() {
     return () => { window.clearTimeout(timer); budget.remaining = Math.max(0, budget.remaining - (performance.now() - started)); };
   }, [notice, noticeSequence, noticePaused]);
   useEffect(() => { setNoticeFocused(!!noticeElement.current?.contains(document.activeElement)); }, [noticeSequence, undoSave]);
+  useEffect(() => {
+    const target = noticeTarget.current;
+    noticeTarget.current = null;
+    if (!target) return;
+    const candidates = [target.selector, target.entryId ? `[data-testid="entry-${target.entryId}"]` : undefined, target.playerId ? `[data-player="${target.playerId}"]` : undefined].filter((value): value is string => !!value);
+    if (!candidates.length) return;
+    const timer = window.setTimeout(() => {
+      if (sheetOpen.current || Math.abs(window.scrollY - target.scrollY) > 1) return;
+      const element = candidates.map(candidate => document.querySelector<HTMLElement>(candidate)).find(Boolean) ?? null;
+      if (!element) return;
+      const padding = Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingBottom) || 0;
+      const toastTop = document.querySelector('.notice')?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY;
+      const limit = Math.min(window.innerHeight - padding, toastTop);
+      const rect = element.getBoundingClientRect();
+      if (rect.top >= 0 && rect.bottom <= limit) return;
+      window.scrollBy(0, rect.bottom > limit ? rect.bottom - limit : rect.top);
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [notice, noticeSequence]);
   useEffect(() => {
     const released = () => setNoticePressed(false);
     window.addEventListener('pointerup', released); window.addEventListener('pointercancel', released);
@@ -201,7 +226,7 @@ export function App() {
     if (current.current?.session.id === next.session.id && (BigInt(current.current.revision) > BigInt(next.revision) || (current.current.revision === next.revision && Date.parse(current.current.server_now) > Date.parse(next.server_now)))) return;
     setUndoSave(saved => saved?.sessionId === next.session.id && saved.revision !== next.revision ? null : saved);
     if (banker && !viewerToken) void storeSnapshot(banker.id, next).catch(storageFailure);
-    if (chosen.current === next.session.id || viewerToken) { setState(next); current.current = next; setLastUpdated(new Date().toISOString()); setError(''); }
+    if (chosen.current === next.session.id || viewerToken) { setState(next); current.current = next; setLastUpdated(new Date().toISOString()); setError(''); setViewerRevoked(false); }
   }, [banker, client, renderEpoch]);
   const refreshSessions = useCallback(async (account: Banker) => {
     const generation = epoch.current;
@@ -236,22 +261,28 @@ export function App() {
     if (!banker || loggingOut || accountChanged) return;
     const account = banker;
     const generation = epoch.current;
-    const changed = () => { void Promise.all([listOutbox(account.id), listSubmittedDrafts(account.id)]).then(([items, forms]) => { if (epoch.current === generation) { setPending(items); setSubmittedForms(forms); if (!items.length) setNotice(current => current === 'Not saved yet' ? '' : current); } }).catch(storageFailure); };
+    const changed = () => { void Promise.all([listOutbox(account.id), listSubmittedDrafts(account.id)]).then(([items, forms]) => { if (epoch.current === generation) { setPending(items); setSubmittedForms(forms); for (const [op, value] of enqueuedAt) if (Date.now() - value.at > 5000) enqueuedAt.delete(op); if (!items.length) setNotice(current => current === 'Not saved yet' ? '' : current); } }).catch(storageFailure); };
     changed();
     const stop = syncOutbox(account.id, (next, item, receipt) => {
       if (epoch.current !== generation) return;
       update(next);
       const deletion = deletionReceipt(item, receipt);
       if (deletion) {
+        const submitted = enqueuedAt.get(item.op_id);
+        enqueuedAt.delete(item.op_id);
+        const fresh = submitted !== undefined && submitted.at > 0 && Date.now() - submitted.at < 5000;
         if (deletion.leave) void latest.current.leave(account, deletion);
-        else offerUndo(deletion.text, deletion.undo);
+        else offerUndo(deletion.text, deletion.undo, fresh ? { entryId: deletion.entryId, selector: deletion.selector } : undefined, submitted?.scrollY);
         void refreshSessions(account);
         return;
       }
       const created = receipt.entries.filter(entry => entry.revision === receipt.revision && entry.player_id === item.body.player_id && !entry.voids_entry_id);
       const saved = created.find(entry => entry.kind === item.body.kind && entry.amount_minor === item.body.amount_minor);
       const player = receipt.players.find(player => player.id === item.body.player_id);
-      notify(saved ? `Saved ${entryLabels[saved.kind].toLowerCase()} · ${player?.display_name ?? 'Player'} · ${money(saved.amount_minor, receipt.session.currency)}` : `Saved ${item.label}`);
+      const submitted = enqueuedAt.get(item.op_id);
+      enqueuedAt.delete(item.op_id);
+      const fresh = submitted !== undefined && submitted.at > 0 && Date.now() - submitted.at < 5000;
+      notify(saved ? `Saved ${entryLabels[saved.kind].toLowerCase()} · ${player?.display_name ?? 'Player'} · ${money(saved.amount_minor, receipt.session.currency)}` : `Saved ${item.label}`, fresh && typeof item.body.player_id === 'string' ? { playerId: item.body.player_id } : undefined, submitted?.scrollY);
       if (saved && next.revision === receipt.revision) setUndoSave({ bankerId: account.id, sessionId: receipt.session.id, entryId: saved.id, revision: receipt.revision, opId: crypto.randomUUID(), timerStartedAt: autoStartedTimer(receipt, saved.id) });
       void refreshSessions(account);
     }, changed);
@@ -282,7 +313,7 @@ export function App() {
         if (failure.status === 401 && !viewerToken) resetAuth();
         else if (failure.status === 404 && !viewerToken && current.current?.session.id === sessionId && current.current.session.deleted_at) return;
         else if (failure.status === 404 && !viewerToken && sessionId === remembered.current) { remembered.current = null; current.current = null; chosen.current = null; setState(null); setSessionId(null); setSessionsResolved(false); try { localStorage.removeItem(`pb-session-${banker!.id}`); } catch {} setSelectionRound(value => value + 1); }
-        else if (failure.status === 404) { setState(null); current.current = null; setError(viewerToken ? 'This viewer link is unavailable. Ask the banker for a current link.' : 'Session not found. It may belong to another account.'); }
+        else if (failure.status === 404) { setState(null); current.current = null; if (viewerToken) setViewerRevoked(true); setError(viewerToken ? 'This viewer link is unavailable. Ask the banker for a current link.' : 'Session not found. It may belong to another account.'); }
         else if (!current.current) setError('Unable to load this session. Reconnect to try again.');
       } finally { requestRunning = false; if (isCurrent() && pendingForce && visible()) void refresh(); }
     }
@@ -401,6 +432,7 @@ export function App() {
       await logoutClient.api('/api/auth/logout', 'POST', {});
       loggedOut = true;
       if (!isCurrent()) return;
+      enqueuedAt.clear();
       await clearBankerData(account, consent);
       if (epoch.current !== generation || activeBanker.current?.id !== account) return;
       let stored: Banker | null = null;
@@ -431,7 +463,7 @@ export function App() {
   const sameAccount = () => !loggingOut && !accountChanged && epoch.current === renderEpoch && (!!viewerToken || (activeBanker.current?.id === banker?.id && !!client?.isCurrent()));
   const boundUpdate = (next: SessionState) => { if (sameAccount()) update(next); };
   const boundOpen = (next: SheetState) => { if (sameAccount()) open(next); };
-  const boundNotify = (text: string) => { if (sameAccount()) notify(text); };
+  const boundNotify = (text: string, target?: { playerId?: string; entryId?: string }, scrollY?: number) => { if (sameAccount()) notify(text, target, scrollY); };
   const boundMutate = (path: string, body: Record<string, unknown>, method?: string) => sameAccount() ? mutate(path, body, method) : Promise.reject(new Error('Account changed. Sign in to continue.'));
   const boundOfferUndo = (text: string, undo: RestoreUndo) => { if (sameAccount()) offerUndo(text, undo); };
   const boundChoose = (id: string | null, carried?: string) => { if (sameAccount()) choose(id, carried); };
@@ -470,9 +502,9 @@ export function App() {
   return <ClientContext.Provider value={provider}><div className={`app-shell${!viewerToken ? ' banker-shell' : ''}`}>{!viewerToken && <header className="app-bar"><a className="wordmark" href="/" onClick={event => { event.preventDefault(); setScreen('workspace'); }}>Poker banker</a></header>}
     {!sheet && !childDialog && <>{updateBanner}<DraftSaveStatus /></>}
     {!online && <p className="offline-banner" role="status">Offline. Saved totals are read only. New entries wait to sync.</p>}
-    {notice && <div ref={noticeElement} className="notice" role="status" onPointerEnter={event => { if (event.pointerType === 'mouse') setNoticeHovered(true); }} onPointerLeave={() => setNoticeHovered(false)} onPointerDown={() => setNoticePressed(true)} onFocus={() => setNoticeFocused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setNoticeFocused(false); }} data-testid={notice.startsWith('Saved ') ? 'saved-confirmation' : 'save-status'}><span>{notice}</span>{undoSave && undoSave.sessionId === sessionId && state?.session.status === 'open' && <button type="button" disabled={undoBusy || formBusy || !online} onClick={() => { void undoConfirmedSave(); }}>{undoBusy ? 'Undoing…' : 'Undo'}</button>}{restoreUndo && restoreUndo.bankerId === banker?.id && (restoreUndo.sessionId === null || restoreUndo.sessionId === sessionId) && <button type="button" disabled={undoBusy || formBusy || !online} onClick={() => { void undoRestore(); }}>{undoBusy ? 'Undoing…' : 'Undo'}</button>}{noticeTiming && state?.session.status === 'open' && <button type="button" disabled={formBusy || undoBusy || loggingOut} onClick={() => boundOpen({ kind: 'timing' })}>Correct times</button>}</div>}<ErrorText text={error} />
+    {notice && <div ref={noticeElement} className="notice" role="status" onPointerEnter={event => { if (event.pointerType === 'mouse') setNoticeHovered(true); }} onPointerLeave={() => setNoticeHovered(false)} onPointerDown={() => setNoticePressed(true)} onFocus={() => setNoticeFocused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setNoticeFocused(false); }} data-testid={notice.startsWith('Saved ') ? 'saved-confirmation' : 'save-status'}>{noticeSplit ? <><span className="notice-visual" aria-hidden="true"><span className="notice-text"><span className="notice-label">{noticeParts[0]}</span><span className="notice-sep"> · </span><span className="notice-tail">{noticeParts[2]}</span><span className="notice-sep"> · </span><span className="notice-name">{noticeParts[1]}</span></span></span><span className="sr-only">{notice}</span></> : <span className="notice-text">{notice}</span>}{undoSave && undoSave.sessionId === sessionId && state?.session.status === 'open' && <button type="button" disabled={undoBusy || formBusy || !online} onClick={() => { void undoConfirmedSave(); }}>{undoBusy ? 'Undoing…' : 'Undo'}</button>}{restoreUndo && restoreUndo.bankerId === banker?.id && (restoreUndo.sessionId === null || restoreUndo.sessionId === sessionId) && <button type="button" disabled={undoBusy || formBusy || !online} onClick={() => { void undoRestore(); }}>{undoBusy ? 'Undoing…' : 'Undo'}</button>}{noticeTiming && state?.session.status === 'open' && <button type="button" disabled={formBusy || undoBusy || loggingOut} onClick={() => boundOpen({ kind: 'timing' })}>Correct times</button>}</div>}{!viewerToken && <ErrorText text={error} />}
     {submittedForms.length > 0 && <section className="outbox" aria-label="Unconfirmed forms"><h2>Unconfirmed forms</h2><p>These forms may already have been saved. Check their saved results before starting another copy.</p><ul>{submittedForms.map(form => <li key={form.key}><button disabled={checkingForm || formBusy || undoBusy} onClick={() => { void checkSubmittedForm(form); }}>Check saved form: {({ 'new-session': 'New session', settings: 'Session settings', reopen: 'Reopen session', timing: 'Correct times', correction: 'Entry correction', 'add-player': 'Add player', rename: 'Rename player' } as Record<string, string>)[form.form] ?? 'Saved form'}</button></li>)}</ul></section>}
-    {viewerToken ? <main className="workspace viewer">{state && !error && <p className="viewer-label" data-testid="viewer-label">View only · {lastUpdated ? new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'offline'}</p>}{state ? <SessionView state={state} viewer /> : !error && <TableSkeleton />}</main> : screen === 'players' ? <main className="workspace"><PlayersScreen key={formsRevision} chooseSession={choose} dialogChange={dialogChange} /><section className="account-section" aria-label="Account"><span className="account-name">Signed in as <strong>{banker?.username}</strong></span><button className="text-button" onClick={() => setSheet({ kind: 'signout' })}>Sign out</button></section></main> : <><main className="workspace">{state ? <SessionView state={state} /> : !sessionId && (sessionsResolved || error) ? <div className="welcome"><h1>No active sessions</h1><p className="hint">Start one with New session below.</p><DeletedSessions choose={boundChoose} /></div> : error ? null : <TableSkeleton />}{pending.filter(item => item.session_id === sessionId || item.status === 'rejected').length > 0 && <section className="outbox" aria-label="Unsent entries"><h2>Not saved yet</h2><p>These entries are awaiting confirmation. A lost reply can mean an entry is already saved and included in totals. Check its saved result before entering it again.</p><ul>{pending.filter(item => item.session_id === sessionId || item.status === 'rejected').map(item => <li key={item.op_id} data-testid={`pending-${item.op_id}`}><strong>{item.label}</strong><span>{item.status === 'rejected' ? (item.session_id === sessionId ? item.error : `${item.error} This entry belongs to another or deleted session. Restore that session to retry it, or discard it.`) : outboxUncertain(item) ? 'Save not confirmed. This entry may already exist on the server.' : 'Not saved yet'}</span>{(item.status === 'rejected' || outboxUncertain(item)) && <button disabled={item.status === 'sending'} onClick={() => { void retryItem(item.op_id); }}>{outboxUncertain(item) ? 'Check saved entry' : 'Retry'}</button>}<button disabled={item.status === 'sending'} onClick={() => { const accepted = outboxUncertain(item) && window.confirm('This entry may already exist on the server. Discarding it does not undo a saved entry. Re-entering it may record it twice. Discard anyway?'); if (!outboxUncertain(item) || accepted) void discardItem(item.op_id, accepted).catch(problem => setError(problem.message)); }}>Discard</button></li>)}</ul></section>}</main></>}
+    {viewerToken ? <main className="workspace viewer">{state && <p className="viewer-label" data-testid="viewer-label">View only · {lastUpdated ? new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'offline'}</p>}{state ? <SessionView state={state} viewer /> : !error && <TableSkeleton />}{!state && viewerRevoked && <div role="alert"><h1 className="viewer-error-title">This viewer link isn’t available</h1><p className="viewer-error-body">Ask the banker for a current link.</p></div>}{!viewerRevoked && error && <ErrorText text={error} />}</main> : screen === 'players' ? <main className="workspace"><PlayersScreen key={formsRevision} chooseSession={choose} dialogChange={dialogChange} /><section className="account-section" aria-label="Account"><span className="account-name"><span className="account-label">Signed in as</span> <strong>{banker?.username}</strong></span><button className="text-button" onClick={() => setSheet({ kind: 'signout' })}>Sign out</button></section></main> : <><main className="workspace">{state ? <SessionView state={state} /> : !sessionId && (sessionsResolved || error) ? <div className="welcome"><h1>No active sessions</h1><p className="hint">Start one with New session.</p><DeletedSessions choose={boundChoose} /></div> : error ? null : <TableSkeleton />}{pending.filter(item => item.session_id === sessionId || item.status === 'rejected').length > 0 && <section className="outbox" aria-label="Unsent entries"><h2>Not saved yet</h2><p>These entries are awaiting confirmation. A lost reply can mean an entry is already saved and included in totals. Check its saved result before entering it again.</p><ul>{pending.filter(item => item.session_id === sessionId || item.status === 'rejected').map(item => <li key={item.op_id} data-testid={`pending-${item.op_id}`}><strong>{item.label}</strong><span>{item.status === 'rejected' ? (item.session_id === sessionId ? item.error : `${item.error} This entry belongs to another or deleted session. Restore that session to retry it, or discard it.`) : outboxUncertain(item) ? 'Save not confirmed. This entry may already exist on the server.' : 'Not saved yet'}</span>{(item.status === 'rejected' || outboxUncertain(item)) && <button disabled={item.status === 'sending'} onClick={() => { void retryItem(item.op_id); }}>{outboxUncertain(item) ? 'Check saved entry' : 'Retry'}</button>}<button disabled={item.status === 'sending'} onClick={() => { const accepted = outboxUncertain(item) && window.confirm('This entry may already exist on the server. Discarding it does not undo a saved entry. Re-entering it may record it twice. Discard anyway?'); if (!outboxUncertain(item) || accepted) void discardItem(item.op_id, accepted).catch(problem => setError(problem.message)); }}>Discard</button></li>)}</ul></section>}</main></>}
     {!viewerToken && <nav className="bottom-navigation" aria-label="Table navigation"><button aria-pressed={screen === 'workspace'} onClick={() => { setScreen('workspace'); setSheet(null); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 10h16M10 10v10" /></svg><span>Table</span></button><div className="transaction-slot" data-testid="session-bottom-bar" aria-label="Session actions"><button className="primary" style={tableLoading ? { visibility: 'hidden' } : undefined} disabled={formBusy || undoBusy || loggingOut} onClick={() => { setScreen('workspace'); boundOpen({ kind: transaction.kind }); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span>{transaction.label}</span></button></div><button aria-pressed={screen === 'players'} onClick={() => { setScreen('players'); setSheet(null); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2m18 0v-2a4 4 0 0 0-3-3.87M13 3.13a4 4 0 0 1 0 7.75" /><circle cx="9.5" cy="7" r="4" /></svg><span>Players</span></button></nav>}
     {sheet && content && (moneySheet ? content : <Sheet key={`${sheet.kind}/${sheet.player ?? ''}/${sheet.entry ?? ''}`} title={title} close={() => setSheet(null)}>{content}</Sheet>)}
   </div></ClientContext.Provider>;

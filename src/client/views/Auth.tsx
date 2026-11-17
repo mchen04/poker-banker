@@ -20,25 +20,25 @@ export function Auth({ signedIn, pendingCodes, pendingCursor, codesVisible, busy
   function setWorking(value: boolean) { setBusy(value); busyChanged?.(value); }
   useEffect(() => () => busyChanged?.(false), [busyChanged]);
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const viewport = window.visualViewport;
+    const viewport = globalThis.visualViewport;
     if (!viewport) return;
     let frame = 0;
     const keep = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        document.body.style.paddingBottom = viewport.height < window.innerHeight ? `${window.innerHeight - viewport.height}px` : '';
+        if (viewport.scale !== 1) { document.body.style.paddingBottom = ''; return; }
+        const bottom = viewport.offsetTop + viewport.height;
+        document.body.style.paddingBottom = bottom < window.innerHeight ? `${window.innerHeight - bottom}px` : '';
         const active = document.activeElement;
         if (!(active instanceof HTMLElement) || !active.matches('input,select,textarea')) return;
         const box = active.getBoundingClientRect();
-        if (box.bottom > viewport.height - 16) window.scrollBy({ top: box.bottom - viewport.height + 16 });
-        else if (box.top < 16) window.scrollBy({ top: box.top - 16 });
+        if (box.bottom > bottom - 16) window.scrollBy({ top: box.bottom - bottom + 16 });
+        else if (box.top < viewport.offsetTop + 16) window.scrollBy({ top: box.top - viewport.offsetTop - 16 });
       });
     };
     keep();
     viewport.addEventListener('resize', keep);
-    viewport.addEventListener('scroll', keep);
-    return () => { cancelAnimationFrame(frame); document.body.style.paddingBottom = ''; viewport.removeEventListener('resize', keep); viewport.removeEventListener('scroll', keep); };
+    return () => { cancelAnimationFrame(frame); document.body.style.paddingBottom = ''; viewport.removeEventListener('resize', keep); };
   }, []);
   useEffect(() => {
     if (pendingCodes) { codesCursor.version = pendingCursor?.version ?? null; setPending(pendingCodes); setSaved(false); void saveCodes(pendingCodes); }

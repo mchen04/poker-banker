@@ -11,6 +11,8 @@ const sizes = [
   { name: 'narrow', width: 320, height: 568 },
 ] as const;
 
+const desktop = { name: 'desktop', width: 1440, height: 1000 } as const;
+
 const layout: Record<string, LayoutIssue[]> = {};
 
 async function shoot(page: Page, dir: string, name: string) {
@@ -22,6 +24,33 @@ async function shoot(page: Page, dir: string, name: string) {
     await writeFile(join(dir, 'layout.json'), JSON.stringify(layout, null, 2));
   }
   await page.setViewportSize(sizes[0]);
+}
+
+async function shootDesktop(page: Page, dir: string, name: string) {
+  await page.setViewportSize(desktop);
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(dir, `${name}.${desktop.name}.png`) });
+  layout[`${name}.${desktop.name}`] = await checkLayout(page);
+  await writeFile(join(dir, 'layout.json'), JSON.stringify(layout, null, 2));
+  await page.setViewportSize(sizes[0]);
+  await page.waitForTimeout(150);
+}
+
+async function shootSafeArea(page: Page, dir: string, name: string) {
+  await page.setViewportSize(sizes[0]);
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--safe-top', '59px');
+    document.documentElement.style.setProperty('--safe-bottom', '34px');
+  });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(dir, `${name}.safe-area.png`) });
+  layout[`${name}.safe-area`] = await checkLayout(page);
+  await writeFile(join(dir, 'layout.json'), JSON.stringify(layout, null, 2));
+  await page.evaluate(() => {
+    document.documentElement.style.removeProperty('--safe-top');
+    document.documentElement.style.removeProperty('--safe-bottom');
+  });
+  await page.waitForTimeout(150);
 }
 
 async function dismiss(page: Page) {
@@ -62,6 +91,15 @@ export default async function tour({ page, evidence, step }: RecipeContext) {
   await shoot(page, dir, '00-empty-table');
   await newSession(page, 'Friday home game');
   await shoot(page, dir, '01-new-session-table');
+  await menu(page, 'Session settings');
+  await page.getByLabel('Session name', { exact: true }).fill('Friday Supercalifragilisticexpialidocious');
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await page.setViewportSize({ width: 320, height: 568 });
+  await shoot(page, dir, '01b-long-title');
+  await menu(page, 'Session settings');
+  await page.getByLabel('Session name', { exact: true }).fill('Friday home game');
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await page.setViewportSize({ width: 393, height: 852 });
   const names = ['Justin', 'Alexandria Montgomery-Vanderbilt the Third', 'Sam', 'Priya', 'Alexandria Montgomery-Whitfield'];
   const players = [];
   for (const name of names) players.push(await addPlayer(page, name));
@@ -75,6 +113,8 @@ export default async function tour({ page, evidence, step }: RecipeContext) {
   await shoot(page, dir, '02-table-with-saved-toast');
   await page.waitForTimeout(9000);
   await shoot(page, dir, '03-table-playing');
+  await shootDesktop(page, dir, '03-table-playing');
+  await shootSafeArea(page, dir, '03-table-playing');
   await page.getByTestId(`player-${players[1]!.id}`).click();
   await shoot(page, dir, '04-player-sheet-long-name');
   await page.getByRole('dialog').getByRole('button', { name: 'Buy-in', exact: true }).click();
@@ -84,6 +124,7 @@ export default async function tour({ page, evidence, step }: RecipeContext) {
   await money(page, players[2]!.id, '0', { kind: 'Cash out' });
   await page.waitForTimeout(9000);
   await shoot(page, dir, '06-table-mixed-states');
+  await shootDesktop(page, dir, '06-table-mixed-states');
   await page.getByTestId(`player-${players[2]!.id}`).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Record payment', exact: true }).click();
   await shoot(page, dir, '07-payment-sheet');
@@ -126,11 +167,14 @@ export default async function tour({ page, evidence, step }: RecipeContext) {
   await step('reloaded');
   await filmstrip(page, dir, '14-cold-reload', () => page.reload());
   await shoot(page, dir, '15-after-reload');
+  await shootDesktop(page, dir, '15-after-reload');
+  await shootSafeArea(page, dir, '15-after-reload');
   const viewer = await page.context().newPage();
   try {
     await viewer.setViewportSize(sizes[0]);
     await filmstrip(viewer, dir, '16-viewer-load', () => viewer.goto(link));
     await shoot(viewer, dir, '17-viewer');
+    await shootDesktop(viewer, dir, '17-viewer');
   } finally { await viewer.close(); }
   await page.emulateMedia({ colorScheme: 'dark' });
   await shoot(page, dir, '18-dark');
@@ -173,5 +217,7 @@ export default async function tour({ page, evidence, step }: RecipeContext) {
   await shoot(page, dir, '30-delete-player-toast');
   await page.getByTestId('recently-deleted-players').getByText(/^Recently deleted/).click();
   await shoot(page, dir, '31-recently-deleted-players');
+  const failed = Object.entries(layout).flatMap(([state, issues]) => issues.map(issue => `${state}: ${issue.kind}: ${issue.detail}`));
+  if (failed.length) throw new Error(`Layout issues (${failed.length}):\n${failed.slice(0, 40).join('\n')}`);
   await step('tour-complete');
 }

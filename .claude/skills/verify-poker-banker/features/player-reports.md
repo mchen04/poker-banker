@@ -16,7 +16,7 @@ The roster shows finalized results and outstanding payments by currency. Player 
 
 - Choose `Players`, search `Find a player`, then choose a roster row.
 - In detail choose `Rename player` or a Past sessions button.
-- Under Cash game report choose a grouping or `Filter: Off`; apply or clear filters.
+- Under Cash game report choose a grouping or `Filter · Off`; apply or clear filters.
 - In Table choose `Total`, `Per hour` or `BB` beside Players.
 
 ## Driving it with Playwright
@@ -53,16 +53,16 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
   }
   await page.getByRole('button', { name: 'Overall', exact: true }).click();
   for (const [label, value, expected, select] of [['Filter location', 'Home', '+$40.00', false], ['Filter game', 'NLH', '+$40.00', false], ['Filter weekday', '2', '+$40.00', true], ['Filter month', '2026-11', '+$40.00', false], ['From date', '2026-11-17', '−$20.00', false], ['To date', '2026-11-10', '+$60.00', false]] as const) {
-    await page.getByRole('button', { name: 'Filter: Off', exact: true }).click();
+    await page.getByRole('button', { name: 'Filter · Off', exact: true }).click();
     if (select) await page.getByLabel(label, { exact: true }).selectOption(value);
     else await typeInput(page.getByLabel(label, { exact: true }), value);
     await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
     await expect(page.getByTestId('report-profit_loss_minor').locator('dd')).toHaveText(expected);
-    if (label === 'Filter weekday') await expect(page.getByRole('button', { name: 'Filter: weekday Tuesday', exact: true })).toBeVisible();
-    if (label === 'Filter month') await expect(page.getByRole('button', { name: 'Filter: month November 2026', exact: true })).toBeVisible();
+    if (label === 'Filter weekday') await expect(page.getByRole('button', { name: 'Filter · weekday Tuesday', exact: true })).toBeVisible();
+    if (label === 'Filter month') await expect(page.getByRole('button', { name: 'Filter · month November 2026', exact: true })).toBeVisible();
     if (label === 'From date' || label === 'To date') await expect(page.getByTestId('report-variation_per_hour_minor')).toContainText('Unavailable · needs two sessions');
     await step(`reports-filter-${label.toLowerCase().replaceAll(' ', '-')}`);
-    await page.getByRole('button', { name: /^Filter: / }).click();
+    await page.getByRole('button', { name: /^Filter · / }).click();
     await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
   }
   const renamed = `Report ${runId.slice(-8)}`;
@@ -77,9 +77,9 @@ export default async function ({ page, runId, step, checkState }: RecipeContext)
   await page.getByRole('button', { name: 'Per hour', exact: true }).click();
   await expect(page.getByTestId(`result-${player}`)).toHaveText('+$30.00/hour');
   await page.getByRole('button', { name: 'BB', exact: true }).click();
-  await expect(page.getByTestId(`result-${player}`)).toHaveText('+30.00 big blinds');
+  await expect(page.getByTestId(`result-${player}`)).toHaveText('+30.00 BB');
   await page.getByRole('button', { name: 'Total', exact: true }).click();
-  await expect(page.getByTestId(`result-${player}`)).toHaveText('+$60.00 up');
+  await expect(page.getByTestId(`result-${player}`)).toHaveText('+$60.00');
   expect((await checkState()).entries).toEqual(before);
   const yen = await fixtureSession(page, player, { name: 'Verify yen no blind', day: '2026-11-18', result: '40', hours: 1, expense: '5', currency: 'JPY' });
   await page.goto(`/?session=${yen.session.id}`);

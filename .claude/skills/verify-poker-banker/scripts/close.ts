@@ -42,9 +42,9 @@ export default async function ({ page, runId, evidence, step }: RecipeContext) {
   await money(page, winner.id, '90', { kind: 'Cash out', paid: true });
   await menu(page, 'Close session');
   await expect(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })).toBeDisabled();
-  await expect(page.getByLabel('Accept discrepancy of −$10.00', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Accept $10.00 short', { exact: true })).toBeVisible();
   await step('close-discrepancy-before-acceptance');
-  await page.getByLabel('Accept discrepancy of −$10.00', { exact: true }).check();
+  await page.getByLabel('Accept $10.00 short', { exact: true }).check();
   await page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true }).click();
   await expect(page.getByText('Closed · chip discrepancy', { exact: true })).toBeVisible();
   history = await call<History>(page, `/players/${winner.id}`);

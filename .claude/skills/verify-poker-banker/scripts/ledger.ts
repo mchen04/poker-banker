@@ -101,3 +101,5 @@ export async function ledger({ page, runId, evidence, step, checkState }: Recipe
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 }
+
+export default ledger;

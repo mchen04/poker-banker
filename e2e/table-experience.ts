@@ -46,6 +46,8 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
     for (const scheme of ['light', 'dark'] as const) {
       await page.emulateMedia({ colorScheme: scheme });
       await keyboard(page, null);
+      await page.waitForFunction(() => document.querySelector('.sheet-backdrop')?.getAttribute('data-compact') === 'false');
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await capture(page, evidence, `${name}-${scheme}-393x659`);
       await keyboard(page, 380);
       await page.getByTestId('money-amount').focus();
@@ -196,7 +198,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
     await viewer.emulateMedia({ colorScheme: 'light' });
     await menu(page, 'Share'); await page.getByRole('button', { name: 'Rotate link', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm rotate', exact: true }).click();
-    await viewer.reload(); await expect(viewer.getByText('This viewer link is unavailable', { exact: false })).toBeVisible();
+    await viewer.reload(); await expect(viewer.getByText("This viewer link isn’t available", { exact: false })).toBeVisible();
     await expect(viewer.getByText('View only ·', { exact: false })).toHaveCount(0);
     await capture(viewer, evidence, 'viewer-revoked');
     await viewer.emulateMedia({ colorScheme: 'dark' }); await capture(viewer, evidence, 'viewer-revoked-dark');
@@ -230,7 +232,7 @@ export async function uxApproval({ page, browser, baseURL, evidence, runId }: Ux
       await page.emulateMedia({ colorScheme: scheme }); await page.evaluate(() => scrollTo(0, 0));
       const fullyVisible = await page.locator('.players > .player-card').evaluateAll(rows => { const bar = document.querySelector('.bottom-navigation')!.getBoundingClientRect(); return rows.filter(row => { const box = row.getBoundingClientRect(); return box.top >= 0 && box.bottom <= bar.top; }).length; });
       rowCounts[`${height}-${scheme}`] = fullyVisible;
-      const clippedMoney = await page.locator('.players .player-position,.players .player-balance').evaluateAll(values => values.filter(value => value.clientWidth === 0 || value.scrollWidth > value.clientWidth).map(value => ({ text: value.textContent, available: value.clientWidth, needed: value.scrollWidth })));
+      const clippedMoney = await page.locator('.players .player-position,.players .player-balance').evaluateAll(values => values.filter(value => { const box = value.getBoundingClientRect(); const clip = value.closest('.players')!.getBoundingClientRect(); const lines = new Set([...value.getClientRects()].map(rect => Math.round(rect.top))).size; return value.clientWidth === 0 || value.scrollWidth > value.clientWidth + 1 || box.right > clip.right + 1 || box.left < clip.left - 1 || lines > 1 || value.classList.contains('fit-wrap'); }).map(value => ({ text: value.textContent, available: value.clientWidth, needed: value.scrollWidth })));
       rowMoneyFits[`${height}-${scheme}`] = clippedMoney.length === 0;
       expect(clippedMoney, 'Full positions and balances must remain visible').toEqual([]);
       expect(fullyVisible, `Complete player rows at 393×${height}`).toBeGreaterThanOrEqual(height === 659 ? 6 : 8);

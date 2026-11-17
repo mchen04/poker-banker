@@ -178,7 +178,8 @@ test('deleting a session moves to the next session, kills its viewer link and re
   try {
     const viewer = await viewerContext.newPage();
     await viewer.goto(link);
-    await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();
+    await expect(viewer.getByRole('heading', { name: "This viewer link isn’t available" })).toBeVisible();
+    await expect(viewer.getByText('Ask the banker for a current link.', { exact: true })).toBeVisible();
   } finally { await viewerContext.close(); }
 
   await toast(page).getByRole('button', { name: 'Undo', exact: true }).click();
@@ -251,6 +252,29 @@ test.describe('deleted-player paging with routed responses', () => {
       const names = await list.locator('.recover-name').allTextContents();
       return names.length === new Set(names).size;
     }).toBe(true);
+  });
+  test('a retry after a failed page waits for the restored list before appending', async ({ page }) => {
+    const account = await createAccount(page);
+    await deletedPlayers(page, 32);
+    await players(page);
+    const list = page.getByTestId('recently-deleted-players');
+    await expect(list).toBeVisible();
+    await list.getByText('Recently deleted', { exact: true }).click();
+    let fail = true;
+    await page.route(url => url.pathname === '/api/players/deleted' && url.searchParams.has('before'), route => fail
+      ? route.fulfill({ status: 500, contentType: 'application/json', headers: { 'X-PB-Banker-ID': account.banker.id }, body: JSON.stringify({ error: { code: 'request_failed', message: 'Deleted players unavailable' } }) })
+      : route.continue());
+    await list.getByRole('button', { name: 'Load more deleted players', exact: true }).click();
+    await expect(list.getByText('Deleted players unavailable', { exact: true })).toBeVisible();
+    await page.route(url => url.pathname === '/api/players/deleted' && !url.searchParams.has('before'), async route => {
+      await new Promise(resolve => setTimeout(resolve, 800));
+      await route.continue();
+    });
+    await list.getByRole('button', { name: /^Restore / }).first().click();
+    await expect(list.getByText('Deleted players unavailable', { exact: true })).toHaveCount(0);
+    fail = false;
+    await list.getByRole('button', { name: 'Load more deleted players', exact: true }).click();
+    await expect(list.locator('.recover-name')).toHaveCount(31);
   });
   test('shows an error when loading more deleted players fails', async ({ page }) => {
     const account = await createAccount(page);
@@ -407,7 +431,7 @@ test('a long name with a nine-digit amount stays fully readable with reachable a
     const name = await row.locator('strong[title]').evaluate(element => ({ text: element.textContent, overflow: getComputedStyle(element).textOverflow, scroll: element.scrollWidth, client: element.clientWidth }));
     expect(name, `name at ${width}`).toMatchObject({ text: longName });
     expect(name.overflow).not.toBe('ellipsis');
-    expect(name.scroll).toBeLessThanOrEqual(name.client);
+    expect(name.scroll, `name at ${width} ${JSON.stringify(name)}`).toBeLessThanOrEqual(name.client);
     const amount = await row.locator('.player-position').evaluate(element => ({ text: element.textContent, scroll: element.scrollWidth, client: element.clientWidth }));
     expect(amount.text).toBe('$123,456,789.00');
     expect(amount.scroll).toBeLessThanOrEqual(amount.client);
@@ -427,4 +451,79 @@ test('a long name with a nine-digit amount stays fully readable with reachable a
     await page.evaluate(() => scrollTo(0, 0));
     await screen(page, info, `long-name-row-${width}`);
   }
+});
+
+test('opening Removed scrolls the Restore row above the toast without a page error', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 320, height: 568 });
+  await createAccount(page);
+  await newSession(page, 'Removed scroll');
+  await addPlayer(page, 'Alice');
+  for (const name of ['Bea', 'Cy', 'Dee', 'Eve', 'Fay', 'Gus', 'Hal', 'Ivy', 'Jo']) await addPlayer(page, name);
+  const last = await addPlayer(page, 'Al');
+  await page.getByTestId(`player-${last.id}`).click();
+  await page.getByRole('button', { name: 'Remove from game', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm remove', exact: true }).click();
+  await expect(toast(page)).toContainText('Removed Al');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.evaluate(() => document.querySelector<HTMLElement>('[data-testid="removed-players"] summary')?.focus({ preventScroll: true }));
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(600);
+  const geometry = await page.evaluate(() => {
+    const restore = document.querySelector<HTMLElement>('[data-testid="removed-players"] button');
+    const notice = document.querySelector<HTMLElement>('.notice');
+    const nav = document.querySelector<HTMLElement>('.bottom-navigation');
+    if (!restore) return null;
+    const box = restore.getBoundingClientRect();
+    return { top: Math.round(box.top), bottom: Math.round(box.bottom), toastTop: notice ? Math.round(notice.getBoundingClientRect().top) : Math.round(innerHeight), navTop: nav ? Math.round(nav.getBoundingClientRect().top) : Math.round(innerHeight) };
+  });
+  expect(errors).toEqual([]);
+  expect(geometry && geometry.top >= 0 && geometry.bottom <= Math.min(geometry.toastTop, geometry.navTop), JSON.stringify(geometry)).toBe(true);
+});
+
+test('the Players Restore row and Sign out clear the toast at 320', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width: 320, height: 568 });
+  await createAccount(page);
+  await newSession(page, 'Players toast');
+  const long = await addPlayer(page, 'Alexandra Montgomery-Whitfield');
+  await money(page, long.id, '50');
+  await expect(page.getByTestId('saved-confirmation')).toBeVisible();
+  const jordan = (await call<{ player: { id: string } }>(page, '/players', 'POST', { op_id: randomUUID(), display_name: 'Alexandra Montgomery-Whitfield' })).player;
+  for (const name of ['Roster One', 'Roster Two', 'Roster Three', 'Roster Four', 'Roster Five', 'Roster Six']) await call(page, '/players', 'POST', { op_id: randomUUID(), display_name: name });
+  await players(page);
+  await expect(page.locator('[data-testid^="roster-player-"]').first()).toBeVisible();
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await page.waitForTimeout(300);
+  const signOut = await page.evaluate(() => {
+    const button = [...document.querySelectorAll<HTMLElement>('button')].find(item => item.textContent?.trim() === 'Sign out');
+    const notice = document.querySelector<HTMLElement>('.notice');
+    const nav = document.querySelector<HTMLElement>('.bottom-navigation');
+    if (!button) return null;
+    const box = button.getBoundingClientRect();
+    return { top: Math.round(box.top), bottom: Math.round(box.bottom), toastTop: notice ? Math.round(notice.getBoundingClientRect().top) : Math.round(innerHeight), navTop: nav ? Math.round(nav.getBoundingClientRect().top) : Math.round(innerHeight) };
+  });
+  expect(signOut && signOut.top >= 0 && signOut.bottom <= Math.min(signOut.toastTop, signOut.navTop), JSON.stringify(signOut)).toBe(true);
+  await page.getByTestId(`roster-player-${jordan.id}`).click();
+  await page.getByRole('button', { name: 'Delete player', exact: true }).click();
+  await page.getByRole('alertdialog', { name: 'Delete player', exact: true }).getByRole('button', { name: 'Confirm delete', exact: true }).click();
+  await expect(toast(page)).toContainText('Deleted Alexandra Montgomery-Whitfield');
+  await expect(page.getByTestId('recently-deleted-players')).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.evaluate(() => document.querySelector<HTMLElement>('[data-testid="recently-deleted-players"] summary')?.focus({ preventScroll: true }));
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(600);
+  const restore = await page.evaluate(() => {
+    const button = document.querySelector<HTMLElement>('[data-testid="recently-deleted-players"] button');
+    const notice = document.querySelector<HTMLElement>('.notice');
+    const nav = document.querySelector<HTMLElement>('.bottom-navigation');
+    if (!button) return null;
+    const box = button.getBoundingClientRect();
+    return { top: Math.round(box.top), bottom: Math.round(box.bottom), toastTop: notice ? Math.round(notice.getBoundingClientRect().top) : Math.round(innerHeight), navTop: nav ? Math.round(nav.getBoundingClientRect().top) : Math.round(innerHeight) };
+  });
+  expect(errors).toEqual([]);
+  expect(restore && restore.top >= 0 && restore.bottom <= Math.min(restore.toastTop, restore.navTop), JSON.stringify(restore)).toBe(true);
 });
