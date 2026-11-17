@@ -49,6 +49,7 @@ export function DeletedSessions({ choose }: { choose: (id: string | null, notice
   const [deleted, setDeleted] = useState<DeletedSession[]>([]);
   const [next, setNext] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
   const deletedGeneration = useRef(0);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -62,16 +63,17 @@ export function DeletedSessions({ choose }: { choose: (id: string | null, notice
     return () => { active = false; };
   }, [online, client]);
   async function more() {
-    if (!client || !next || loadingMore) return;
+    if (!client || !next || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
     const generation = deletedGeneration.current;
     setLoadingMore(true); setError('');
     try {
       const result = await listDeletedSessions(client, next);
       if (!client.isCurrent() || generation !== deletedGeneration.current) return;
-      setDeleted(current => [...current, ...result.sessions]);
+      setDeleted(current => { const seen = new Set(current.map(item => item.id)); return [...current, ...result.sessions.filter(item => !seen.has(item.id))]; });
       setNext(result.next);
     } catch (problem) { if (client.isCurrent() && generation === deletedGeneration.current) setError(problem instanceof Error ? problem.message : 'Could not load deleted sessions'); }
-    finally { if (client.isCurrent()) setLoadingMore(false); }
+    finally { loadingMoreRef.current = false; if (client.isCurrent()) setLoadingMore(false); }
   }
   async function restore(session: DeletedSession) {
     if (restoring) return;
@@ -85,7 +87,7 @@ export function DeletedSessions({ choose }: { choose: (id: string | null, notice
     } catch (problem) { if (client!.isCurrent()) { setError(problem instanceof Error ? problem.message : 'Could not restore session'); setRestoring(null); } }
   }
   if (!deleted.length) return null;
-  return <details className="recover-list" data-testid="recently-deleted-sessions"><summary>{next ? 'Recently deleted' : `Recently deleted (${deleted.length})`}</summary><ul>{deleted.map(session => <li key={session.id}><span className="recover-name" title={session.name}>{sessionLabel(session)}</span><button type="button" aria-label={`Restore ${session.name}`} disabled={restoring !== null || !online} onClick={() => { void restore(session); }}>{restoring === session.id ? 'Restoring…' : 'Restore'}</button></li>)}</ul>{next && <button type="button" className="text-button" disabled={loadingMore || !online} onClick={() => { void more(); }}>{loadingMore ? 'Loading…' : 'Load more deleted sessions'}</button>}<ErrorText text={error} /></details>;
+  return <details className="recover-list" data-testid="recently-deleted-sessions" onToggle={event => { const details = event.currentTarget; if (details.open) requestAnimationFrame(() => (details.querySelector('button') ?? details).scrollIntoView({ block: 'center' })); }}><summary>{next ? 'Recently deleted' : `Recently deleted (${deleted.length})`}</summary><ul>{deleted.map(session => <li key={session.id}><span className="recover-name" title={session.name}>{sessionLabel(session)}</span><button type="button" aria-label={`Restore ${session.name}`} disabled={restoring !== null || !online} onClick={() => { void restore(session); }}>{restoring === session.id ? 'Restoring…' : 'Restore'}</button></li>)}</ul>{next && <button type="button" className="text-button" disabled={loadingMore || !online} onClick={() => { void more(); }}>{loadingMore ? 'Loading…' : 'Load more deleted sessions'}</button>}<ErrorText text={error} /></details>;
 }
 export function HistorySheet({ choose }: { choose: (id: string | null, notice?: string) => void }) {
   const { banker, client, open, state, online } = useClient();
@@ -99,6 +101,7 @@ export function HistorySheet({ choose }: { choose: (id: string | null, notice?: 
   const [error, setError] = useState('');
   const [before, setBefore] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
   const sessionGeneration = useRef(0);
   useEffect(() => {
     let active = true;
@@ -110,7 +113,7 @@ export function HistorySheet({ choose }: { choose: (id: string | null, notice?: 
   useEffect(() => {
     let active = true;
     const generation = ++sessionGeneration.current;
-    setHistoryLoaded(false); setBefore(null); setError(''); setLoadingMore(false);
+    setHistoryLoaded(false); setBefore(null); setError(''); setLoadingMore(false); loadingMoreRef.current = false;
     if (!online) return;
     void api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}`).then(result => { if (active && client!.isCurrent() && generation === sessionGeneration.current) { setSessions(result.sessions); setBefore(result.next); setHistoryLoaded(true); } }).catch(error => { if (active && client!.isCurrent() && generation === sessionGeneration.current) setError(error.message); });
     return () => { active = false; };
@@ -144,21 +147,22 @@ export function HistorySheet({ choose }: { choose: (id: string | null, notice?: 
   const historical = choices.filter(session => !pinned.some(item => item.id === session.id));
   const months = [...new Set(historical.map(session => session.played_on.slice(0, 7)))];
   async function more() {
-    if (!before || loadingMore) return;
+    if (!before || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
     const generation = sessionGeneration.current;
     setLoadingMore(true); setError('');
     try {
       const result = await api<{ sessions: SessionSummary[]; next: string | null }>(`/api/sessions?q=${encodeURIComponent(search)}&before=${encodeURIComponent(before)}`);
       if (!client!.isCurrent() || generation !== sessionGeneration.current) return;
-      setSessions(current => [...current, ...result.sessions]);
+      setSessions(current => { const seen = new Set(current.map(session => session.id)); return [...current, ...result.sessions.filter(session => !seen.has(session.id))]; });
       setBefore(result.next);
     } catch (problem) { if (client!.isCurrent() && generation === sessionGeneration.current) setError(problem instanceof Error ? problem.message : 'Could not load more sessions'); }
-    finally { setLoadingMore(false); }
+    finally { loadingMoreRef.current = false; setLoadingMore(false); }
   }
   function choice(session: SessionSummary) {
     return <li key={session.id}><button data-testid={`session-tab-${session.id}`} aria-current={state?.session.id === session.id ? 'true' : undefined} onClick={() => choose(session.id)}><span>{sessionLabel(session)}</span><small>{state?.session.id === session.id ? 'Current · ' : ''}{session.status === 'closed' ? 'Closed' : 'Open'} · {session.currency}</small></button></li>;
   }
-  return <><button className="primary wide" onClick={() => open({ kind: 'new' })}>New session</button>{!online && <p className="hint" role="status">Offline · saved sessions on this device</p>}<label>Search sessions<input data-autofocus="false" value={search} onChange={event => setSearch(event.target.value)} /></label>{pinned.length > 0 && <section aria-label="Current and open sessions"><h3>Current and open sessions</h3><ul className="choice-list">{pinned.map(choice)}</ul></section>}{months.map(month => <section key={month}><h3>{new Date(`${month}-01T12:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h3><ul className="choice-list">{historical.filter(session => session.played_on.startsWith(month)).map(choice)}</ul></section>)}{!choices.length && <p>No matching sessions.</p>}{online && before && <button className="wide" disabled={loadingMore} onClick={() => { setError(''); void more(); }}>Load more sessions</button>}<ErrorText text={error} /><DeletedSessions choose={choose} /></>;
+  return <><ul className="choice-list"><li><button onClick={() => open({ kind: 'new' })}><strong>New session</strong></button></li></ul>{!online && <p className="hint" role="status">Offline · saved sessions on this device</p>}<label>Search sessions<input data-autofocus="false" value={search} onChange={event => setSearch(event.target.value)} /></label>{pinned.length > 0 && <section aria-label="Current and open sessions"><h3>Current and open sessions</h3><ul className="choice-list">{pinned.map(choice)}</ul></section>}{months.map(month => <section key={month}><h3>{new Date(`${month}-01T12:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h3><ul className="choice-list">{historical.filter(session => session.played_on.startsWith(month)).map(choice)}</ul></section>)}{!choices.length && <p>No matching sessions.</p>}{online && before && <button className="wide" disabled={loadingMore} onClick={() => { setError(''); void more(); }}>Load more sessions</button>}<ErrorText text={error} /><DeletedSessions choose={choose} /></>;
 
 }
 export function MenuSheet() {
@@ -180,11 +184,19 @@ export function MenuSheet() {
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not delete session'); setBusy(false); }
   }
   if (confirming) return <section className="confirmation-panel" role="alertdialog" aria-label="Delete session" tabIndex={-1} ref={panel}><h3>Delete {session.name}?</h3><p>It disappears from history and reports, and its viewer link stops working.</p>{(state!.totals.owed_to_banker_minor !== '0' || state!.totals.owed_by_banker_minor !== '0') && <p className="warning">Not settled yet: {[state!.totals.owed_to_banker_minor !== '0' ? `${money(state!.totals.owed_to_banker_minor, session.currency)} owed to you` : '', state!.totals.owed_by_banker_minor !== '0' ? `${money(state!.totals.owed_by_banker_minor, session.currency)} you owe` : ''].filter(Boolean).join(', ')}. These amounts leave player balances until you restore the session.</p>}<ErrorText text={error} /><div className="confirm-actions"><button type="button" disabled={busy} onClick={() => setConfirming(false)}>Keep session</button><button type="button" className="danger" disabled={busy} onClick={() => { void remove(); }}>Confirm delete</button></div></section>;
-  return <><div className="menu-list"><button onClick={() => open({ kind: 'settings' })}>Session settings</button><button onClick={() => open({ kind: 'timing' })}>Correct times</button><button onClick={() => open({ kind: 'share' })}>Share session</button>{session.status === 'open' ? <button data-testid="session-close" onClick={() => open({ kind: 'close' })}>Close session</button> : <button onClick={() => open({ kind: 'reopen' })}>Reopen session</button>}</div><div className="menu-list menu-danger">{pending.some(item => item.path === path) ? <p className="hint">Delete not saved yet</p> : <button className="danger" onClick={() => setConfirming(true)}>Delete session</button>}</div></>;
+  const readiness = closeReadiness(state!, pending);
+  const discrepancy = readiness.discrepancy ?? '0';
+  const closeHint = readiness.waiting.length ? 'Close is blocked: save or discard unsaved entries first.' : readiness.blockers.length ? `Close is blocked: cash out ${readiness.blockers.length} ${readiness.blockers.length === 1 ? 'player' : 'players'} first.` : discrepancy !== '0' ? `Close will ask you to accept ${money(String(BigInt(discrepancy) < 0n ? -BigInt(discrepancy) : BigInt(discrepancy)), session.currency)} ${BigInt(discrepancy) < 0n ? 'short' : 'over'}.` : '';
+  return <><div className="menu-list"><button onClick={() => open({ kind: 'settings' })}>Session settings</button><button onClick={() => open({ kind: 'timing' })}>Correct times</button><button onClick={() => open({ kind: 'share' })}>Share session</button>{session.status === 'open' ? <><button data-testid="session-close" onClick={() => open({ kind: 'close' })}>Close session</button>{closeHint && <p className="hint menu-hint">{closeHint}</p>}</> : <button onClick={() => open({ kind: 'reopen' })}>Reopen session</button>}</div><div className="menu-list menu-danger">{pending.some(item => item.path === path) ? <p className="hint">Delete not saved yet</p> : <button className="danger" onClick={() => setConfirming(true)}>Delete session</button>}</div></>;
+}
+function closeReadiness(state: SessionState, pending: { session_id: string | null }[]) {
+  const waiting = pending.filter(item => item.session_id === state.session.id);
+  const blockers = state.players.filter(player => player.state === 'playing' || (player.state === 'seated' && (player.payment_in_minor !== '0' || player.payment_out_minor !== '0' || player.expense_minor !== '0')));
+  return { waiting, blockers, discrepancy: state.totals.discrepancy_minor };
 }
 export function CloseSheet() {
   const { banker, state, pending, mutate, open, notify } = useClient();
-  const waiting = pending.filter(item => item.session_id === state!.session.id);
+  const { waiting, blockers, discrepancy } = closeReadiness(state!, pending);
   const [acceptedRevision, setAcceptedRevision] = useState<string | null>(null);
   const accepted = acceptedRevision === state!.revision;
   const [bar, setBar] = useState<HTMLDivElement | null>(null);
@@ -198,8 +210,7 @@ export function CloseSheet() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   useFormBusy(busy);
-  const blockers = state!.players.filter(player => player.state === 'playing' || (player.state === 'seated' && (player.payment_in_minor !== '0' || player.payment_out_minor !== '0' || player.expense_minor !== '0')));
-  const discrepancy = state!.totals.discrepancy_minor;
+
   async function close() {
     setBusy(true); setError('');
     try {
@@ -207,8 +218,12 @@ export function CloseSheet() {
       await mutate(`/api/sessions/${state!.session.id}/close`, { op_id: crypto.randomUUID(), expected_revision: state!.revision, ...(discrepancy && discrepancy !== '0' ? { accept_discrepancy_minor: discrepancy } : {}) }); notify('Session closed'); open(null); }
     catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not close session'); setBusy(false); }
   }
+  const discrepancyMinor = BigInt(discrepancy ?? '0');
+  const discrepancyUnder = discrepancyMinor < 0n;
+  const discrepancyMagnitude = money(String(discrepancyUnder ? -discrepancyMinor : discrepancyMinor), state!.session.currency);
   const reason = waiting.length > 0 ? 'Save or discard unsaved entries first' : blockers.length > 0 ? `Cash out ${blockers.length} ${blockers.length === 1 ? 'player' : 'players'} first` : discrepancy !== '0' && !accepted ? 'Accept the discrepancy first' : '';
-  return <>{waiting.length > 0 && <p className="warning">{waiting.length} {waiting.length === 1 ? 'entry is' : 'entries are'} not saved yet. Save or discard them before closing. They are excluded from these totals.</p>}{blockers.length ? <><p className="warning">Cash out everyone with entries before closing.</p><ul className="close-blockers">{blockers.map(player => <li key={player.id}><button className="close-blocker" aria-label={`Cash out ${player.display_name}`} onClick={() => open({ kind: 'cash_out', player: player.id })}><span><strong>{player.display_name}</strong><small>{player.state === 'playing' ? 'Still playing' : 'Not cashed out'}</small></span><span className="close-blocker-action">Cash out</span></button></li>)}</ul></> : discrepancy === '0' ? <p>Everyone has cashed out and the chip totals match. Close as balanced.</p> : <><p>Chips returned and chips bought differ by <span className="money-value">{money(discrepancy ?? '0', state!.session.currency)}</span>. This chip discrepancy stays in the closed recap. Payments do not change it.</p><label className="check"><input type="checkbox" checked={accepted} onChange={event => setAcceptedRevision(event.target.checked ? state!.revision : null)} />Accept discrepancy of <span className="money-value">{money(discrepancy ?? '0', state!.session.currency)}</span></label></>}{(BigInt(state!.totals.owed_to_banker_minor) !== 0n || BigInt(state!.totals.owed_by_banker_minor) !== 0n) && <p className="hint">Outstanding payments stay open after closing: {[BigInt(state!.totals.owed_to_banker_minor) !== 0n && `players owe ${money(state!.totals.owed_to_banker_minor, state!.session.currency)}`, BigInt(state!.totals.owed_by_banker_minor) !== 0n && `bank owes ${money(state!.totals.owed_by_banker_minor, state!.session.currency)}`].filter(Boolean).join(', ')}.</p>}<div className="sticky-action" ref={setBar}><ErrorText text={error} />{reason && <p className="hint close-reason" id="close-reason">{reason}</p>}<button className="primary wide" aria-describedby={reason ? 'close-reason' : undefined} disabled={busy || waiting.length > 0 || blockers.length > 0 || (discrepancy !== '0' && !accepted)} onClick={() => { void close(); }}>Close session</button></div></>;
+  const outstanding = BigInt(state!.totals.owed_to_banker_minor) !== 0n || BigInt(state!.totals.owed_by_banker_minor) !== 0n ? `Outstanding payments stay open after closing: ${[BigInt(state!.totals.owed_to_banker_minor) !== 0n && `players owe ${money(state!.totals.owed_to_banker_minor, state!.session.currency)}`, BigInt(state!.totals.owed_by_banker_minor) !== 0n && `bank owes ${money(state!.totals.owed_by_banker_minor, state!.session.currency)}`].filter(Boolean).join(', ')}.` : '';
+  return <>{waiting.length > 0 && <p className="warning">{waiting.length} {waiting.length === 1 ? 'entry is' : 'entries are'} not saved yet. Save or discard them before closing. They are excluded from these totals.</p>}{blockers.length ? <><p className="warning">Cash out everyone with entries before closing.</p><ul className="close-blockers">{blockers.map(player => <li key={player.id}><button className="close-blocker" aria-label={`Cash out ${player.display_name}`} onClick={() => open({ kind: 'cash_out', player: player.id })}><span><strong>{player.display_name}</strong><small>{player.state === 'playing' ? 'Still playing' : 'Not cashed out'}</small></span><span className="close-blocker-action">Cash out</span></button></li>)}</ul></> : discrepancy === '0' ? <p>Everyone has cashed out and the chip totals match. Close as balanced.</p> : <><p>Chips returned and chips bought differ: <span className="money-value">{discrepancyMagnitude}</span> {discrepancyUnder ? 'short' : 'over'}. This chip discrepancy stays in the closed recap. Payments do not change it.</p><label className="check"><input type="checkbox" checked={accepted} onChange={event => setAcceptedRevision(event.target.checked ? state!.revision : null)} /><span>Accept <span className="money-value">{discrepancyMagnitude}</span> {discrepancyUnder ? 'short' : 'over'}</span></label></>}<div className="sticky-action" ref={setBar}><ErrorText text={error} />{reason && <p className="hint close-reason" id="close-reason">{reason}</p>}{outstanding && <p className="hint close-outstanding">{outstanding}</p>}<button className="primary wide" aria-describedby={reason ? 'close-reason' : undefined} disabled={busy || waiting.length > 0 || blockers.length > 0 || (discrepancy !== '0' && !accepted)} onClick={() => { void close(); }}>Close session</button></div></>;
 }
 export function ReopenSheet() {
   const { banker, state, open } = useClient();
@@ -254,14 +269,55 @@ export function ShareSheet() {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState<'rotate' | 'disable' | null>(null);
+  const [copyOnEnable, setCopyOnEnable] = useState(false);
   const confirmPanel = useRef<HTMLElement>(null);
+  const heldCopy = useRef<{ resolve: (blob: Blob) => void; reject: (reason: unknown) => void } | null>(null);
+  const selfRejected = useRef(false);
   useFormBusy(busy);
   const token = state!.session.share_token;
   const link = token ? `${location.origin}/v/${token}` : '';
   useEffect(() => { setNotice(''); }, [token]);
+  function selectable() { setNotice('Select the viewer link and copy it.'); }
+  function copyLink() {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') { selectable(); return; }
+    void navigator.clipboard.writeText(link).then(() => setNotice('Link copied')).catch(selectable);
+  }
+  function beginCopy() {
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.write !== 'function') return;
+    let resolve: (blob: Blob) => void = () => {};
+    let reject: (reason: unknown) => void = () => {};
+    const data = new Promise<Blob>((done, fail) => { resolve = done; reject = fail; });
+    const held = { resolve, reject };
+    heldCopy.current = held;
+    void navigator.clipboard.write([new ClipboardItem({ 'text/plain': data })]).then(() => setNotice('Link copied')).catch(() => { if (selfRejected.current) { selfRejected.current = false; return; } heldCopy.current = null; if (link) selectable(); });
+  }
+  useEffect(() => () => { selfRejected.current = true; heldCopy.current?.reject(new Error('closed')); heldCopy.current = null; }, []);
+  useEffect(() => {
+    if (!copyOnEnable || !link) return;
+    setCopyOnEnable(false);
+    const held = heldCopy.current;
+    if (held) { heldCopy.current = null; held.resolve(new Blob([link], { type: 'text/plain' })); return; }
+    copyLink();
+  }, [copyOnEnable, link]);
   useEffect(() => { if (confirmation) confirmPanel.current?.focus(); }, [confirmation]);
-  async function action(action: string) { setBusy(true); setError(''); try { await mutate(`/api/sessions/${state!.session.id}/share`, { op_id: crypto.randomUUID(), action }); setConfirmation(null); } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not change sharing'); } finally { setBusy(false); } }
-  return <><p>Anyone with this private link can view this session. It does not expose your account or other sessions.</p>{link ? <><label>Viewer link<input readOnly value={link} /></label>{confirmation ? <section className="confirmation-panel" role="alertdialog" aria-label={confirmation === 'rotate' ? 'Rotate viewer link' : 'Disable viewer link'} tabIndex={-1} ref={confirmPanel}><h3>{confirmation === 'rotate' ? 'Replace this viewer link?' : 'Turn off viewer access?'}</h3><p>{confirmation === 'rotate' ? 'Everyone using the old link will lose access. Share the new link to let them view this session again.' : 'Everyone using this link will lose access to this session.'}</p><button className="wide" disabled={busy} onClick={() => setConfirmation(null)}>{confirmation === 'rotate' ? 'Keep link' : 'Keep sharing'}</button><button className="danger wide" disabled={busy || state!.session.status === 'closed'} onClick={() => { void action(confirmation); }}>{confirmation === 'rotate' ? 'Confirm rotate' : 'Confirm disable'}</button></section> : <><button className="primary wide" onClick={() => { void navigator.clipboard.writeText(link).then(() => setNotice('Link copied')).catch(() => setNotice('Select the viewer link and copy it.')); }}>Copy link</button><button className="wide" disabled={busy || state!.session.status === 'closed'} onClick={() => { setNotice(''); setConfirmation('rotate'); }}>Rotate link</button><p className="hint">Rotating makes the old link stop working.</p><button className="danger wide" disabled={busy || state!.session.status === 'closed'} onClick={() => { setNotice(''); setConfirmation('disable'); }}>Disable sharing</button></>}</> : <button className="primary wide" disabled={busy || state!.session.status === 'closed'} onClick={() => { void action('enable'); }}>Enable sharing</button>}{state!.session.status === 'closed' && <p>Reopen the session to change sharing.</p>}{notice && <p role="status">{notice}</p>}<ErrorText text={error} /></>;
+  async function action(action: string) {
+    setBusy(true); setError('');
+    try { await mutate(`/api/sessions/${state!.session.id}/share`, { op_id: crypto.randomUUID(), action }); setConfirmation(null); return true; }
+    catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not change sharing'); return false; }
+    finally { setBusy(false); }
+  }
+  async function enableSharing() {
+    setNotice('');
+    beginCopy();
+    if (await action('enable')) setCopyOnEnable(true);
+    else {
+      const held = heldCopy.current;
+      heldCopy.current = null;
+      if (held) { selfRejected.current = true; held.reject(new Error('Sharing was not enabled')); }
+      setCopyOnEnable(false);
+    }
+  }
+  return <><p>Anyone with this private link can view this session. It does not expose your account or other sessions.</p>{link ? <><label>Viewer link<input readOnly value={link} /></label>{confirmation ? <section className="confirmation-panel" role="alertdialog" aria-label={confirmation === 'rotate' ? 'Rotate viewer link' : 'Disable viewer link'} tabIndex={-1} ref={confirmPanel}><h3>{confirmation === 'rotate' ? 'Replace this viewer link?' : 'Turn off viewer access?'}</h3><p>{confirmation === 'rotate' ? 'Everyone using the old link will lose access. Share the new link to let them view this session again.' : 'Everyone using this link will lose access to this session.'}</p><button className="wide" disabled={busy} onClick={() => setConfirmation(null)}>{confirmation === 'rotate' ? 'Keep link' : 'Keep sharing'}</button><button className="danger wide" disabled={busy || state!.session.status === 'closed'} onClick={() => { void action(confirmation); }}>{confirmation === 'rotate' ? 'Confirm rotate' : 'Confirm disable'}</button></section> : <><button className="primary wide" onClick={copyLink}>Copy link</button><button className="wide" disabled={busy || state!.session.status === 'closed'} onClick={() => { setNotice(''); setConfirmation('rotate'); }}>Rotate link</button><p className="hint">Rotating makes the old link stop working.</p><button className="danger wide" disabled={busy || state!.session.status === 'closed'} onClick={() => { setNotice(''); setConfirmation('disable'); }}>Disable sharing</button></>}</> : <button className="primary wide" disabled={busy || state!.session.status === 'closed'} onClick={() => { void enableSharing(); }}>Enable sharing</button>}{state!.session.status === 'closed' && <p>Reopen the session to change sharing.</p>}{notice && <p role="status">{notice}</p>}<ErrorText text={error} /></>;
 }
 
 function TimingEvent({ detail }: { detail: Record<string, unknown> }) {

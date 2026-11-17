@@ -324,8 +324,24 @@ test.describe("Zero-loss cash-outs and corrections", () => {
     }
     await expect(page.getByTestId(`player-${player.id}`)).toContainText('−$100.00');
     await menu(page, 'Close session');
-    await page.getByLabel('Accept discrepancy of −$100.00', { exact: true }).check();
+    await page.getByLabel('Accept $100.00 short', { exact: true }).check();
     await page.getByRole('button', { name: 'Close session', exact: true }).click();
     await expect.poll(async () => (await current(page)).session.status).toBe('closed');
   });
+});
+
+test('a ten-digit total stays on one line at 393, 320 and 768', async ({ page }) => {
+  await createAccount(page);
+  await newSession(page, 'Large totals');
+  const player = await addPlayer(page, 'Large');
+  await money(page, player.id, '9999999999.99');
+  for (const width of [393, 320, 768]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.waitForTimeout(150);
+    const clipped = await page.locator('.totals .fit-text').evaluateAll(values => values.filter(value => {
+      const style = getComputedStyle(value);
+      return value.scrollWidth > value.clientWidth + 1 || value.getBoundingClientRect().height > Number.parseFloat(style.lineHeight) * 1.5;
+    }).map(value => value.textContent));
+    expect(clipped, `totals at ${width}`).toEqual([]);
+  }
 });

@@ -59,6 +59,7 @@ type SnapshotRecord = { key: string; banker_id: string; state: SessionState };
 let database: Promise<IDBDatabase> | undefined;
 const draftWrites = new Map<string, Promise<void>>();
 const enqueueWrites = new Set<Promise<OutboxItem | DraftConflict>>();
+export const enqueuedAt = new Map<string, { at: number; scrollY: number }>();
 type DraftIntent = { value: unknown; revision: number; cursor: DraftCursor; expectedVersion?: string | null; error?: unknown; observations?: Set<DraftCursor> };
 type DraftConflictNotice = { key: string; value: unknown; error: DraftConflictError; cursor: DraftCursor };
 const draftConflicts = new WeakMap<DraftCursor, DraftConflictNotice>();
@@ -1000,6 +1001,7 @@ async function enqueueRecord(input: EnqueueInput): Promise<OutboxItem | DraftCon
   const expected = reservation?.version;
   const op = input.body.op_id;
   if (typeof op !== 'string') throw new Error('An entry needs its operation ID');
+  enqueuedAt.set(op, { at: navigator.onLine ? Date.now() : 0, scrollY: window.scrollY });
   const db = await storage();
   if (epoch !== generation(input.banker_id)) throw new Error('Sign in again before saving this draft');
   const transaction = db.transaction(['outbox', 'drafts', 'snapshots'], 'readwrite');

@@ -1,7 +1,7 @@
 import { typeInput } from './input';
 import { randomUUID } from 'node:crypto';
 import { test, expect, screen } from './fixtures';
-import { switchSession, addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newSession, openMoney, share, signIn, signOut, storedDraft, workerReady } from './helpers';
+import { switchSession, addPlayer, call, closeSession, createAccount, current, fixtureSession, keepMoneyDraft, menu, money, newContextLike, newSession, openMoney, share, signIn, signOut, storedDraft, workerReady } from './helpers';
 
 test('account signup acknowledgement, sign-in and one-use recovery revoke old cookies', async ({ page, browser, baseURL }, testInfo) => {
   const user = await createAccount(page, testInfo);
@@ -115,7 +115,7 @@ test('banking, early cash-out, re-entry, corrections and cumulative reclosure pr
   await expect(page.getByTestId(`result-${player.id}`)).toHaveText('Playing');
   await money(page, player.id, '180', { kind: 'Cash out', testInfo });
   await expect(page.getByTestId(`result-${player.id}`)).toContainText('+$30.00');
-  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Owed $180.00');
+  await expect(page.getByTestId(`player-${player.id}`)).toContainText('Bank owes $180.00');
   await money(page, player.id, '20', { paid: false });
   await expect(page.getByTestId(`result-${player.id}`)).toHaveText('Playing');
   let state = await money(page, player.id, '10', { kind: 'Cash out' });
@@ -192,12 +192,14 @@ test('payment methods persist through reload, later settlement and visible corre
     await expect(page.getByLabel('Viewer link', { exact: true })).not.toHaveValue(viewerLink);
     const rotatedLink = await page.getByLabel('Viewer link', { exact: true }).inputValue();
     await viewer.reload();
-    await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();
+    await expect(viewer.getByRole('heading', { name: "This viewer link isn’t available" })).toBeVisible();
+    await expect(viewer.getByText('Ask the banker for a current link.', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Disable sharing', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm disable', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Enable sharing', exact: true })).toBeVisible();
     await viewer.goto(rotatedLink);
-    await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();
+    await expect(viewer.getByRole('heading', { name: "This viewer link isn’t available" })).toBeVisible();
+    await expect(viewer.getByText('Ask the banker for a current link.', { exact: true })).toBeVisible();
   } finally { await viewerContext.close(); }
 });
 
@@ -276,7 +278,7 @@ test('two-session player reports show hand-computed results in every grouping an
     await expect(page.getByTestId('report-profit_loss_minor')).toContainText('2 sessions');
   }
   await screen(page, testInfo, 'player-report');
-  await page.getByRole('button', { name: 'Filter: Off', exact: true }).click();
+  await page.getByRole('button', { name: 'Filter · Off', exact: true }).click();
   await typeInput(page.getByLabel('From date', { exact: true }), '2026-11-17');
   await screen(page, testInfo, 'report-filter');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
@@ -332,4 +334,56 @@ test('offline queue excludes unconfirmed totals, survives reload, saves once and
     expect((await current(page)).entries.filter(entry => entry.kind === 'buy_in')).toHaveLength(1);
     expect((await call<{ banker: { id: string } }>(page, '/auth/me')).banker.id).toBe(user.banker.id);
   } finally { await viewerContext.close(); }
+});
+
+test('Copy link copies the enabled viewer link and confirms it', async ({ page, browserName, baseURL }) => {
+  const canRead = browserName === 'chromium';
+  if (canRead && baseURL) await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: baseURL });
+  if (!canRead) await page.addInitScript(() => {
+    const copied: string[] = [];
+    (window as unknown as { __copied: string[] }).__copied = copied;
+    const writeText = async (text: string) => { copied.push(text); };
+    const write = async (items: { getType(type: string): Promise<Blob> }[]) => { for (const item of items) copied.push(await (await item.getType('text/plain')).text()); };
+    try { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText, write } }); }
+    catch { (navigator as unknown as { clipboard: unknown }).clipboard = { writeText, write }; }
+  });
+  await createAccount(page);
+  await newSession(page, 'Copy link');
+  await menu(page, 'Share session');
+  await page.getByRole('button', { name: 'Enable sharing', exact: true }).click();
+  const link = await page.getByLabel('Viewer link', { exact: true }).inputValue();
+  expect(link).toContain('/v/');
+  await expect(page.getByRole('dialog').getByRole('status')).toHaveText(/Link copied|Select the viewer link/);
+  if (canRead) {
+    await page.evaluate(() => navigator.clipboard.writeText('copy-link-sentinel'));
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('copy-link-sentinel');
+    await page.getByRole('button', { name: 'Copy link', exact: true }).click();
+    await expect(page.getByRole('dialog').getByRole('status')).toHaveText('Link copied');
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(link);
+  } else {
+    await page.evaluate(() => { (window as unknown as { __copied: string[] }).__copied.length = 0; });
+    await page.getByRole('button', { name: 'Copy link', exact: true }).click();
+    await expect(page.getByRole('dialog').getByRole('status')).toHaveText('Link copied');
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied)).toContain(link);
+  }
+});
+
+test('a viewer shows the revoked heading only for a revoked link', async ({ page, browser, baseURL }) => {
+  await createAccount(page);
+  await newSession(page, 'Viewer failure states');
+  await menu(page, 'Share session');
+  await page.getByRole('button', { name: 'Enable sharing', exact: true }).click();
+  const link = await page.getByLabel('Viewer link', { exact: true }).inputValue();
+  const failedContext = await newContextLike(page, browser, baseURL!);
+  await failedContext.route(/\/api\//, route => route.abort());
+  const failed = await failedContext.newPage();
+  await failed.goto(link);
+  await expect(failed.getByText(/Reconnect to try again/)).toBeVisible();
+  await expect(failed.getByRole('heading', { name: "This viewer link isn’t available" })).toHaveCount(0);
+  await failedContext.close();
+  const revokedContext = await newContextLike(page, browser, baseURL!);
+  const revoked = await revokedContext.newPage();
+  await revoked.goto(`${new URL(link).origin}/v/00000000-0000-0000-0000-000000000000`);
+  await expect(revoked.getByText("This viewer link isn’t available")).toBeVisible();
+  await revokedContext.close();
 });

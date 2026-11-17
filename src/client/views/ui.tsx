@@ -42,7 +42,7 @@ export function TableSkeleton() {
   return <div className="session-board skeleton" aria-busy="true" aria-label="Loading session" data-testid="table-skeleton">
     <div className="session-overview">
       <div className="session-heading"><div className="session-heading-text"><div className="skeleton-line skeleton-title" /><div className="skeleton-line skeleton-meta" /></div><div className="session-heading-actions"><span className="icon-button skeleton-block" /><span className="icon-button skeleton-block" /></div></div>
-      <div className="totals skeleton-card"><div className="totals-main"><div className="skeleton-line skeleton-label" /><div className="skeleton-line skeleton-hero" /></div><div className="totals-split"><div><div className="skeleton-line skeleton-label" /><div className="skeleton-line skeleton-amount" /></div><div><div className="skeleton-line skeleton-label" /><div className="skeleton-line skeleton-amount" /></div></div><div className="chip-history"><div className="skeleton-line skeleton-small" /></div></div>
+      <div className="totals skeleton-card">{[0, 1, 2].map(index => <div key={index}><div className="skeleton-line skeleton-label" /><div className="skeleton-line skeleton-amount" /></div>)}<div className="chip-history"><div className="skeleton-line skeleton-small" /></div></div>
     </div>
     <div className="session-table"><div className="section-heading"><div className="skeleton-line skeleton-heading" /></div><div className="players">{[0, 1, 2].map(index => <div className="player-card skeleton-row" key={index}><div className="player-row"><span className="player-name"><span className="skeleton-line skeleton-name" /><span className="skeleton-line skeleton-small" /></span></div></div>)}</div></div>
   </div>;

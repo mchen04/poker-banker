@@ -9,13 +9,16 @@ async function rows(page: Page) {
     const name = card.querySelector('.player-name strong')!;
     return {
       nameRight: Math.round(name.getBoundingClientRect().right),
-      stacked: card.classList.contains('actions-below'),
+      nameBottom: Math.round(name.getBoundingClientRect().bottom),
+      amountBelow: card.classList.contains('amount-below'),
+      actionsBelow: card.classList.contains('actions-below'),
       buttons: actions ? actions.querySelectorAll('button').length : 0,
       amountRight: Math.round(amount.right),
-      bottomGap: Math.round(card.getBoundingClientRect().bottom - amount.bottom),
+      amountTop: Math.round(amount.top),
+      amountBottom: Math.round(amount.bottom),
       amountLeft: Math.round(card.querySelector('.player-position-wrap')!.getBoundingClientRect().left),
       cardRight: Math.round(card.getBoundingClientRect().right),
-      amountTop: Math.round(amount.top),
+      nameTop: Math.round(name.getBoundingClientRect().top),
       actionsTop: actions?.querySelector('button') ? Math.round(actions.querySelector('button')!.getBoundingClientRect().top) : null,
       actionsLeft: actions?.querySelector('button') ? Math.round(actions.querySelector('button')!.getBoundingClientRect().left) : null,
       actionsRight: actions?.querySelector('button:last-child') ? Math.round(actions.querySelector('button:last-child')!.getBoundingClientRect().right) : null,
@@ -27,7 +30,7 @@ async function rows(page: Page) {
   }));
 }
 
-test('player rows label amounts and keep stacked amounts on one right edge with buttons beside them', async ({ page, browser, baseURL }) => {
+test('player rows keep one amount edge, never overlap the name and keep buttons below the amount when a name is wide', async ({ page, browser, baseURL }) => {
   await page.setViewportSize({ width: 393, height: 852 });
   await createAccount(page);
   await newSession(page, 'Row layout');
@@ -39,31 +42,37 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
   await expect(page.getByTestId(`result-${justin.id}`)).toContainText('$50.00');
 
   const compact = await rows(page);
-  expect(compact.map(row => row.stacked)).toEqual([false, false]);
+  expect(compact.map(row => row.amountBelow)).toEqual([false, false]);
   expect(compact.map(row => row.label)).toEqual(['Result', 'In']);
   expect(compact[0]!.buttons).toBe(0);
-  expect(compact[0]!.amountRight).toBe(compact[0]!.cardRight - 16);
-  expect(compact[1]!.amountRight).toBeLessThanOrEqual(compact[1]!.actionsLeft!);
+  expect(new Set(compact.map(row => row.amountRight)).size).toBe(1);
+  expect(compact[1]!.amountRight).toBeLessThanOrEqual(compact[1]!.actionsLeft! - 4);
   expect(compact[0]!.amountColor).toBe(compact[0]!.nameColor);
+  for (const row of compact) expect(row.nameRight).toBeLessThanOrEqual(row.amountLeft);
 
   const long = await addPlayer(page, 'Alexandria Montgomery-Vanderbilt the Third');
   await money(page, long.id, '123456789.99');
-  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(3);
+  await expect(page.locator('.players > .player-card.amount-below')).toHaveCount(1);
   const stacked = await rows(page);
   await expect(page.getByTestId('saved-confirmation')).toBeVisible();
   await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
   const clearance = await page.evaluate(() => document.querySelector('.notice')!.getBoundingClientRect().top - (document.querySelector('.workspace')!.getBoundingClientRect().bottom - Number.parseFloat(getComputedStyle(document.querySelector('.workspace')!).paddingBottom)));
   expect(clearance).toBeGreaterThanOrEqual(0);
   const before = await page.evaluate(() => document.querySelector('.players > .player-card:last-child')!.getBoundingClientRect().top);
+  const steady = await page.evaluate(() => scrollY);
+  await page.waitForTimeout(2000);
+  expect(await page.evaluate(() => scrollY)).toBe(steady);
   await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });
   expect(await page.evaluate(() => document.querySelector('.players > .player-card:last-child')!.getBoundingClientRect().top)).toBe(before);
   await page.evaluate(() => scrollTo(0, 0));
-  const withButtons = stacked.filter(row => row.buttons > 0);
-  expect(withButtons.length).toBe(2);
-  expect(new Set(stacked.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
-  for (const row of withButtons) expect(row.amountLeft).toBeGreaterThan(row.actionsRight!);
-  for (const row of stacked) expect(row.nameRight).toBeLessThanOrEqual(row.cardRight - 16);
-  expect(stacked[0]!.bottomGap).toBeLessThanOrEqual(9);
+  expect(new Set(stacked.map(row => row.amountRight)).size, JSON.stringify(stacked.map(row => ({ label: row.label, right: row.amountRight, left: row.amountLeft, top: row.amountTop, bottom: row.amountBottom, nameTop: row.nameTop, nameRight: row.nameRight, buttons: row.buttons, actionsLeft: row.actionsLeft, actionsTop: row.actionsTop, below: row.amountBelow, card: row.cardRight })))).toBe(1);
+  expect(stacked.map(row => row.actionsBelow)).toEqual([true, true, true]);
+  for (const row of stacked) {
+    expect(row.nameRight).toBeLessThanOrEqual(row.cardRight - 16);
+    if (row.buttons) expect(row.actionsTop!).toBeGreaterThanOrEqual(row.amountBottom);
+  }
+  for (const row of stacked.filter(item => item.amountBelow)) expect(row.nameBottom).toBeLessThanOrEqual(row.amountTop);
+  expect(Math.abs(stacked[0]!.amountTop - stacked[0]!.nameTop)).toBeLessThanOrEqual(24);
 
   const link = await share(page);
   const context = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: { width: 393, height: 852 }, locale: 'en-US', timezoneId: 'UTC' });
@@ -71,14 +80,14 @@ test('player rows label amounts and keep stacked amounts on one right edge with 
     const viewer = await context.newPage();
     await viewer.goto(link);
     await expect(viewer.getByText(/View only ·/)).toBeVisible();
-    await expect(viewer.locator('.players > .player-card.actions-below')).toHaveCount(3);
     const shown = await rows(viewer);
     expect(shown.map(row => row.label)).toEqual(['Result', 'In', 'In']);
     expect(new Set(shown.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
+    for (const row of shown) expect(row.amountBelow ? row.nameBottom <= row.amountTop : row.nameRight <= row.amountLeft).toBe(true);
   } finally { await context.close(); }
 });
 
-test('narrow phones keep one amount position, put buttons beside amounts when they fit and keep sheet actions in reach', async ({ page, browser, baseURL }) => {
+test('narrow phones put row buttons below the amount, keep one amount edge and keep sheet actions in reach', async ({ page, browser, baseURL }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await createAccount(page);
   await newSession(page, 'Narrow');
@@ -88,13 +97,11 @@ test('narrow phones keep one amount position, put buttons beside amounts when th
   await money(page, priya.id, '200');
   const long = await addPlayer(page, 'Alexandria Montgomery-Vanderbilt the Third');
   await money(page, long.id, '50');
-  await expect(page.locator('.players.inline-actions > .player-card.actions-below')).toHaveCount(3);
+  await expect(page.locator('.players > .player-card.amount-below')).toHaveCount(1);
   const inline = await rows(page);
   expect(new Set(inline.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
-  for (const row of inline) {
-    expect(row.amountLeft).toBeGreaterThan(row.actionsRight!);
-    expect(row.amountTop).toBeGreaterThanOrEqual(row.actionsTop!);
-  }
+  for (const row of inline.filter(item => item.buttons > 0)) expect(row.actionsTop!).toBeGreaterThan(row.amountTop);
+  for (const row of inline) expect(row.nameRight).toBeLessThanOrEqual(row.cardRight - 16);
 
   const link = await share(page);
   const context = await browser.newContext({ ignoreHTTPSErrors: true, baseURL, viewport: { width: 320, height: 568 }, locale: 'en-US', timezoneId: 'UTC' });
@@ -102,21 +109,19 @@ test('narrow phones keep one amount position, put buttons beside amounts when th
     const viewer = await context.newPage();
     await viewer.goto(link);
     await expect(viewer.getByText(/View only ·/)).toBeVisible();
-    await expect(viewer.locator('.players > .player-card.actions-below')).toHaveCount(3);
-    await expect(viewer.locator('.players.inline-actions')).toHaveCount(0);
     const shown = await rows(viewer);
     expect(new Set(shown.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
-    for (const row of shown) expect(row.bottomGap).toBeLessThanOrEqual(9);
+    for (const row of shown) expect(row.amountBelow ? row.nameBottom <= row.amountTop : Math.abs(row.amountTop - row.nameTop) <= 24).toBe(true);
   } finally { await context.close(); }
   await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });
   await money(page, long.id, '123456789.99');
-  await expect(page.locator('.players > .player-card.actions-below')).toHaveCount(3);
-  await expect(page.locator('.players.inline-actions')).toHaveCount(0);
+  await expect(page.locator('.players > .player-card.amount-below')).toHaveCount(1);
+  await page.waitForTimeout(300);
   const apart = await rows(page);
-  expect(new Set(apart.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
-  for (const row of apart) expect(row.actionsTop!).toBeGreaterThan(row.amountTop);
-  expect(new Set(apart.map(row => row.amountSize))).toEqual(new Set(['16px']));
 
+  expect(new Set(apart.map(row => row.cardRight - row.amountRight))).toEqual(new Set([16]));
+  for (const row of apart.filter(item => item.buttons > 0)) expect(row.actionsTop!).toBeGreaterThan(row.amountTop);
+  expect(new Set(apart.map(row => row.amountSize))).toEqual(new Set(['17px']));
 
   await expect(page.getByTestId('saved-confirmation')).toHaveCount(0, { timeout: 15000 });
   await page.setViewportSize({ width: 320, height: 480 });
@@ -146,5 +151,20 @@ test('narrow phones keep one amount position, put buttons beside amounts when th
     await expect(blockers.nth(index)).toBeFocused();
     const clear = await blockers.nth(index).evaluate(element => element.getBoundingClientRect().bottom <= document.querySelector('.sticky-action')!.getBoundingClientRect().top + 1);
     expect(clear, `focused blocker ${index} stays above the Close bar`).toBe(true);
+  }
+});
+
+test('a long single-word name moves the amount below instead of breaking mid-word', async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 852 });
+  await createAccount(page);
+  await newSession(page, 'Single word');
+  for (const name of ['Justin', 'Sam', 'Morgan', 'Drew', 'Taylor', 'Casey', 'Jordan']) { const row = await addPlayer(page, name); await money(page, row.id, '50', { paid: false }); }
+  const singleWord = await addPlayer(page, 'Maximilianssonssonssonssons');
+  await money(page, singleWord.id, '50', { paid: false });
+  for (const width of [393, 320]) {
+    await page.setViewportSize({ width, height: width === 393 ? 852 : 568 });
+    await page.waitForTimeout(200);
+    const single = await page.getByTestId(`player-${singleWord.id}`).locator('strong[title]').evaluate(element => { const range = document.createRange(); range.selectNodeContents(element); return { lines: range.getClientRects().length, below: element.closest('.player-card')!.classList.contains('amount-below') }; });
+    expect(single.lines, `at ${width}`).toBe(1);
   }
 });

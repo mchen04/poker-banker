@@ -66,11 +66,13 @@ Run the complete ledger recipe once per desired context:
 
 For local automatic-update verification, follow the pinned previous-source setup in [offline and app updates](features/offline-and-app-updates.md), launch with its fixture metadata, then run `drive updates --run RUN_ID --context iphone-standalone`. It uses the same shared five-case journey plus seven update-review cases as the focused browser test. Run it last because it changes the shared build; cleanup preserves its release table and compatibility evidence.
 
-Recipes for the screen tour, deletion and recovery, close/reopen, offline replay and sessions/drafts live in this skill's `scripts/` folder (`tour.ts`, `deletions.ts`, `close.ts`, `offline.ts`, `sessions.ts`). The mini runner syncs them, so invoke them directly:
+Recipes for the screen tour, mobile UX, deletion and recovery, close/reopen, offline replay and sessions/drafts live in this skill's `scripts/` folder (`tour.ts`, `mobile.ts`, `deletions.ts`, `close.ts`, `offline.ts`, `sessions.ts`). The mini runner syncs them, so invoke them directly:
 
 ```sh
 ./scripts/mini.sh .claude/skills/verify-poker-banker/scripts/verify.sh recipe .claude/skills/verify-poker-banker/scripts/sessions.ts --run RUN_ID --context iphone-webkit
 ```
+
+`mobile.ts` walks the route and state inventory at 393×852 and 320×568 in light and dark, checking targets, contrast, keyboard clearance, safe areas, 200% text, text spacing, reduced motion, back controls and the offline line. Read [mobile UX](features/mobile-ux.md) before running it.
 
 The remaining feature files contain copyable Playwright recipes. Save each supplied block at its named `.cache/verify-*.ts` path. The mini runner deliberately excludes `.cache/`, so copy only that new file explicitly before running it, for example `rsync -az .cache/verify-payments.ts mini:worktrees/poker-banker/.cache/verify-payments.ts`, then `recipe .cache/verify-payments.ts`. Do not synchronize other cache content.
 

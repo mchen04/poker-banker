@@ -16,7 +16,7 @@ export type ClientState = {
   pending: OutboxItem[];
   open: (sheet: SheetState) => void;
   update: (state: SessionState) => void;
-  notify: (text: string) => void;
+  notify: (text: string, target?: { playerId?: string; entryId?: string }, scrollY?: number) => void;
   updateBanner?: ReactNode;
   formBusy: boolean;
   setFormBusy: (busy: boolean) => void;

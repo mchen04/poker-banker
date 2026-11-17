@@ -51,7 +51,7 @@ test.describe("Money actions and editing safeguards", () => {
     await page.getByRole('button', { name: 'Close sheet', exact: true }).click();
     await page.getByRole('navigation', { name: 'Table navigation', exact: true }).getByRole('button', { name: 'Players', exact: true }).click();
     await page.getByTestId(`roster-player-${player.id}`).click();
-    await page.getByRole('button', { name: 'Filter: Off', exact: true }).click();
+    await page.getByRole('button', { name: 'Filter · Off', exact: true }).click();
     await typeInput(page.getByLabel('From date', { exact: true }), '2026-11-17');
     await typeInput(page.getByLabel('To date', { exact: true }), '2026-11-10');
     await page.getByRole('button', { name: 'Apply filters', exact: true }).click();

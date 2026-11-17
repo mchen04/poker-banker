@@ -26,6 +26,7 @@ Read [SKILL.md](../SKILL.md), launch from the repository root and require Doctor
 | [Offline and updates](offline-and-app-updates.md) | Snapshots, pending/rejected writes, replay, automatic adoption, pinned legacy compatibility, skew and storage bounds. |
 | [Deletion and recovery](deletion-and-recovery.md) | Delete entry, remove player, delete session and delete roster player, each with Undo, later Restore, offline queueing and exact totals. |
 | [Screen tour and layout](screen-tour-and-layout.md) | Every screen at 393, 375 and 320 wide, including deletion confirms and toasts, automatic alignment/wrapping/target checks and load-flicker filmstrips. |
+| [Mobile UX](mobile-ux.md) | Every route and state at 393 and 320 in light and dark: targets, contrast, keyboard, safe area, 200% text, motion, back and offline. |
 | [Performance](performance.md) | Isolated datasets, current transport, baseline, profiles and interleaved comparison. |
 
 ## Layout and control-count capture
@@ -51,3 +52,19 @@ The helpers also drive `e2e/table-experience.spec.ts`. They retain fourteen cont
 Undo keeps eight unpaused seconds; pointer/focus/sheets pause without resetting the remaining budget. Held-response/session-switch checks reject wrong-session feedback. Undo retains the timer; its lasting Correct times cue survives reload and clears only after timing correction or a new buy-in. Ready-close and create-another each take two controls; closed desktop has one New action and its 420px toast clears Activity and the last player row.
 
 Pinned `dc2082b`/`30209c1` update builds keep explicit legacy branches in shared browser helpers; current recipes never fall back to old controls. Browser-evaluated callbacks must be self-contained so `tsx` does not serialize an unavailable function-name helper. Emulation does not prove physical keyboard/touch, Home Screen installation or iOS suspension; seal evidence and clean up every run.
+
+## Mobile UX capture
+
+Run on a fresh local banker. Save as `.cache/verify-mobile.ts`, copy only that file to the mini, then run `recipe .cache/verify-mobile.ts --run RUN_ID --context iphone-standalone`; repeat on a fresh run with `desktop-webkit`.
+
+```ts
+import { join } from 'node:path';
+import mobileUx from '../.claude/skills/verify-poker-banker/scripts/mobile';
+import type { RecipeContext } from '../.claude/skills/verify-poker-banker/scripts/control';
+
+export default async function (context: RecipeContext) {
+  await mobileUx({ ...context, evidence: join(context.evidence, 'mobile-ux') });
+}
+```
+
+The recipe writes `mobile-ux/mobile-ux.json` plus screenshots for every state, viewport and scheme. It fails on target, overflow, contrast, input-size, keyboard, primary-reach, safe-area, 200% text, spacing, motion, back-control or offline violations. See [Mobile UX](mobile-ux.md) for the state inventory and limits.

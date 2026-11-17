@@ -122,7 +122,8 @@ export default async function deletions({ page, context, browser, baseURL, runId
   try {
     const viewer = await viewerContext.newPage();
     await viewer.goto(link);
-    await expect(viewer.getByText('This viewer link is unavailable. Ask the banker for a current link.', { exact: true })).toBeVisible();
+    await expect(viewer.getByRole('heading', { name: "This viewer link isn’t available" })).toBeVisible();
+    await expect(viewer.getByText('Ask the banker for a current link.', { exact: true })).toBeVisible();
     await viewer.screenshot({ path: join(evidence, 'deleted-session-viewer.png') });
   } finally { await viewerContext.close(); }
   await toast(page).getByRole('button', { name: 'Undo', exact: true }).click();

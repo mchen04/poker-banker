@@ -97,7 +97,7 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
     }
     proofs.debt = colors;
     const lines = await page.getByTestId(`player-${owing.id}`).locator('strong[title]').evaluate(element => ({ height: element.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(element).lineHeight), overflow: getComputedStyle(element).textOverflow, scroll: element.scrollWidth, client: element.clientWidth, text: element.textContent, title: element.getAttribute('title') }));
-    expect(lines.overflow).not.toBe('ellipsis'); expect(lines.scroll).toBeLessThanOrEqual(lines.client); expect(lines.text).toBe(lines.title); expect(lines.height).toBeLessThanOrEqual(lines.line * 2 + 1);
+    expect(lines.overflow).not.toBe('ellipsis'); expect(lines.scroll).toBeLessThanOrEqual(lines.client); expect(lines.text).toBe(lines.title); expect(lines.height, `name ${JSON.stringify(lines)}`).toBeLessThanOrEqual(lines.line * 2 + 1);
     proofs.name = lines;
     if (!phone) {
       const header = await page.locator('.app-bar').boundingBox(); const navigation = await nav.boundingBox();
@@ -119,7 +119,7 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
     } finally { await viewerContext.close(); }
     await nav.getByRole('button', { name: 'Players', exact: true }).click(); await expect(primary).toHaveText('Buy-in');
     const rosterDebt = await page.getByTestId(`roster-player-${owing.id}`).getByText('Owes $50.00', { exact: true }).evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight), background: getComputedStyle(element.closest('.roster-list')!).backgroundColor }));
-    await expect(page.getByTestId(`roster-player-${owing.id}`)).not.toContainText('Owed');
+    await expect(page.getByTestId(`roster-player-${owing.id}`)).not.toContainText('Bank owes');
     const rosterZero = await page.getByTestId(`roster-player-${owing.id}`).locator('.roster-name > strong').evaluate(element => ({ color: getComputedStyle(element).color, weight: Number(getComputedStyle(element).fontWeight) }));
     expect(rosterDebt.color).not.toBe(rosterZero.color); expect(rosterDebt.weight).toBeGreaterThan(rosterZero.weight); expect(contrast(rosterDebt.color, rosterDebt.background)).toBeGreaterThanOrEqual(4.5);
     proofs.rosterDebt = { ...rosterDebt, zero: rosterZero, contrast: contrast(rosterDebt.color, rosterDebt.background) };
@@ -147,7 +147,7 @@ export async function uxFollowups({ page, browser, baseURL, evidence, runId }: U
       await tap(page.getByRole('dialog').getByRole('button', { name: 'Close session', exact: true })); await settled();
     });
     await expect(primary).toHaveText('New session'); await expect(nav.getByRole('button', { name: 'Reopen session', exact: true })).toHaveCount(0); await both('closed-session-footer');
-    await nav.getByRole('button', { name: 'Players', exact: true }).click(); await expect(primary).toHaveText('New session'); await both('players-closed-session-footer');
+    await nav.getByRole('button', { name: 'Players', exact: true }).click(); await expect(primary).toHaveText('New session'); await expect(page.locator('[data-testid^="roster-player-"]').first()).toBeVisible(); await both('players-closed-session-footer');
     await nav.getByRole('button', { name: 'Table', exact: true }).click();
     await measure('Reopen through Menu with a reason', async tap => {
       await tap(page.getByRole('button', { name: 'Session menu', exact: true })); await tap(page.getByRole('dialog').getByRole('button', { name: 'Reopen session', exact: true }));

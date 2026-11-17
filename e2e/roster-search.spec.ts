@@ -10,7 +10,7 @@ test('roster searches debounce the final text and wait for exact-name lookup bef
   const searches: string[] = [];
   page.on('request', request => { const url = new URL(request.url()); if (url.pathname === '/api/players') searches.push(url.searchParams.get('q') ?? ''); });
   await page.getByRole('button', { name: 'Add player', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Justin · Already in session', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Justin, In game', exact: true })).toBeVisible();
   searches.length = 0;
   const search = page.getByLabel('Search players', { exact: true });
   await typeInput(search, 'Justin', { append: true });
