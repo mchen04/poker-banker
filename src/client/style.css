@@ -203,7 +203,7 @@ button.player-row:active { background: var(--subtle); }
 .player-balance { font-weight: 650; }
 .player-balance.owe { color: var(--outstanding); }
 .player-balance.owed { color: var(--pay); }
-.player-state > span:first-child:not(:only-child)::after { content: ' ·'; color: var(--muted); font-weight: 400; }
+.player-state .player-balance::before, .player-state .player-paid::before { content: '· '; color: var(--muted); font-weight: 400; }
 .tone-up, .tone-down, .tone-even { color: var(--text); }
 .debt, .owe { color: var(--outstanding); }
 .owed { color: var(--pay); }
@@ -269,7 +269,7 @@ button.entry-row:active { background: var(--subtle); }
 .money-form, .sheet-form { display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; margin: 0; overflow: hidden; }
 .money-fields, .form-body { flex: 0 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 2px var(--space-2); box-shadow: inset 0 -12px 12px -12px var(--line), inset 0 -1px 0 var(--line); }
 .sheet-fields, .sheet-status { box-shadow: inset 0 -14px 14px -14px rgba(20, 23, 28, .22), inset 0 -1px 0 var(--line-strong); }
-.sheet-fields:not(:has(.sticky-action)), .close-blockers { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent); }
+.money-fields, .form-body, .close-blockers { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent); }
 .form-body label, .form-body input, .form-body select { min-width: 0; max-width: 100%; }
 .money-actions, .form-actions { flex: none; padding: var(--space-2) 0 calc(var(--space-3) + var(--safe-bottom)); background: var(--surface); }
 .money-actions button.wide, .form-actions button.wide { margin: 0; }
@@ -531,3 +531,5 @@ select:disabled { opacity: 1; color: var(--muted); background-color: var(--subtl
 .viewer-error-body { margin: var(--space-2) 0 0; color: var(--muted); }
 
 @media (max-width: 430px) { .report-groups { display: flex; flex-wrap: nowrap; overflow-x: auto; } .report-groups button { flex: 0 0 auto; padding: 0 var(--space-2); } }
+
+.roster-even { white-space: nowrap; }

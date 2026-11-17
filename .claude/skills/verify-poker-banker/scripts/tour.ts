@@ -15,10 +15,11 @@ const desktop = { name: 'desktop', width: 1440, height: 1000 } as const;
 
 const layout: Record<string, LayoutIssue[]> = {};
 
-async function shoot(page: Page, dir: string, name: string) {
+async function shoot(page: Page, dir: string, name: string, scroll = false) {
   for (const size of sizes) {
     await page.setViewportSize(size);
     await page.waitForTimeout(120);
+    if (scroll) { await page.evaluate(() => { const details = document.querySelector('details[open]'); const target = details?.querySelector('button') ?? document.querySelector('.account-section button'); target?.scrollIntoView({ block: 'center' }); }); await page.waitForTimeout(120); }
     await page.screenshot({ path: join(dir, `${name}.${size.name}.png`) });
     layout[`${name}.${size.name}`] = await checkLayout(page);
     await writeFile(join(dir, 'layout.json'), JSON.stringify(layout, null, 2));
@@ -214,9 +215,9 @@ export default async function tour({ page, evidence, step }: RecipeContext) {
   await shoot(page, dir, '29-delete-player-confirm');
   await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(page.getByTestId('save-status')).toContainText('Deleted Alexandria Montgomery-Whitfield');
-  await shoot(page, dir, '30-delete-player-toast');
+  await shoot(page, dir, '30-delete-player-toast', true);
   await page.getByTestId('recently-deleted-players').getByText(/^Recently deleted/).click();
-  await shoot(page, dir, '31-recently-deleted-players');
+  await shoot(page, dir, '31-recently-deleted-players', true);
   const failed = Object.entries(layout).flatMap(([state, issues]) => issues.map(issue => `${state}: ${issue.kind}: ${issue.detail}`));
   if (failed.length) throw new Error(`Layout issues (${failed.length}):\n${failed.slice(0, 40).join('\n')}`);
   await step('tour-complete');
